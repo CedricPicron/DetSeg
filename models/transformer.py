@@ -185,86 +185,86 @@ class TransformerGroupDecoder(nn.Module):
         3) Self-attention
         4) FFN
 
-    Process:
-        * Initialization:
-            - input features of shape [H*W x batch_size x feature_dim]
-            - neighbor indices:
-                1) shape = [num_groups x batch_size x max_neighbors] with:
-                    * num_groups = H*W
-                    * max_neighbors = {4, 8} (i.e. without or with corners)
-                    * index = -1 means empty neighbor
+    1. Sequential:
+        * Initialization (first iteration and layer):
 
+        * Grouping:
 
+    2. Parallel:
+        * Initialization (first iteration and layer):
+            in: encoder_features -> shape = [H*W, batch_size, feature_dim]
 
-    3. Parallel (with flattened batch dimension):
-        * Initialization (first iteration/layer):
-            - in: encoder_features -> shape = [H*W, batch_size, feature_dim]
+            feat_idx_edge_idx = init_fe(H, W, batch_size) -> List[idx: feat_idx, List[edge_idx]]
+            edge_idx_feat_idx = init_ef(H, W, batch_size) -> List[idx: edge_idx, List[feat_idx]]
 
-            - feature_to_edge = init_fe(H, W, batch_size) -> List[idx: feature_idx, List[edge_idx]]
-            - edge_to_feature = init_ef(H, W, batch_size) -> List[idx: edge_idx, List[feature_idx]]
+            out: features = encoder_features.view(-1, feature_dim) -> shape = [H*W*batch_size, feat_dim]
+            out: graph = Graph(feat_idx_edge_idx, edge_idxe_feat_idx) -> create Graph instance
 
-            - out: features = encoder_features.view(-1, feature_dim) -> shape = [H*W*batch_size, feature_dim]
-            - out: graph = Graph(feature_to_edge, edge_to_feature) -> create Graph instance
-
-            - note: num_features = H*W*batch_size at first iteration
-            - note: num_edges = [2*H*W - H - W] * batch_size at first iteration
+            note: num_feat = H*W*batch_size at first iteration
+            note: num_edges = (2*H*W - H - W) * batch_size at first iteration
 
         * Grouping:
             ** Projection:
-                - in: features -> shape = [num_features, feature_dim]
-                - param: P = projection matrix -> shape = [feature_dim, proj_dim]
-                - out: proj_features = mm(feature, P) -> shape = [num_features, proj_dim]
+                in: features -> shape = [num_feat, feat_dim]
+                param: P = projection matrix -> shape = [feat_dim, proj_dim]
+                out: proj_features = mm(feature, P) -> shape = [num_feat, proj_dim]
 
             ** Pair comparison:
-                - in: proj_features -> shape = [num_features, proj_dim]
-                - in: graph -> Graph object
-                - param: similarity_threshold -> float in [0, 1]
+                in: proj_features -> shape = [num_feat, proj_dim]
+                in: graph -> Graph object
+                param: similarity_threshold -> float in [0, 1]
 
-                - idx_pair = np.zeros((2, num_edges))
-                - [idx_pair[:, i] for i, idx_pair in enumerate(graph.edge_to_feature)]
-                - pair = proj_features[idx_pair, :]-> shape = [2, num_edges, proj_dim]
+                idx_pair = np.zeros((2, num_edges))
+                [idx_pair[:, i] for i, idx_pair in enumerate(graph.edge_idx_feat_idx)]
+                pair = proj_features[idx_pair, :]-> shape = [2, num_edges, proj_dim]
 
-                - similarities = bmm(pair[0, :, None, :], pair[1, :, :, None]).squeeze() -> shape = [num_edges]
-                - out: edge_logits = sigmoid(similarities - similarity_threshold) -> shape = [num_edges]
+                similarities = bmm(pair[0, :, None, :], pair[1, :, :, None]).squeeze() -> shape = [num_edges]
+                edge_logits = torch.full([num_edges+1], fill=-sys.float_info.max, dtype=torch.float)
+                out: edge_logits[:-1] = sigmoid(similarities - similarity_threshold) -> shape = [num_edges+1]
 
-            ** Make groups: Forward (hard decisions):
-                - in: features -> shape = [num_features, feature_dim]
-                - in: edge_logits -> shape = [num_edges]
-                - in: graph -> Graph instance
+            ** Get soft grouping weights:
+                in: edge_logits -> shape = [num_edges+1]
+                in: features -> shape = [num_feat, feat_dim]
+                in: graph -> Graph instance
 
-                - save: edge_logits -> shape = [num_edges]
-                - save: graph.edge_to_feature -> List[idx: edge_idx, List[feature_idx]]
+                mask = edge_logits > 0.5 -> shape = [num_edges+1]
+                grp_edge_idx = graph.get_groups(mask) -> shape = [num_groups, max_edges]
+                grp_edge_idx_plus = graph.add_neighbor_edges(grp_edge_idx) -> shape = [num_groups, max_edges_plus]
+                note: use fill=num_edges for both index tensors
 
-                - mask = edge_logits > 0.5 -> shape = [num_edges]
-                - group_to_edge, group_to_feature = get_groups(mask) -> List[idx: group_idx, List[edge/feature_idx]]
-                - graph.update(group_to_edge, group_to_feature) -> update graph.{feature_to_edge, edge_to_feature}
+                grp_edge_logits = edge_logits[grp_edge_idx_plus] -> shape = [num_groups, max_edges_plus]
+                grp_edge_weights = softmax(grp_edge_logits, dim=-1) -> shape = [num_groups, max_edges_plus]
 
-                - group_sizes = [len(feature_idx) for feature_idx in group_to_feature] -> List[group_size]
-                - group_sizes = torch.tensor(group_sizes).unsqueeze(1) -> shape = [num_groups, 1]
+                grp_edge_feat = graph.get(grp_edge_idx_plus) -> shape = [num_groups, max_edges_plus, max_feat_plus]
+                grp_feat_weights = 0.5 * bmm(grp_edge_weights[:, None, :], grp_edge_feat).squeeze()
 
-                - group_to_feature = list_to_tensor(group_to_feature, fill=0) -> shape = [num_groups, max_features]
-                - group_features = features[group_to_feature, :] -> shape = [num_groups, max_features, feature_dim]
+                out: grp_feat_weights -> shape = [num_groups, max_feat_plus]
+                out: grp_num_feat = graph.get_num_feat(grp_edge_idx) -> shape = [num_groups]
 
-                - out: group_means = sum(group_features, dim=1) / group_sizes -> shape = [num_groups, feature_dim]
-                - save: group_to_edge, group_to_feature -> List[idx: group_idx, List[edge/feature_idx]]
+            ** Get hard grouping weights:
+                Forward:
+                    in: grp_feat_weights -> shape = [num_groups, max_feat_plus]
+                    in: grp_num_feat -> shape = [num_groups]
 
-            ** Make groups: Backward (soft decisions):
-                in: grad_group_means -> shape = [num_groups, feature_dim]
-                ctx: edge_logits -> shape = [num_edges]
-                ctx: edge_to_feature -> List[idx: edge_idx, List[feature_idx]] (from old graph)
-                ctx: group_to_edge, group_to_feature -> List[idx: group_idx, List[edge/feature_idx]]
+                    grp_feat_weights[:] = 1/grp_num_feat[:, None] -> shape = [num_groups, max_feat_plus]
+                    grp_mask = cumsum(grp_feat_weights, dim=1) > 1 -> shape = [num_groups, max_feat_plus]
+                    grp_feat_weights = grp_feat_weights[grp_mask] -> shape = [num_groups, max_feat_plus]
 
-                edge_logits = cat((edge_logits, torch.tensor([-sys.float_info.max]))) -> shape = [num_edges + 1]
-                group_to_edge = list_to_tensor(group_to_edge, fill=num_edges) -> shape = [num_groups, max_edges]
+                Backward:
+                    in: grad_grp_feat_weights -> shape = [num_groups, max_feat_plus]
+                    out: grad_grp_feat_weights -> shape = [num_groups, max_feat_plus]
 
-                group_edge_logits = edge_logits[group_to_edge] -> shape = [num_groups, max_edges]
-                group_edge_weights = softmax(group_edge_logits, dim=-1) -> shape = [num_groups, max_edges]
+            ** Compute group means (new features):
+                in: graph -> Graph instance
+                in: grp_edge_idx_plus -> shape = [num_groups, max_edges_plus]
+                in: grp_feat_weights -> shape = [num_groups, max_feat_plus]
 
-                edge_feature = get_matrix(group_to_edge, group_to_feature) -> shape = [max_edges, max_features]
-                group_feature_weights = 0.5 * mm(group_edge_weights, edge_feature) -> shape = [num_groups, max_features]
+                grp_feat_idx_plus = graph.get_feat_idx(grp_edge_idx_plus) -> shape = [num_groups, max_feat_plus]
+                note: use fill=0 for simplicity (all integers between in [0, max_feature_plus-1] are allowed
+                grp_feat = features[grp_feat_idx_plus, :] -> shape = [num_groups, max_feat_plus, feat_dim]
 
-                out: grad_features -> shape = [num_features, feature_dim]
-                out: grad_edge_logits -> shape = [num_edges]
+                out: grp_means = bmm(grp_feat_weights[:, None, :], grp_feat).squeeze() -> shape = [num_groups, feat_dim]
+                out: graph.update(group_to_edge_idx) -> update graph.{feat_idx_edge_idx, edge_idx_feat_idx}
     """
 
 
