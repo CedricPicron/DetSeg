@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 import torch
 from torch import nn, Tensor
-import torch.autograd.Function as Function
+from torch.autograd.function import Function
 import torch.nn.functional as F
 
 
@@ -224,38 +224,124 @@ class Graph():
         self.num_nodes_total = sum(self.num_nodes)
         self.num_edges_total = sum(self.num_edges)
 
-        self.node_to_node = self.init_node_to_node(height, width, batch_size)
-        self.node_to_edge = self.init_node_to_edge(height, width, batch_size)
-        self.edge_to_node = self.init_edge_to_node(height, width, batch_size)
-        self.edge_to_edge = self.init_edge_to_edge(height, width, batch_size)
+        num_row_edges = height * (width-1)
+        num_col_edges = (height-1) * width
+        node_offset = np.concatenate(([0], np.cumsum(self.num_nodes)[:-1]), axis=0)
+        row_offset = np.concatenate(([0], np.cumsum(num_row_edges)), axis=0)
+        col_offset = np.concatenate(([0], np.cumsum(num_col_edges)), axis=0)
 
-    def init_node_to_node(self, height, width, bs):
-        base = torch.arange(self.num_nodes_total).unsqueeze(1)
-        height = torch.cat([height[i] * torch.ones(self.num_nodes[i]) for i in range(bs)], dim=0)
-        node_to_node = torch.cat((base-1, base-height, base+1, base+height), dim=1)
+        self.node_to_node = self.init_node_to_node(height, width, batch_size, node_offset)
+        self.edge_to_node = self.init_edge_to_node(height, width, batch_size, node_offset)
+        self.node_to_edge = self.init_node_to_edge(height, width, batch_size, node_offset, row_offset, col_offset)
+        self.edge_to_edge = self.init_edge_to_edge(height, width, batch_size, row_offset, col_offset)
 
-        offset = np.concatenate(([0], np.cumsum(self.num_nodes)[:-1]), axis=0)
-        fill_idx_left = torch.cat([width[i] * torch.arange(height[i]) for i in range(bs)], dim=0)
-        fill_idx_top = torch.cat([offset[i] + torch.arange(width[i]) for i in range(bs)], dim=0)
-        fill_idx_right = width[0]-1 + fill_idx_left
-        fill_idx_bottom = offset[1]-width[0] + fill_idx_top
+    def init_node_to_node(self, he, wi, bs, no):
+        base = torch.arange(self.num_nodes_total)[:, None]
+        width_full = torch.cat([wi[i] * torch.ones(self.num_nodes[i], dtype=torch.int) for i in range(bs)], dim=0)
+        node_to_node = torch.cat((base-1, base-width_full[:, None], base+1, base+width_full[:, None]), dim=1)
 
-        node_fill_idx = self.num_nodes_total
-        node_to_node[fill_idx_left, 0] = node_fill_idx
-        node_to_node[fill_idx_top, 1] = node_fill_idx
-        node_to_node[fill_idx_right, 2] = node_fill_idx
-        node_to_node[fill_idx_bottom, 3] = node_fill_idx
+        fill_idx_left = torch.cat([no[i] + wi[i] * torch.arange(he[i]) for i in range(bs)], dim=0)
+        fill_idx_top = torch.cat([no[i] + torch.arange(wi[i]) for i in range(bs)], dim=0)
+        fill_idx_right = torch.cat([no[i] + (wi[i]-1) + wi[i] * torch.arange(he[i]) for i in range(bs)], dim=0)
+        fill_idx_bottom = torch.cat([no[i] + (he[i]-1)*wi[i] + torch.arange(wi[i]) for i in range(bs)], dim=0)
+
+        node_to_node[fill_idx_left, 0] = self.num_nodes_total
+        node_to_node[fill_idx_top, 1] = self.num_nodes_total
+        node_to_node[fill_idx_right, 2] = self.num_nodes_total
+        node_to_node[fill_idx_bottom, 3] = self.num_nodes_total
 
         return node_to_node
 
-    def init_node_to_edge(self, height, width, bs):
-        return
+    def init_edge_to_node(self, he, wi, bs, no):
+        row_node0_idx = torch.cat([no[i] + h*wi[i] + torch.arange(wi[i]-1) for i in range(bs) for h in range(he[i])])
+        row_node1_idx = row_node0_idx + 1
+        col_node0_idx = torch.cat([no[i] + torch.arange(wi[i]*(he[i]-1)) for i in range(bs)])
+        col_node1_idx = torch.cat([no[i] + wi[i] + torch.arange(wi[i]*(he[i]-1)) for i in range(bs)])
 
-    def init_edge_to_node(self, height, width, bs):
-        return
+        row_edge_to_node = torch.cat([row_node0_idx[:, None], row_node1_idx[:, None]], dim=1)
+        col_edge_to_node = torch.cat([col_node0_idx[:, None], col_node1_idx[:, None]], dim=1)
+        edge_to_node = torch.cat([row_edge_to_node, col_edge_to_node], dim=0)
 
-    def init_edge_to_edge(self, height, width, bs):
-        return
+        return edge_to_node
+
+    def init_node_to_edge(self, he, wi, bs, no, ro, co):
+        left_edge = torch.cat([ro[i] + h*(wi[i]-1)-1 + torch.arange(wi[i]) for i in range(bs) for h in range(he[i])])
+        left_edge = left_edge[:, None]
+        right_edge = left_edge + 1
+
+        top_edge = torch.cat([ro[bs] + co[i] - wi[i] + torch.arange(self.num_nodes[i]) for i in range(bs)])[:, None]
+        bottom_edge = torch.cat([ro[bs] + co[i] + torch.arange(self.num_nodes[i]) for i in range(bs)])[:, None]
+        node_to_edge = torch.cat([left_edge, top_edge, right_edge, bottom_edge], dim=1)
+
+        fill_idx_left = torch.cat([no[i] + wi[i] * torch.arange(he[i]) for i in range(bs)], dim=0)
+        fill_idx_top = torch.cat([no[i] + torch.arange(wi[i]) for i in range(bs)], dim=0)
+        fill_idx_right = torch.cat([no[i] + (wi[i]-1) + wi[i] * torch.arange(he[i]) for i in range(bs)], dim=0)
+        fill_idx_bottom = torch.cat([no[i] + (he[i]-1)*wi[i] + torch.arange(wi[i]) for i in range(bs)], dim=0)
+
+        node_to_edge[fill_idx_left, 0] = self.num_edges_total
+        node_to_edge[fill_idx_top, 1] = self.num_edges_total
+        node_to_edge[fill_idx_right, 2] = self.num_edges_total
+        node_to_edge[fill_idx_bottom, 3] = self.num_edges_total
+
+        return node_to_edge
+
+    def init_edge_to_edge(self, he, wi, bs, ro, co):
+        row_base = torch.arange(ro[bs])[:, None]
+        col_to_col = torch.cat([wi[i] * torch.ones(he[i]*(wi[i]-1), dtype=torch.int) for i in range(bs)])
+
+        row_left = row_base - 1
+        row_topleft = torch.cat([co[i]+(h-1)*wi[i] + torch.arange(wi[i]-1) for i in range(bs) for h in range(he[i])])
+        row_topleft = ro[bs] + row_topleft[:, None]
+        row_topright = row_topleft + 1
+        row_right = row_base + 1
+        row_botright = row_topright + col_to_col[:, None]
+        row_botleft = row_botright - 1
+
+        row_fill_idx_left = torch.cat([ro[i] + (wi[i]-1) * torch.arange(he[i]) for i in range(bs)])
+        row_fill_idx_topleft = torch.cat([ro[i] + torch.arange(wi[i]-1) for i in range(bs)])
+        row_fill_idx_topright = row_fill_idx_topleft
+        row_fill_idx_right = torch.cat([ro[i] + wi[i]-2 + (wi[i]-1) * torch.arange(he[i]) for i in range(bs)])
+        row_fill_idx_botright = torch.cat([ro[i] + (he[i]-1)*(wi[i]-1) + torch.arange(wi[i]-1) for i in range(bs)])
+        row_fill_idx_botleft = row_fill_idx_botright
+
+        row_left[row_fill_idx_left, 0] = self.num_edges_total
+        row_topleft[row_fill_idx_topleft, 0] = self.num_edges_total
+        row_topright[row_fill_idx_topright, 0] = self.num_edges_total
+        row_right[row_fill_idx_right, 0] = self.num_edges_total
+        row_botright[row_fill_idx_botright, 0] = self.num_edges_total
+        row_botleft[row_fill_idx_botleft, 0] = self.num_edges_total
+
+        col_base = ro[bs] + torch.arange(co[bs])[:, None]
+        col_to_col = torch.cat([wi[i] * torch.ones((he[i]-1)*wi[i], dtype=torch.int) for i in range(bs)])
+        row_to_row = torch.cat([(wi[i]-1) * torch.ones((he[i]-1)*wi[i], dtype=torch.int) for i in range(bs)])
+
+        col_topleft = torch.cat([ro[i]+h*(wi[i]-1)-1 + torch.arange(wi[i]) for i in range(bs) for h in range(he[i]-1)])
+        col_topleft = col_topleft[:, None]
+        col_top = col_base - col_to_col[:, None]
+        col_topright = col_topleft + 1
+        col_botright = col_topright + row_to_row[:, None]
+        col_bot = col_base + col_to_col[:, None]
+        col_botleft = col_botright - 1
+
+        col_fill_idx_topleft = torch.cat([co[i] + wi[i] * torch.arange(he[i]-1) for i in range(bs)])
+        col_fill_idx_top = torch.cat([co[i] + torch.arange(wi[i]) for i in range(bs)])
+        col_fill_idx_topright = torch.cat([co[i] + wi[i]-1 + wi[i] * torch.arange(he[i]-1) for i in range(bs)])
+        col_fill_idx_botright = col_fill_idx_topright
+        col_fill_idx_bot = torch.cat([co[i] + (he[i]-2)*wi[i] + torch.arange(wi[i]) for i in range(bs)])
+        col_fill_idx_botleft = col_fill_idx_topleft
+
+        col_topleft[col_fill_idx_topleft, 0] = self.num_edges_total
+        col_top[col_fill_idx_top, 0] = self.num_edges_total
+        col_topright[col_fill_idx_topright, 0] = self.num_edges_total
+        col_botright[col_fill_idx_botright, 0] = self.num_edges_total
+        col_bot[col_fill_idx_bot, 0] = self.num_edges_total
+        col_botleft[col_fill_idx_botleft, 0] = self.num_edges_total
+
+        row_edge_to_edge = torch.cat([row_left, row_topleft, row_topright, row_right, row_botright, row_botleft], dim=1)
+        col_edge_to_edge = torch.cat([col_topleft, col_top, col_topright, col_botright, col_bot, col_botleft], dim=1)
+        edge_to_edge = torch.cat((row_edge_to_edge, col_edge_to_edge), dim=0)
+
+        return edge_to_edge
 
     def get_groups(self, mask):
         return
@@ -304,7 +390,7 @@ class Grouper(nn.Module):
             in: graph -> Graph object
             param: similarity_threshold -> float in [0, 1]
 
-            pair = proj_features[graph.edge_idx_feat_idx, :]-> shape = [num_edges, 2, proj_dim]
+            pair = proj_features[graph.edge_idx_feat_idx, :] -> shape = [num_edges, 2, proj_dim]
             similarities = bmm(pair[:, 0, None, :], pair[:, 1, :, None]).squeeze() -> shape = [num_edges]
 
             edge_logits = torch.full([num_edges+1], fill=-sys.float_info.max, dtype=torch.float)
@@ -447,6 +533,7 @@ if __name__ == '__main__':
 
     test1 = False
     test2 = False
+    test3 = True
 
     if test1:
         from main import get_parser
@@ -511,3 +598,21 @@ if __name__ == '__main__':
         end_time = time.time()
         print(f"Memory (sequential): {torch.cuda.max_memory_allocated()/(1024*1024)} MB")
         print(f"Time (sequential): {datetime.timedelta(seconds=end_time-start_time)}")
+
+    if test3:
+        height = [2, 3]
+        width = [3, 2]
+        graph = Graph(height, width)
+
+        print(f"Node to node: {graph.node_to_node}")
+        print(f"Edge to node: {graph.edge_to_node}")
+        print(f"Node to edge: {graph.node_to_edge}")
+        print(f"Edge to edge: {graph.edge_to_edge}")
+
+        height = [32, 32, 32, 32]
+        width = [32, 32, 32, 32]
+
+        start_time = time.time()
+        graph = Graph(height, width)
+        end_time = time.time()
+        print(f"Graph creation time: {datetime.timedelta(seconds=end_time-start_time)}")
