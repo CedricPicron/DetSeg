@@ -15,8 +15,9 @@
     # Initialize segmentation maps:
         batch_idx = repeat_interleave(arange(batch_size), num_init_slots)
         masks = input_masks[batch_idx]
-        seg_map = zeros(num_slots_total, H, W)
-        seg_map[masks] = mask_fill
+        seg_map = zeros(num_slots_total, 3, H, W)
+        seg_map[masks[:, None, :, :]] = mask_fill
+        seg_map = seg_map.view(num_slots_total, 3, H*W)
 
     # Initialize curiosity maps:
         xy_grid = stack(meshgrid(arange(-H+1, H), arange(-W+1, W)), dim=-1)
@@ -28,22 +29,29 @@
         curio_map = gauss_grid[xy_grid[0], xy_grid[1]]
         curio_map[masks] = mask_fill
 
+    # Save default grid for later:
+        def_xy_grid = stack(meshgrid(arange(H), arange(W)), dim=-1)
+
+    out: max_mask_entries -> int
     out: slots -> shape = [1, num_slots_total, feat_dim]
     out: batch_idx -> shape = [num_slots_total]
-    out: seg_map -> shape = [num_slots_total, H, W]
+    out: seg_map -> shape = [num_slots_total, 3, H*W]
+    out: gauss_grid -> shape = [2*H-1, 2*W-1]
     out: curio_map -> shape = [num_slots_total, H, W]
-    out: max_mask_entries -> int
+    out: def_xy_grid -> shape = [H, W, 2]
 
 * Cross attention:
     in: features -> shape = [H*W, batch_size, feat_dim]
     in: slots -> shape = [1, num_slots_total, feat_dim]
     in: batch_idx -> shape = [num_slots_total]
-    in: seg_map -> shape = [num_slots_total, H, W]
+    in: seg_map -> shape = [num_slots_total, 3, H*W]
     in: curio_map -> shape = [num_slots_total, H, W]
 
     in: max_mask_entries -> int
     in: samples_per_slot -> int
     in: cov_ratio -> float
+    in: curio_weights -> shape = [3]
+    in: memory_weight -> float
 
     ** Sample features (at integer positions):
         in: features -> shape = [H*W, batch_size, feat_dim]
@@ -67,6 +75,7 @@
         feat_idx = cat([imp_idx, cov_idx], dim=1).t() -> shape = [samples_per_slot, num_slots_total]
         sampled_features = features[feat_idx, batch_idx, :]
 
+        out: feat_idx -> shape = [samples_per_slot, num_slots_total]
         out: sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
 
     ** Attention:
@@ -80,11 +89,51 @@
         out: slots -> shape = [1, num_slots_total, feat_dim]
 
     ** Segmentation map:
+        in: slots -> shape = [1, num_slots_total, feat_dim]
+        in: sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
+        in: seg_map -> shape = [num_slots_total, 3, H*W]
+        in: feat_idx -> shape = [samples_per_slot, num_slots_total]
+
+        proj_slots = slot_proj(slots).expand_as(sampled_features)
+        proj_feats = feat_proj(sampled_features)
+
+        proj_slotfeats = cat([proj_slots, proj_feats], dim=-1)
+        seg_probs = softmax(seg_classfier(proj_slotfeats), dim=-1) -> shape = [samples_per_slot, num_slots_total, 3]
+        seg_map[arange(num_slots_total), :, feat_idx] = seg_probs
+
+        out: seg_map -> shape = [num_slots_total, 3, H*W]
+        out: seg_probs -> shape = [samples_per_slot, num_slots_total, 3]
 
     ** Curiosity map:
+        in: feat_idx -> shape = [samples_per_slot, num_slots_total]
+        in: seg_probs -> shape = [samples_per_slot, num_slots_total, 3]
+        in: def_xy_grid -> shape = [H, W, 2]
+        in: gauss_grid -> shape = [2*H-1, 2*W-1]
+        in: curio_map -> shape = [num_slots_total, H, W]
+
+        in: curio_weights -> shape = [3] (e.g. [1, 2, -1])
+        in: memory_weight -> float
+
+        samples_per_slot = feat_idx.shape[0]
+        num_slots_total, H, W = curio_map.shape
+
+        feat_idx = stack([feat_idx//W, feat_idx%W], dim=-1)
+        xy_grid = def_xy_grid[:, :, None, None, :].expand(H, W, samples_per_slot, num_slots_total, 2)
+        xy_grid = (xy_grid - feat_idx).permute(4, 0, 1, 2, 3)
+
+        gauss_weights = sum(curio_weights*seg_probs, dim=-1) -> shape = [samples_per_slot, num_slots_total]
+        gauss_pdfs = gauss_weights*gauss_grid[xy_grid[0], xy_grid[1]]
+        curio_delta = max(gauss_pdfs.permute(2, 3, 0, 1), dim=0)
+        curio_map = memory_weight*curio_map + (1-memory_weight)*curio_delta
+
+        feat_idx = feat_idx.permute(2, 0, 1)
+        sampled_curiosities = 1-max(seg_probs, dim=-1)
+        curio_map[arange(num_slots_total), feat_idx[0], feat_idx[1]] = sampled_curiosities
+
+        out: curio_map -> shape = [num_slots_total, H, W]
 
     out: slots -> shape = [1, num_slots_total, feat_dim]
-    out: seg_map -> shape = [num_slots_total, H, W]
+    out: seg_map -> shape = [num_slots_total, 3, H*W]
     out: curio_map -> shape = [num_slots_total, H, W]
 
 * Self-attention:
