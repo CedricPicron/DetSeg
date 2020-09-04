@@ -22,7 +22,7 @@
     # Initialize curiosity maps:
         xy_grid = stack(meshgrid(arange(-H+1, H), arange(-W+1, W)), dim=-1)
         gauss_pdf = scipy.stats.multivariate_normal([0, 0]).pdf
-        gauss_grid = from_numpy(gauss_pdf(xy_grid))
+        gauss_grid = from_numpy(gauss_pdf(xy_grid)).to(torch.float32)
 
         xy_grid = xy_grid[-H:, -W:][None, :].expand(num_slots_total, -1, -1, -1)
         xy_grid = (xy_grid - pos_idx[:, None, None, :]).permute(3, 0, 1, 2)
@@ -74,16 +74,33 @@
 
         feat_idx = cat([imp_idx, cov_idx], dim=1).t() -> shape = [samples_per_slot, num_slots_total]
         sampled_features = features[feat_idx, batch_idx, :]
+        sampled_curio_map = curio_map.view(num_slots_total, -1)[arange(num_slots_total), feat_idx]
 
         out: feat_idx -> shape = [samples_per_slot, num_slots_total]
         out: sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
+        out: sampled_curio_map -> shape = [samples_per_slot, num_slots_total]
+
+    ** HardWeightGate:
+        - Forward:
+            in: soft_value_weights -> shape = [samples_per_slot, num_slots_total]
+            out: hard_value_weights = ones_like(soft_value_weights) -> shape = [samples_per_slot, num_slots_total]
+
+        - Backward:
+            in: grad_hard_value_weights -> shape = [samples_per_slot, num_slots_total]
+            out: grad_soft_value_weights = grad_hard_value_weights -> shape = [samples_per_slot, num_slots_total]
 
     ** Attention:
         in: slots -> shape = [1, num_slots_total, feat_dim]
         in: sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
+        in: sampled_curio_map -> shape = [samples_per_slot, num_slots_total]
 
         queries = slots -> shape = [1, num_slots_total, feat_dim]
-        keys = values = sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
+        keys = sampled_features -> shape = [samples_per_slot, num_slots_total, feat_dim]
+
+        soft_value_weights = softmax(sampled_curio_map, dim=0)
+        hard_value_weights = HardWeightGate(soft_value_weights)
+
+        values = hard_value_weights[:, :, None] * sampled_features
         slots = cross_mha(queries, keys, values, need_weights=False)
 
         out: slots -> shape = [1, num_slots_total, feat_dim]
@@ -123,11 +140,11 @@
 
         gauss_weights = sum(curio_weights*seg_probs, dim=-1) -> shape = [samples_per_slot, num_slots_total]
         gauss_pdfs = gauss_weights*gauss_grid[xy_grid[0], xy_grid[1]]
-        curio_delta = max(gauss_pdfs.permute(2, 3, 0, 1), dim=0)
+        curio_delta, _ = max(gauss_pdfs.permute(2, 3, 0, 1), dim=0)
         curio_map = memory_weight*curio_map + (1-memory_weight)*curio_delta
 
         feat_idx = feat_idx.permute(2, 0, 1)
-        sampled_curiosities = 1-max(seg_probs, dim=-1)
+        sampled_curiosities = 1-max(seg_probs, dim=-1)[0]
         curio_map[arange(num_slots_total), feat_idx[0], feat_idx[1]] = sampled_curiosities
 
         out: curio_map -> shape = [num_slots_total, H, W]
@@ -137,11 +154,11 @@
     out: curio_map -> shape = [num_slots_total, H, W]
 
 * Self-attention:
-    in: slots, shape = [1, num_slots_total, feat_dim]
-    in: batch_idx, shape = [num_slots_total]
+    in: slots -> shape = [1, num_slots_total, feat_dim]
+    in: batch_idx -> shape = [num_slots_total]
 
     queries = keys = values = slots.transpose(0, 1) -> shape = [num_slots_total, 1, feat_dim]
-    attn_mask = get_mask(batch_idx) -> shape = [num_slots_total, num_slots_total]
+    attn_mask = (batch_idx[:, None]-batch_idx[None, :]) != 0 -> shape = [num_slots_total, num_slots_total]
     slots = self_mha(queries, keys, values, need_weights=False, attn_mask=attn_mask)
 
     out: slots -> [num_slots_total, 1, feat_dim]
