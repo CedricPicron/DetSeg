@@ -173,20 +173,13 @@
 
 import copy
 
+import scipy.stats
 import torch
 from torch import nn
 from torch.autograd.function import Function
-import scipy.stats
+import torch.nn.functional as F
 
-
-def get_pos_embedding(pos_idx, device=None, feat_dim=256):
-    """
-    Used for test purposes only.
-    """
-    num_init_slots = pos_idx.shape[0]
-    pos_embedding = torch.randn(num_init_slots, feat_dim, device=device)
-
-    return pos_embedding
+from .utils import MLP
 
 
 class SampleDecoder(nn.Module):
@@ -194,32 +187,36 @@ class SampleDecoder(nn.Module):
     Class implementing the SampleDecoder module.
 
     Attributes:
+        feat_dim (int): Feature dimension used in the decoder.
         layers (nn.ModuleList): List of decoder layers being concatenated.
         num_init_slots (int): Number of initial slots per image.
         num_layers (int): Number of concatenated decoder layers.
     """
 
-    def __init__(self, decoder_layer, num_init_slots, num_layers):
+    def __init__(self, decoder_layer, feat_dim, num_init_slots, num_layers):
         """
-        Initializes the SamplerDecoder module.
+        Initializes the SampleDecoder module.
 
         Args:
             decoder_layer (nn.Module): Decoder layer module to be concatenated.
+            feat_dim (int): Feature dimension used in the decoder.
             num_init_slots (int): Number of initial slots per image.
             num_layers (int): Number of concatenated decoder layers.
         """
 
         super().__init__()
+        self.feat_dim = feat_dim
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_layers)])
         self.num_init_slots = num_init_slots
         self.num_layers = num_layers
 
-    def forward_init(self, feature_masks, mask_fill=-1e6):
+    def forward_init(self, feature_masks, pos_encodings, mask_fill=-1e6):
         """
         Initializes slots, segmentation/curiosity maps and other useful stuff.
 
         Args:
-            feature_masks (BoolTensor): Feature masks of shape [HxW, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
+            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
             slots (FloatTensor): Initial slots of shape [1, num_slots_total, feat_dim].
@@ -234,14 +231,15 @@ class SampleDecoder(nn.Module):
 
         batch_size, H, W = feature_masks.shape
         num_slots_total = self.num_init_slots * batch_size
-        device = feature_masks.device
+        device = pos_encodings.device
 
         # Uniform sampling of initial slots
+        batch_idx = torch.repeat_interleave(torch.arange(batch_size), num_init_slots)
         pos_idx = torch.stack([torch.randint(H, (num_slots_total,)), torch.randint(W, (num_slots_total,))], dim=1)
-        slots = get_pos_embedding(pos_idx, device=device)
+        flat_pos_idx = pos_idx[:, 0]*W + pos_idx[:, 1]
+        slots = pos_encodings[flat_pos_idx, batch_idx, :].unsqueeze(0)
 
         # Initialize segmentation maps
-        batch_idx = torch.repeat_interleave(torch.arange(batch_size), num_init_slots)
         masks = feature_masks[batch_idx]
         seg_maps = torch.zeros(num_slots_total, 3, H, W, device=device)
         seg_maps[masks[:, None, :, :].expand(-1, 3, -1, -1)] = mask_fill
@@ -263,13 +261,14 @@ class SampleDecoder(nn.Module):
 
         return slots, batch_idx, seg_maps, curio_maps, def_xy_grid, gauss_grid, max_mask_entries
 
-    def forward(self, features, feature_masks):
+    def forward(self, features, feature_masks, pos_encodings):
         """
         Forward method of the SampleDecoder module.
 
         Args:
-            features: Feature maps of shape [H*W, batch_size, feat_dim].
-            feature_masks (BoolTensor): Feature masks of shape [HxW, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
+            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
@@ -282,7 +281,7 @@ class SampleDecoder(nn.Module):
 
         # Loop over different decoder layers
         for layer in self.layers:
-            slots, seg_maps, curio_maps = layer(features, slots, batch_idx, seg_maps, curio_maps, *args)
+            slots, seg_maps, curio_maps = layer(features, pos_encodings, slots, batch_idx, seg_maps, curio_maps, *args)
 
         return slots, batch_idx, seg_maps
 
@@ -307,26 +306,27 @@ class SampleDecoderLayer(nn.Module):
             ffn (nn.Module): The FFN (feedforward network) module.
         """
 
-        super().__init_()
+        super().__init__()
         self.cross_attention = cross_attention
         self.self_attention = self_attention
         self.ffn = ffn
 
-    def forward(self, features, slots, batch_idx, seg_maps, curio_maps, *args):
+    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, *args):
         """
         Forward method of the SampleDecoderLayer module.
 
         Args:
-            features: Feature maps of shape [H*W, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            pos (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
 
             args (Tuple): Tuple containing following fixed items:
-                def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2].
-                gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1].
-                max_mask_entries (int): Maximum masked entries of mask from feature_masks.
+                - def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2];
+                - gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1];
+                - max_mask_entries (int): Maximum masked entries of mask from feature_masks.
 
         Returns:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
@@ -334,7 +334,7 @@ class SampleDecoderLayer(nn.Module):
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
         """
 
-        slots, seg_maps, curio_maps = self.cross_attention(features, slots, batch_idx, seg_maps, curio_maps, *args)
+        slots, seg_maps, curio_maps = self.cross_attention(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
         slots = self.self_attention(slots, batch_idx)
         slots = self.ffn(slots)
 
@@ -356,16 +356,33 @@ class WeightedCrossAttention(nn.Module):
     Class implementing the WeightedCrossAttention module.
     """
 
-    def __init__(self, coverage_ratio, samples_per_slot, feat_dim, num_heads, dropout=0.1, hard_weights=True):
+    def __init__(self, feat_dim, samples_dict, mha_dict, curio_dict):
         super().__init__()
 
-        self.coverage_ratio = coverage_ratio
-        self.samples_per_slot = samples_per_slot
+        # Parameters defining the feature sampling procedure
+        self.samples_per_slot = samples_dict['samples_per_slot']
+        self.coverage_ratio = samples_dict['coverage_ratio']
 
+        # Initializing the multi-head attention module
+        self.hard_weights = mha_dict['hard_weights']
+        num_heads = mha_dict['num_heads']
+        dropout = mha_dict['dropout']
         self.mha = nn.MultiheadAttention(feat_dim, num_heads, dropout=dropout)
-        self.hard_weights = hard_weights
 
-    def sample(self, batch_idx, curio_maps, max_mask_entries):
+        # Initializing the dropout and layernorm modules
+        self.delta_dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(feat_dim)
+
+        # Initializing the MLP's used for updating the segmentation maps
+        self.slot_proj = MLP(feat_dim, feat_dim//2, feat_dim//2, 2)
+        self.feat_proj = MLP(feat_dim, feat_dim//2, feat_dim//2, 2)
+        self.seg_class = MLP(feat_dim, feat_dim, 3, 2)
+
+        # Parameters defining how the curiosities are learned and updated
+        self.curio_weights = curio_dict['curio_weights']
+        self.curio_memory = curio_dict['curio_memory']
+
+    def sample(self, features, pos_encodings, batch_idx, curio_maps, max_mask_entries):
         cov_samples = int(self.coverage_ratio*self.samples_per_slot)
         imp_samples = self.samples_per_slot - cov_samples
 
@@ -378,35 +395,69 @@ class WeightedCrossAttention(nn.Module):
         cov_idx = sorted_idx[:, imp_samples:-max_mask_entries]
         cov_idx = cov_idx[:, torch.random.sample(range(cov_idx.shape[1]), k=cov_samples)]
 
-        # Get sampled features and curiosities
+        # Concatenate both types of indices
         feat_idx = torch.cat([imp_idx, cov_idx], dim=1).t()
-        sampled_features = features[feat_idx, batch_idx, :]
-        sampled_curiosities = curio_maps.view(num_slots_total, -1)[torch.arange(num_slots_total), feat_idx]
 
-        return feat_idx, sampled_features, sampled_curiosities
+        # Get sampled features, position encodings and curiosities
+        sample_dict = {'feat_idx': feat_idx}
+        sample_dict['features'] = features[feat_idx, batch_idx, :]
+        sample_dict['pos_encodings'] = pos_encodings[feat_idx, batch_idx, :]
+        sample_dict['curiosities'] = curio_maps.view(num_slots_total, -1)[torch.arange(num_slots_total), feat_idx]
 
-    def weighted_attention(self, slots, sampled_features, sampled_curiosities):
+        return sample_dict
+
+    def weighted_attention(self, slots, sample_dict):
         queries = slots
-        keys = sampled_features
+        keys = sample_dict['features'] + sample_dict['pos_encodings']
 
-        value_weights = torch.softmax(sampled_curiosities, dim=0)
+        value_weights = torch.softmax(sample_dict['curiosities'], dim=0)
         if self.hard_weights:
             value_weights = HardWeightGate(value_weights)
 
-        values = value_weights[:, :, None] * sampled_features
-        slots = self.mha(queries, keys, values, need_weights=False)
+        values = value_weights[:, :, None] * sample_dict['features']
+        delta_slots = self.mha(queries, keys, values, need_weights=False)[0]
+
+        slots = slots + self.delta_dropout(delta_slots)
+        slots = self.layer_norm(slots)
 
         return slots
 
-    def update_seg_maps(self):
-        return
+    def update_seg_maps(self, slots, seg_maps, sample_dict):
+        num_slots_total = seg_maps.shape[0]
 
-    def update_curio_maps(self):
-        return
+        proj_slots = self.slot_proj(slots).expand_as(sample_dict['features'])
+        proj_feats = self.feat_proj(sample_dict['features'] + sample_dict['pos_encodings'])
 
-    def forward(self, features, slots, batch_idx, seg_maps, curio_maps, def_xy_grid, gauss_grid, max_mask_entries):
-        feat_idx, sampled_features, sampled_curiosities = self.sample(batch_idx, curio_maps, max_mask_entries)
-        slots = self.weighted_attention(slots, sampled_features, sampled_curiosities)
+        proj_slotfeats = torch.cat([proj_slots, proj_feats], dim=-1)
+        seg_probs = torch.softmax(self.seg_class(proj_slotfeats), dim=-1)
+        seg_maps[torch.arange(num_slots_total), :, sample_dict['feat_idx']] = seg_probs
+
+        return seg_maps, seg_probs
+
+    def update_curio_maps(self, curio_maps, feat_idx, seg_probs, def_xy_grid, gauss_grid):
+        samples_per_slot = feat_idx.shape[0]
+        num_slots_total, H, W = curio_maps.shape
+
+        feat_idx = torch.stack([feat_idx // W, feat_idx % W], dim=-1)
+        xy_grid = def_xy_grid[:, :, None, None, :].expand(H, W, samples_per_slot, num_slots_total, 2)
+        xy_grid = (xy_grid - feat_idx).permute(4, 0, 1, 2, 3)
+
+        gauss_weights = torch.sum(self.curio_weights*seg_probs, dim=-1)
+        gauss_pdfs = gauss_weights*gauss_grid[xy_grid[0], xy_grid[1]]
+        curio_delta, _ = torch.max(gauss_pdfs.permute(2, 3, 0, 1), dim=0)
+        curio_maps = self.memory_weight*curio_maps + (1-self.memory_weight)*curio_delta
+
+        feat_idx = feat_idx.permute(2, 0, 1)
+        sampled_curiosities = 1-torch.max(seg_probs, dim=-1)[0]
+        curio_maps[torch.arange(num_slots_total), feat_idx[0], feat_idx[1]] = sampled_curiosities
+
+        return curio_maps
+
+    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, def_xy_grid, gauss_grid, max_mask_entries):
+        sample_dict = self.sample(features, pos, batch_idx, curio_maps, max_mask_entries)
+        slots = self.weighted_attention(slots, sample_dict)
+        seg_maps, seg_probs = self.update_seg_maps(slots, seg_maps, sample_dict)
+        curio_maps = self.update_curio_maps(curio_maps, sample_dict['feat_idx'], seg_probs, def_xy_grid, gauss_grid)
 
         return slots, seg_maps, curio_maps
 
@@ -416,8 +467,22 @@ class SelfAttention(nn.Module):
     Class implementing the SelfAttention module.
     """
 
-    def __init__(self):
+    def __init__(self, feat_dim, num_heads, dropout):
         super().__init__()
+
+        self.mha = nn.MultiheadAttention(feat_dim, num_heads, dropout=dropout)
+        self.delta_dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(feat_dim)
+
+    def forward(self, slots, batch_idx):
+        queries = keys = values = slots.transpose(0, 1)
+        attn_mask = (batch_idx[:, None]-batch_idx[None, :]) != 0
+        delta_slots = self.mha(queries, keys, values, need_weights=False, attn_mask=attn_mask)[0]
+
+        slots = slots + self.delta_dropout(delta_slots)
+        slots = self.layer_norm(slots)
+
+        return slots
 
 
 class FFN(nn.Module):
@@ -425,8 +490,49 @@ class FFN(nn.Module):
     Class implementing the FFN module.
     """
 
-    def __init__(self):
+    def __init__(self, feat_dim, hidden_dim, dropout):
         super().__init__()
+
+        self.hidden_linear = nn.Linear(feat_dim, hidden_dim)
+        self.delta_linear = nn.Linear(hidden_dim, feat_dim)
+        self.hidden_dropout = nn.Dropout(dropout)
+        self.delta_dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(feat_dim)
+
+    def forward(self, slots):
+        hidden_slots = F.relu(self.hidden_linear(slots))
+        delta_slots = self.delta_linear(self.hidden_dropout(hidden_slots))
+
+        slots = slots + self.delta_dropout(delta_slots)
+        slots = self.layer_norm(slots)
+
+        return slots
+
+
+def build_decoder(args):
+    """
+    Build SampleDecoder module from command-line arguments.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+
+    Returns:
+        decoder (SampleDecoder): The specified SampleDecoder module.
+    """
+
+    sample_dict = {'samples_per_slot': args.samples_per_slot, 'coverage_ratio': args.coverage_ratio}
+    mha_dict = {'hard_weights': args.hard_weights, 'num_heads': args.num_heads, 'dropout': args.mha_dropout}
+    curio_weights = [args.curio_weight_obj, args.curio_weight_edge, args.curio_weight_nobj]
+    curio_dict = {'curio_weights': curio_weights, 'curio_memory': args.curio_memory}
+
+    cross_attention = WeightedCrossAttention(args.feat_dim, sample_dict, mha_dict, curio_dict)
+    self_attention = SelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)
+    ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
+
+    decoder_layer = SampleDecoderLayer(cross_attention, self_attention, ffn)
+    decoder = SampleDecoder(decoder_layer, args.feat_dim, args.num_init_slots, args.num_decoder_layers)
+
+    return decoder
 
 
 if __name__ == "__main__":

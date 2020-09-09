@@ -20,7 +20,7 @@ def init_distributed_mode(args):
     torch.distributed.init_process_group(backend='nccl', init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
 
-    set_master_only_printing(args.rank == 0)    
+    set_master_only_printing(args.rank == 0)
 
 
 def set_master_only_printing(is_master):

@@ -3,13 +3,12 @@ Position encoders and build function.
 """
 import math
 import torch
-from torch import Tensor
-from torch import nn
+from torch import nn, Tensor
 
 from utils.data import NestedTensor
 
 
-class PositionEncoderSine(nn.Module):
+class SinePositionEncoder(nn.Module):
     """
     Two-dimensional position encoder with sines and cosines, relative to padding mask.
 
@@ -21,7 +20,7 @@ class PositionEncoderSine(nn.Module):
 
     def __init__(self, temperature=10000, normalize=True, scale=2*math.pi):
         """
-        Initializes the PositionEncoderSine module.
+        Initializes the SinePositionEncoder module.
 
         Args:
             temperature (int): Sample points will cover between 1/temperature and 1 of the (co)sine period.
@@ -40,15 +39,15 @@ class PositionEncoderSine(nn.Module):
 
     def forward(self, masked_tensor: NestedTensor) -> Tensor:
         """
-        Forward method of the PositionEncoderSine module.
+        Forward method of the SinePositionEncoder module.
 
         Args:
             masked_tensor (NestedTensor): NestedTensor which consists of:
-                - masked_tensor.tensors: feature map of shape [batch_size x feature_size x H x W];
-                - masked_tensor.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels.
+                - masked_tensor.tensors: feature maps of shape [batch_size, feat_dim, H, W];
+                - masked_tensor.mask: boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
-            pos (Tensor): Tensor of shape [batch_size x feature_size x H x W].
+            pos (Tensor): Position encodings of shape [batch_size, feat_dim, H, W].
         """
 
         feature_map, mask = masked_tensor.decompose()
@@ -94,7 +93,7 @@ def build_position_encoder(args):
     """
 
     if args.position_encoding == 'sine':
-        position_encoder = PositionEncoderSine()
+        position_encoder = SinePositionEncoder()
     else:
         raise ValueError(f'Unknown position encoding "{args.position_encoding}" was provided.')
 

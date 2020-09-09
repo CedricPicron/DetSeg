@@ -80,7 +80,7 @@ class SetCriterion(nn.Module):
         assert 'pred_logits' in outputs
         pred_logits = outputs['pred_logits']
 
-        batch_idx, pred_idx = self._get_src_permutation_idx(indices) 
+        batch_idx, pred_idx = self._get_src_permutation_idx(indices)
         tgt_classes_o = torch.cat([t['labels'][J] for t, (_, J) in zip(targets, indices)])
 
         tgt_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
@@ -193,7 +193,7 @@ def build_criterion(args):
     """
 
     matcher = build_matcher(args)
-    weight_dict = {'class': args.loss_coeff_class, 'bbox': args.loss_coef_bbox, 'giou': args.loss_coef_giou}
+    weight_dict = {'class': args.loss_coef_class, 'bbox': args.loss_coef_bbox, 'giou': args.loss_coef_giou}
     losses = ['labels', 'boxes', 'cardinality']
 
     return SetCriterion(args.num_classes, matcher, weight_dict, args.no_obj_weight, losses)

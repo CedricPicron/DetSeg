@@ -3,7 +3,7 @@ import argparse
 import torch
 
 from models.criterion import build_criterion
-from models.groupdetr import build_model
+from models.detr import build_detr
 import utils.distributed as distributed
 
 
@@ -12,6 +12,7 @@ def get_parser():
 
     # General
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
+    parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
@@ -27,10 +28,10 @@ def get_parser():
     parser.add_argument('--position_encoding', default='sine', type=str, help='type of position encoding')
 
     # * Transformer
-    parser.add_argument('--feature_dim', default=256, type=int, help='feature sizes in transformer')
+    parser.add_argument('--feat_dim', default=256, type=int, help='feature dimension used in transformer')
     parser.add_argument('--lr_transformer', default=1e-5, type=float, help='transformer learning rate')
     parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
-    parser.add_argument('--num_group_layers', default=6, type=int, help='number of group layers in transformer')
+    parser.add_argument('--num_decoder_layers', default=1, type=int, help='number of decoder layers in transformer')
 
     # ** Multi-head attention (MHA)
     parser.add_argument('--mha_dropout', default=0.1, type=float, help='dropout used during multi-head attention')
@@ -39,6 +40,16 @@ def get_parser():
     # ** Feedforward network (FFN)
     parser.add_argument('--ffn_dropout', default=0.1, type=float, help='dropout used during feedforward network')
     parser.add_argument('--ffn_hidden_dim', default=2048, type=float, help='hidden dimension of feedforward network')
+
+    # ** Sample decoder
+    parser.add_argument('--num_init_slots', default=100, type=int, help='number of initial slots per image')
+    parser.add_argument('--samples_per_slot', default=100, type=int, help='number of features sampled per slot')
+    parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
+    parser.add_argument('--hard_weights', default=True, type=bool, help='use hard weights during forward method')
+    parser.add_argument('--curio_weight_obj', default=1.0, type=float, help='curiosity weight for object features')
+    parser.add_argument('--curio_weight_edge', default=2.0, type=float, help='curiosity weight for edge features')
+    parser.add_argument('--curio_weight_nobj', default=-1.0, type=float, help='curiosity weight for no-obj. features')
+    parser.add_argument('--curio_memory', default=0.9, type=float, help='memory weight in non-sampled positions')
 
     # Criterion
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false', help='disables auxiliary losses')
@@ -62,13 +73,15 @@ def main(args):
     print(args)
 
     device = torch.device(args.device)
-    model = build_model(args).to(device)
+    model = build_detr(args).to(device)
     criterion = build_criterion(args).to(device)
+
+    return model, criterion
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='python main.py',
-                                     description='GroupDETR training and evaluation script',
+                                     description='SampleDETR training and evaluation script',
                                      parents=[get_parser()],
                                      formatter_class=argparse.MetavarTypeHelpFormatter)
     main(parser.parse_args())
