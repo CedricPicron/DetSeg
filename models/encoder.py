@@ -61,7 +61,7 @@ class Encoder(nn.Module):
 
         # Loop over different encoder layers
         for layer in self.layers:
-            features = layer(features, src_mask=src_masks, pos=pos_encodings)
+            features = layer(features, src_masks, pos_encodings)
 
         return features
 
@@ -73,7 +73,7 @@ class SelfAttentionEncoderLayer(nn.Module):
     Encoder layer with global multi-head self-attention, followed by a FFN.
 
     Attributes:
-        self_attn (nn.MultiheadAtttenion): Multi-head attetion (MHA) module.
+        self_attn (nn.MultiheadAtttenion): Multi-head attention (MHA) module.
         drop1 (nn.Dropout): Dropout module after global MHA.
         norm1 (nn.LayerNorm): Layernorm after MHA skip connection.
         linear1 (nn.Linear): First FFN linear layer.
@@ -156,7 +156,7 @@ def build_encoder(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        The specified Encoder module.
+        encoder (Encoder): The specified Encoder module.
     """
 
     mha_dict = {'num_heads': args.num_heads, 'dropout': args.mha_dropout}

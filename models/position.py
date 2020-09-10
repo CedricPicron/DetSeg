@@ -1,16 +1,16 @@
 """
-Position encoders and build function.
+Position encoder modules and build function.
 """
 import math
 import torch
 from torch import nn, Tensor
 
-from utils.data import NestedTensor
-
 
 class SinePositionEncoder(nn.Module):
     """
-    Two-dimensional position encoder with sines and cosines, relative to padding mask.
+    Class implementing the SinePositionEncoder module.
+
+    It is a two-dimensional position encoder with sines and cosines, relative to padding mask.
 
     Attributes:
         temperature (int): Sample points will cover between 1/temperature and 1 of the (co)sine period.
@@ -37,24 +37,19 @@ class SinePositionEncoder(nn.Module):
         self.normalize = normalize
         self.scale = scale
 
-    def forward(self, masked_tensor: NestedTensor) -> Tensor:
+    def forward(self, features: Tensor, feature_masks: Tensor) -> Tensor:
         """
         Forward method of the SinePositionEncoder module.
 
         Args:
-            masked_tensor (NestedTensor): NestedTensor which consists of:
-                - masked_tensor.tensors: feature maps of shape [batch_size, feat_dim, H, W];
-                - masked_tensor.mask: boolean masks encoding inactive pixels of shape [batch_size, H, W].
+             features (FloatTensor): Features of shape [batch_size, feat_dim, H, W].
+             feature_masks (BoolTensor): Boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
             pos (Tensor): Position encodings of shape [batch_size, feat_dim, H, W].
         """
 
-        feature_map, mask = masked_tensor.decompose()
-        feature_size = feature_map.shape[1]
-        assert mask is not None
-
-        not_mask = ~mask
+        not_mask = ~feature_masks
         y_embed = not_mask.cumsum(1, dtype=torch.float32)
         x_embed = not_mask.cumsum(2, dtype=torch.float32)
 
@@ -63,8 +58,8 @@ class SinePositionEncoder(nn.Module):
             y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
             x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
 
-        feature_size_per_dim = feature_size // 2
-        dim_t = torch.arange(feature_size_per_dim, dtype=torch.float32, device=feature_map.device)
+        feature_size_per_dim = features.shape[1] // 2
+        dim_t = torch.arange(feature_size_per_dim, dtype=torch.float32, device=features.device)
         dim_t = self.temperature ** (2 * (dim_t // 2) / feature_size_per_dim)
 
         pos_x = x_embed[:, :, :, None] / dim_t
@@ -73,7 +68,7 @@ class SinePositionEncoder(nn.Module):
         pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
 
         pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-        pos = pos.to(feature_map.dtype)
+        pos = pos.to(features.dtype)
 
         return pos
 
@@ -86,7 +81,7 @@ def build_position_encoder(args):
         args (argsparse.Namespace): Command-line arguments.
 
     Returns:
-        position_encoder (nn.Module): Position encoder module.
+        position_encoder (nn.Module): The specified position encoder module.
 
     Raises:
         ValueError: Raised when unknown args.position_encoding is provided.

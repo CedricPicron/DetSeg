@@ -1,5 +1,5 @@
 """
-GroupDETR modules and build function.
+DETR modules and build function.
 """
 
 import torch
@@ -76,10 +76,9 @@ class DETR(nn.Module):
             images = nested_tensor_from_tensor_list(images)
 
         masked_conv_features = self.backbone(images)[-1]
-        pos_encodings = self.position_encoder(masked_conv_features)
-
         conv_features, feature_masks = masked_conv_features.decompose()
         proj_features = self.projector(conv_features)
+        pos_encodings = self.position_encoder(proj_features, feature_masks)
 
         batch_size, feat_dim, H, W = proj_features.shape
         proj_features = proj_features.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
@@ -102,7 +101,7 @@ def build_detr(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        The specified DETR module.
+        detr (DETR): The specified DETR module.
     """
 
     backbone = build_backbone(args)
@@ -113,4 +112,6 @@ def build_detr(args):
     # Temporary hack
     args.num_classes = 91
 
-    return DETR(backbone, position_encoder, encoder, decoder, args.num_classes, args.aux_loss)
+    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes, args.aux_loss)
+
+    return detr

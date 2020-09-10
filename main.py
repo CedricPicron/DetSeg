@@ -13,6 +13,7 @@ def get_parser():
     # General
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
+    parser.add_argument('--batch_size', default=2, type=int, help='batch size per GPU')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
@@ -31,7 +32,7 @@ def get_parser():
     parser.add_argument('--feat_dim', default=256, type=int, help='feature dimension used in transformer')
     parser.add_argument('--lr_transformer', default=1e-5, type=float, help='transformer learning rate')
     parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
-    parser.add_argument('--num_decoder_layers', default=1, type=int, help='number of decoder layers in transformer')
+    parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
 
     # ** Multi-head attention (MHA)
     parser.add_argument('--mha_dropout', default=0.1, type=float, help='dropout used during multi-head attention')
@@ -42,6 +43,7 @@ def get_parser():
     parser.add_argument('--ffn_hidden_dim', default=2048, type=float, help='hidden dimension of feedforward network')
 
     # ** Sample decoder
+    parser.add_argument('--decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
     parser.add_argument('--num_init_slots', default=100, type=int, help='number of initial slots per image')
     parser.add_argument('--samples_per_slot', default=100, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')

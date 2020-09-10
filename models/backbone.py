@@ -1,7 +1,7 @@
 """
 Backbone modules and build function.
 """
-from typing import Dict
+from typing import List
 
 import torch
 from torch import nn
@@ -45,28 +45,30 @@ class Backbone(nn.Module):
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
         self.num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
 
-    def forward(self, masked_images: NestedTensor) -> Dict[str, NestedTensor]:
+    def forward(self, images: NestedTensor) -> List[NestedTensor]:
         """
         Forward method of Backbone module.
 
         Args:
-            masked_images (NestedTensor): Image tensors (Nx3xHxW) with masks (NxHxW).
+            images (NestedTensor): NestedTensor which consists of:
+               - images.tensors (FloatTensor): batched images of shape [batch_size, 3, H, W];
+               - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
-            out (Dict[str, NestedTensor]): Dict with feature map (as NestedTensor) per entry.
+            out (List[NestedTensor]): List of feature maps, with each feature map a NestedTensor.
         """
 
-        conv_feature_maps = self.body(masked_images.tensors)
+        conv_feature_maps = self.body(images.tensors)
 
-        original_mask = masked_images.mask
+        original_mask = images.mask
         assert original_mask is not None, 'No mask specified in NestedTensor'
         original_mask = original_mask[None].float()
 
-        out: Dict[str, NestedTensor] = {}
-        for map_name, conv_feature_map in conv_feature_maps.items():
+        out: List[NestedTensor] = []
+        for conv_feature_map in conv_feature_maps.values():
             map_size = conv_feature_map.shape[-2:]
             mask = F.interpolate(original_mask, size=map_size).to(torch.bool)[0]
-            out[map_name] = NestedTensor(conv_feature_map, mask)
+            out.append(NestedTensor(conv_feature_map, mask))
 
         return out
 
@@ -79,7 +81,7 @@ def build_backbone(args):
         args (argsparse.Namespace): Command-line arguments.
 
     Returns:
-        backbone (Backbone): Backbone module.
+        backbone (Backbone): The specified Backbone module.
     """
 
     train_backbone = args.lr_backbone > 0
