@@ -30,9 +30,6 @@ def get_parser():
 
     # * Transformer
     parser.add_argument('--feat_dim', default=256, type=int, help='feature dimension used in transformer')
-    parser.add_argument('--lr_transformer', default=1e-5, type=float, help='transformer learning rate')
-    parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
-    parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
 
     # ** Multi-head attention (MHA)
     parser.add_argument('--mha_dropout', default=0.1, type=float, help='dropout used during multi-head attention')
@@ -42,9 +39,21 @@ def get_parser():
     parser.add_argument('--ffn_dropout', default=0.1, type=float, help='dropout used during feedforward network')
     parser.add_argument('--ffn_hidden_dim', default=2048, type=float, help='hidden dimension of feedforward network')
 
-    # ** Sample decoder
+    # ** Encoder
+    parser.add_argument('--lr_encoder', default=0.0, type=float, help='encoder learning rate')
+    parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
+
+    # ** Decoder
+    parser.add_argument('--decoder_type', default='sample', choices=['global', 'sample'], help='decoder type')
+    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
+    parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
+
+    # *** Global decoder
+    parser.add_argument('--num_slots', default=100, type=int, help='number of object slots per image')
+
+    # *** Sample decoder
     parser.add_argument('--decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
-    parser.add_argument('--num_init_slots', default=100, type=int, help='number of initial slots per image')
+    parser.add_argument('--num_init_slots', default=100, type=int, help='number of initial object slots per image')
     parser.add_argument('--samples_per_slot', default=100, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
     parser.add_argument('--hard_weights', default=True, type=bool, help='use hard weights during forward method')

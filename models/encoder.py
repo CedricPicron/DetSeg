@@ -1,9 +1,9 @@
 """
 Encoder modules and build function.
 """
+from collections import OrderedDict
 import copy
 
-import torch
 from torch import nn
 import torch.nn.functional as F
 
@@ -18,7 +18,7 @@ class Encoder(nn.Module):
         num_layers (int): Number of concatenated encoder layers.
     """
 
-    def __init__(self, encoder_layer, feat_dim, num_layers):
+    def __init__(self, encoder_layer, feat_dim, num_layers, train_encoder):
         """
         Initializes the Encoder module.
 
@@ -26,12 +26,33 @@ class Encoder(nn.Module):
             encoder_layer (nn.Module): Encoder layer module to be concatenated.
             feat_dim (int): Feature dimension used in the encoder.
             num_layers (int): Number of concatenated encoder layers.
+            train_encoder (bool): Whether encoder should be trained or not.
         """
 
         super().__init__()
         self.feat_dim = feat_dim
-        self.layers = nn.ModuleList([copy.deepcopy(encoder_layer) for _ in range(num_layers)])
         self.num_layers = num_layers
+
+        self.layers = nn.ModuleList([copy.deepcopy(encoder_layer) for _ in range(num_layers)])
+        self.requires_grad_(train_encoder)
+
+    def load_from_original_detr(self, state_dict):
+        """
+        Load encoder from one of Facebook's original DETR model.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        """
+
+        encoder_identifier = 'transformer.encoder.'
+        identifier_length = len(encoder_identifier)
+        encoder_state_dict = OrderedDict()
+
+        for original_name, state in state_dict.items():
+            if encoder_identifier in original_name:
+                new_name = original_name[identifier_length:]
+                encoder_state_dict[new_name] = state
+
+        self.load_state_dict(encoder_state_dict)
 
     def reset_parameters(self):
         """
@@ -100,7 +121,7 @@ class SelfAttentionEncoderLayer(nn.Module):
         # Intialization of default nn.Module
         super().__init__()
 
-        # Initialization of multi-head attention module
+        # Initialization of multi-head attention module for self-attention
         num_heads = mha_dict['num_heads']
         mha_dropout = mha_dict['dropout']
 
@@ -161,33 +182,9 @@ def build_encoder(args):
 
     mha_dict = {'num_heads': args.num_heads, 'dropout': args.mha_dropout}
     ffn_dict = {'hidden_dim': args.ffn_hidden_dim, 'dropout': args.ffn_dropout}
+    train_encoder = args.lr_encoder > 0
 
     encoder_layer = SelfAttentionEncoderLayer(args.feat_dim, mha_dict, ffn_dict)
-    encoder = Encoder(encoder_layer, args.feat_dim, args.num_encoder_layers)
+    encoder = Encoder(encoder_layer, args.feat_dim, args.num_encoder_layers, train_encoder)
 
     return encoder
-
-
-if __name__ == '__main__':
-    test1 = True
-
-    if test1:
-        from main import get_parser
-        args = get_parser().parse_args()
-        encoder = build_encoder(args)
-
-        detr_url = 'https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth'
-        detr_state_dict = torch.hub.load_state_dict_from_url(detr_url)['model']
-
-        from collections import OrderedDict
-        encoder_state_dict = OrderedDict()
-
-        encoder_identifier = 'transformer.encoder.'
-        identifier_length = len(encoder_identifier)
-
-        for detr_name, detr_state in detr_state_dict.items():
-            if encoder_identifier in detr_name:
-                new_name = detr_name[identifier_length:]
-                encoder_state_dict[new_name] = detr_state
-
-        encoder.load_state_dict(encoder_state_dict)

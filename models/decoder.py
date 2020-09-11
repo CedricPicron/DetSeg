@@ -1,6 +1,7 @@
 """
 Decoder modules and build function.
 """
+from collections import OrderedDict
 import copy
 import random
 
@@ -11,6 +12,174 @@ from torch.autograd.function import Function
 import torch.nn.functional as F
 
 from .utils import MLP
+
+
+class GlobalDecoder(nn.Module):
+    """
+    Class implementing the GlobalDecoder module.
+
+    Attributes:
+        feat_dim (int): Feature dimension used in the decoder.
+        layers (nn.ModulesList): List of decoder layers being concatenated.
+        num_layers (int): Number of concatenated decoder layers.
+    """
+
+    def __init__(self, decoder_layer, feat_dim, num_slots, num_layers, train_decoder):
+        """
+        Initializes the GlobalDecoder module.
+
+        Args:
+            decoder_layer (nn.Module): Decoder layer module to be concatenated.
+            feat_dim (int): Feature dimension used in the decoder.
+            num_slots (int): Number of slots per image.
+            num_layers (int): Number of concatenated decoder layers.
+            train_decoder (bool): Whether decoder should be trained or not.
+        """
+
+        super().__init__()
+        self.feat_dim = feat_dim
+        self.num_slots = num_slots
+        self.num_layers = num_layers
+
+        self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_layers)])
+        self.requires_grad_(train_decoder)
+        self.slot_embeds = nn.Embedding(num_slots, feat_dim)
+
+    def load_from_original_detr(self, state_dict):
+        """
+        Load decoder from one of Facebook's original DETR model.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        """
+
+        decoder_identifier = 'transformer.decoder.'
+        identifier_length = len(decoder_identifier)
+        decoder_state_dict = OrderedDict()
+
+        for original_name, state in state_dict.items():
+            if decoder_identifier in original_name:
+                new_name = original_name[identifier_length:]
+                decoder_state_dict[new_name] = state
+
+        self.load_state_dict(decoder_state_dict)
+
+    def reset_parameters(self):
+        """
+        Resets all multi-dimensional module parameters according to the uniform xavier initialization.
+        """
+
+        for parameter in self.parameters():
+            if parameter.dim() > 1:
+                nn.init.xavier_uniform_(parameter)
+
+    def forward(self, features, feature_masks, pos_encodings):
+        """
+        Forward method of the GlobalDecoder module.
+
+        Args:
+            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
+            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+
+        Returns:
+            slots (FloatTensor): Object slots of shape [1, batch_size*num_slots, feat_dim].
+            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [batch_size*num_slots].
+        """
+
+        batch_size = feature_masks.shape[0]
+        batch_idx = torch.arange(batch_size).repeat(self.num_slots)
+
+        feature_masks = feature_masks.flatten(1)
+        slot_embeds = self.slot_embeds.weight.unsqueeze(1).repeat(1, batch_size, 1)
+        slots = torch.zeros_like(slot_embeds)
+
+        for layer in self.layers:
+            slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
+
+        slots = slots.view(-1, self.feat_dim)
+        slots = slots.unsqueeze(0)
+
+        return slots, batch_idx, None
+
+
+class GlobalDecoderLayer(nn.Module):
+
+    def __init__(self, feat_dim, mha_dict, ffn_dict):
+        """
+        Initializes the GlobalDecoderLayer module.
+
+        Args:
+            feat_dim (int): feat_dim (int): Feature dimension used in the decoder layer.
+            mha_dict (Dict): Dict containing parameters of the MultiheadAttention module:
+                - num_heads (int): number of attention heads;
+                - dropout (float): dropout probability used throughout the MultiheadAttention module.
+            ffn_dict (Dict): Dict containing parameters of the FFN module:
+                - hidden_dim (int): number of hidden dimensions in the FFN hidden layers;
+                - dropout (float): dropout probability used throughout the FFN module.
+        """
+
+        # Intialization of default nn.Module
+        super().__init__()
+
+        # Initialization of multi-head attention module for self-attention
+        num_heads = mha_dict['num_heads']
+        mha_dropout = mha_dict['dropout']
+
+        self.self_attn = nn.MultiheadAttention(feat_dim, num_heads, dropout=mha_dropout)
+        self.dropout1 = nn.Dropout(mha_dropout)
+        self.norm1 = nn.LayerNorm(feat_dim)
+
+        # Initialization of multi-head attention module for cross-attention
+        self.multihead_attn = nn.MultiheadAttention(feat_dim, num_heads, dropout=mha_dropout)
+        self.dropout2 = nn.Dropout(mha_dropout)
+        self.norm2 = nn.LayerNorm(feat_dim)
+
+        # Initialization of feedforward network (FFN) module
+        ffn_hidden_dim = ffn_dict['hidden_dim']
+        ffn_dropout = ffn_dict['dropout']
+
+        self.linear1 = nn.Linear(feat_dim, ffn_hidden_dim)
+        self.dropout = nn.Dropout(ffn_dropout)
+        self.linear2 = nn.Linear(ffn_hidden_dim, feat_dim)
+        self.dropout3 = nn.Dropout(ffn_dropout)
+        self.norm3 = nn.LayerNorm(feat_dim)
+
+    def forward(self, slots, slot_embeds, features, feature_masks, pos_encodings):
+        """
+        Forward method of the GlobalDecoderLayer module.
+
+        Args:
+            slots (FloatTensor): Object slots of shape [num_slots, batch_size, feat_dim].
+            slot_embeds (FloatTensor): Slot embeddings of shape [num_slots, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
+            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+        """
+
+        # Global multi-head self-attention with position encoding
+        queries = slots + slot_embeds
+        keys = slots + slot_embeds
+        values = slots
+
+        delta_slots = self.self_attn(queries, keys, values)[0]
+        slots = slots + self.dropout1(delta_slots)
+        slots = self.norm1(slots)
+
+        # Global multi-head cross-attention with position encoding
+        queries = slots + slot_embeds
+        keys = features + pos_encodings
+        values = features
+
+        delta_slots = self.multihead_attn(queries, keys, values, key_padding_mask=feature_masks)[0]
+        slots = slots + self.dropout2(delta_slots)
+        slots = self.norm2(slots)
+
+        # Feedforward network (FFN)
+        delta_slots = self.linear2(self.dropout(F.relu(self.linear1(slots))))
+        slots = slots + self.dropout3(delta_slots)
+        slots = self.norm3(slots)
+
+        return slots
 
 
 class SampleDecoder(nn.Module):
@@ -32,19 +201,21 @@ class SampleDecoder(nn.Module):
         Args:
             decoder_layer (nn.Module): Decoder layer module to be concatenated.
             decoder_dict (Dict): Dictionary containing the decoder parameters:
-                - iterations (int): Number of decoder iterations per decoder layer.
-                - num_layers (int): Number of concatenated decoder layers.
+                - iterations (int): number of decoder iterations per decoder layer;
+                - num_layers (int): number of concatenated decoder layers;
+                - train (bool): whether decoder should be trained or not.
             feat_dim (int): Feature dimension used in the decoder.
             num_init_slots (int): Number of initial slots per image.
         """
 
         super().__init__()
+        self.feat_dim = feat_dim
         self.iterations = decoder_dict['iterations']
+        self.num_init_slots = num_init_slots
         self.num_layers = decoder_dict['num_layers']
 
-        self.feat_dim = feat_dim
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.num_layers)])
-        self.num_init_slots = num_init_slots
+        self.requires_grad_(decoder_dict['train'])
 
     def forward_init(self, feature_masks, pos_encodings, mask_fill=-1e6):
         """
@@ -541,17 +712,26 @@ def build_decoder(args):
         decoder (SampleDecoder): The specified SampleDecoder module.
     """
 
-    sample_dict = {'samples_per_slot': args.samples_per_slot, 'coverage_ratio': args.coverage_ratio}
-    mha_dict = {'hard_weights': args.hard_weights, 'num_heads': args.num_heads, 'dropout': args.mha_dropout}
-    curio_weights = [args.curio_weight_obj, args.curio_weight_edge, args.curio_weight_nobj]
-    curio_dict = {'weights': curio_weights, 'memory': args.curio_memory}
+    mha_dict = {'num_heads': args.num_heads, 'dropout': args.mha_dropout}
+    train = args.lr_decoder > 0
 
-    cross_attention = WeightedCrossAttention(args.feat_dim, sample_dict, mha_dict, curio_dict)
-    self_attention = SelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)
-    ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
+    if args.decoder_type == 'sample':
+        sample_dict = {'samples_per_slot': args.samples_per_slot, 'coverage_ratio': args.coverage_ratio}
+        mha_dict['hard_weights'] = args.hard_weights
+        curio_weights = [args.curio_weight_obj, args.curio_weight_edge, args.curio_weight_nobj]
+        curio_dict = {'weights': curio_weights, 'memory': args.curio_memory}
 
-    decoder_layer = SampleDecoderLayer(cross_attention, self_attention, ffn)
-    decoder_dict = {'iterations': args.decoder_iterations, 'num_layers': args.num_decoder_layers}
-    decoder = SampleDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_init_slots)
+        cross_attention = WeightedCrossAttention(args.feat_dim, sample_dict, mha_dict, curio_dict)
+        self_attention = SelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)
+        ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
+
+        decoder_layer = SampleDecoderLayer(cross_attention, self_attention, ffn)
+        decoder_dict = {'iterations': args.decoder_iterations, 'num_layers': args.num_decoder_layers, 'train': train}
+        decoder = SampleDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_init_slots)
+
+    elif args.decoder_type == 'global':
+        ffn_dict = {'hidden_dim': args.ffn_hidden_dim, 'dropout': args.ffn_dropout}
+        decoder_layer = GlobalDecoderLayer(args.feat_dim, mha_dict, ffn_dict)
+        decoder = GlobalDecoder(decoder_layer, args.feat_dim, args.num_slots, args.num_decoder_layers, train)
 
     return decoder

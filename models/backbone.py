@@ -1,6 +1,7 @@
 """
 Backbone modules and build function.
 """
+from collections import OrderedDict
 from typing import List
 
 import torch
@@ -45,6 +46,24 @@ class Backbone(nn.Module):
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
         self.num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
 
+    def load_from_original_detr(self, state_dict):
+        """
+        Load backbone from one of Facebook's original DETR model.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        """
+
+        backbone_identifier = 'backbone.0.'
+        identifier_length = len(backbone_identifier)
+        backbone_state_dict = OrderedDict()
+
+        for original_name, state in state_dict.items():
+            if backbone_identifier in original_name:
+                new_name = original_name[identifier_length:]
+                backbone_state_dict[new_name] = state
+
+        self.load_state_dict(backbone_state_dict)
+
     def forward(self, images: NestedTensor) -> List[NestedTensor]:
         """
         Forward method of Backbone module.
@@ -88,25 +107,3 @@ def build_backbone(args):
     backbone = Backbone(args.backbone, train_backbone, args.dilation)
 
     return backbone
-
-
-if __name__ == '__main__':
-    from main import get_parser
-    args = get_parser().parse_args()
-    backbone = build_backbone(args)
-
-    detr_url = 'https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth'
-    detr_state_dict = torch.hub.load_state_dict_from_url(detr_url)['model']
-
-    from collections import OrderedDict
-    backbone_state_dict = OrderedDict()
-
-    backbone_identifier = 'backbone.0.'
-    identifier_length = len(backbone_identifier)
-
-    for detr_name, detr_state in detr_state_dict.items():
-        if backbone_identifier in detr_name:
-            new_name = detr_name[identifier_length:]
-            backbone_state_dict[new_name] = detr_state
-
-    backbone.load_state_dict(backbone_state_dict)
