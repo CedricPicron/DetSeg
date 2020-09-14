@@ -11,8 +11,6 @@ from torch import nn
 from torch.autograd.function import Function
 import torch.nn.functional as F
 
-from .utils import MLP
-
 
 class GlobalDecoder(nn.Module):
     """
@@ -20,8 +18,11 @@ class GlobalDecoder(nn.Module):
 
     Attributes:
         feat_dim (int): Feature dimension used in the decoder.
-        layers (nn.ModulesList): List of decoder layers being concatenated.
+        num_slots (int): Number of slots per image.
         num_layers (int): Number of concatenated decoder layers.
+        layers (nn.ModulesList): List of decoder layers being concatenated.
+        norm (nn.LayerNorm): Final layer normalization before output.
+        slot_embeds (nn.Embedding): Learned positional slot embeddings.
     """
 
     def __init__(self, decoder_layer, feat_dim, num_slots, num_layers, train_decoder):
@@ -42,6 +43,7 @@ class GlobalDecoder(nn.Module):
         self.num_layers = num_layers
 
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_layers)])
+        self.norm = nn.LayerNorm(feat_dim)
         self.requires_grad_(train_decoder)
         self.slot_embeds = nn.Embedding(num_slots, feat_dim)
 
@@ -61,6 +63,7 @@ class GlobalDecoder(nn.Module):
                 new_name = original_name[identifier_length:]
                 decoder_state_dict[new_name] = state
 
+        decoder_state_dict['slot_embeds.weight'] = state_dict['query_embed.weight']
         self.load_state_dict(decoder_state_dict)
 
     def reset_parameters(self):
@@ -96,8 +99,8 @@ class GlobalDecoder(nn.Module):
         for layer in self.layers:
             slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
 
-        slots = slots.view(-1, self.feat_dim)
-        slots = slots.unsqueeze(0)
+        slots = self.norm(slots)
+        slots = slots.view(1, -1, self.feat_dim)
 
         return slots, batch_idx, None
 
@@ -392,12 +395,13 @@ class WeightedCrossAttention(nn.Module):
         curio_memory (float): Determines ratio of current curiosity maintained during update in non-sampled positions.
     """
 
-    def __init__(self, feat_dim, samples_dict, mha_dict, curio_dict):
+    def __init__(self, feat_dim, seg_head_dim, samples_dict, mha_dict, curio_dict):
         """
         Initializes the WeightedCrossAttention module.
 
         Args:
             feat_dim (int): Feature dimension.
+            seg_head_dim (int): Projected feature dimension in each segmentation head.
             samples_dict (Dict): Dictionary containing sampling parameters:
                 - samples_per_slot (int): number of features sampled per slot;
                 - coverage_ratio (float): ratio of samples taken randomly (other samples are taken by importance).
@@ -423,14 +427,13 @@ class WeightedCrossAttention(nn.Module):
         dropout = mha_dict['dropout']
         self.mha = nn.MultiheadAttention(feat_dim, num_heads, dropout=dropout)
 
-        # Initializing the dropout and layernorm modules
+        # Initializing the dropout and layernorm module
         self.delta_dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(feat_dim)
 
-        # Initializing the MLP's used for updating the segmentation maps
-        self.slot_proj = MLP(feat_dim, feat_dim//2, feat_dim//2, 2)
-        self.feat_proj = MLP(feat_dim, feat_dim//2, feat_dim//2, 2)
-        self.seg_class = MLP(feat_dim, feat_dim, 3, 2)
+        # Initializing linear projection layers for segmentation map updates
+        self.slot_proj = nn.Linear(feat_dim, 3*seg_head_dim)
+        self.feat_proj = nn.Linear(feat_dim, 3*seg_head_dim)
 
         # Parameters defining how the curiosities are learned and updated
         self.register_buffer('curio_weights', torch.tensor(curio_dict['weights']))
@@ -529,13 +532,17 @@ class WeightedCrossAttention(nn.Module):
             seg_probs (FloatTensor): Segmentation probabilities of shape [samples_per_slot, num_slots_total, 3].
         """
 
-        # Project slots and features, and concatenate them
-        proj_slots = self.slot_proj(slots).expand(self.samples_per_slot, -1, -1)
+        # Project slots and features
+        proj_slots = self.slot_proj(slots)
         proj_feats = self.feat_proj(sample_dict['features'] + sample_dict['pos_encodings'])
-        proj_slotfeats = torch.cat([proj_slots, proj_feats], dim=-1)
+
+        num_slots_total = slots.shape[1]
+        proj_slots = proj_slots.view(1, num_slots_total, 3, -1).permute(1, 2, 0, 3)
+        proj_feats = proj_feats.view(self.samples_per_slot, num_slots_total, 3, -1).permute(1, 2, 3, 0)
 
         # Get segmentation probabilities and update segmentation maps accordingly
-        seg_probs = torch.softmax(self.seg_class(proj_slotfeats), dim=-1)
+        seg_logits = torch.matmul(proj_slots, proj_feats).squeeze().permute(2, 0, 1)
+        seg_probs = torch.softmax(seg_logits, dim=-1)
         seg_maps[torch.arange(seg_maps.shape[0]), :, sample_dict['feat_idx']] = seg_probs
 
         return seg_maps, seg_probs
@@ -721,7 +728,7 @@ def build_decoder(args):
         curio_weights = [args.curio_weight_obj, args.curio_weight_edge, args.curio_weight_nobj]
         curio_dict = {'weights': curio_weights, 'memory': args.curio_memory}
 
-        cross_attention = WeightedCrossAttention(args.feat_dim, sample_dict, mha_dict, curio_dict)
+        cross_attention = WeightedCrossAttention(args.feat_dim, args.seg_head_dim, sample_dict, mha_dict, curio_dict)
         self_attention = SelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)
         ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
 

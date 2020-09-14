@@ -57,6 +57,7 @@ def get_parser():
     parser.add_argument('--samples_per_slot', default=100, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
     parser.add_argument('--hard_weights', default=True, type=bool, help='use hard weights during forward method')
+    parser.add_argument('--seg_head_dim', default=32, type=int, help='projected dimension in segmentation heads')
     parser.add_argument('--curio_weight_obj', default=1.0, type=float, help='curiosity weight for object features')
     parser.add_argument('--curio_weight_edge', default=2.0, type=float, help='curiosity weight for edge features')
     parser.add_argument('--curio_weight_nobj', default=-1.0, type=float, help='curiosity weight for no-obj. features')

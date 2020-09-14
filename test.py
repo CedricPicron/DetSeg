@@ -1,3 +1,4 @@
+import cProfile
 import time
 import unittest
 
@@ -23,6 +24,10 @@ class TestModelsForwardOnly(unittest.TestCase):
         self.pixel_W = 1024
         self.feat_H = 32
         self.feat_W = 32
+
+        self.args.lr_backbone = 1e-5
+        self.args.lr_encoder = 1e-4
+        self.args.lr_decoder = 1e-4
 
     def tearDown(self):
         torch.cuda.reset_peak_memory_stats()
@@ -58,7 +63,8 @@ class TestModelsForwardOnly(unittest.TestCase):
         encoder = build_encoder(self.args).to('cuda')
 
         t0 = time.time()
-        encoder(features, feature_masks, pos_encodings)
+        locals = {'a': encoder, 'b': features, 'c': feature_masks, 'd': pos_encodings}
+        cProfile.runctx('a(b, c, d)', globals={}, locals=locals)
         t1 = time.time()
 
         print(f"Memory encoder (forward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
@@ -73,7 +79,8 @@ class TestModelsForwardOnly(unittest.TestCase):
         decoder = build_decoder(self.args).to('cuda')
 
         t0 = time.time()
-        decoder(features, feature_masks, pos_encodings)
+        locals = {'a': decoder, 'b': features, 'c': feature_masks, 'd': pos_encodings}
+        cProfile.runctx('a(b, c, d)', globals={}, locals=locals)
         t1 = time.time()
 
         print(f"Memory global decoder (forward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
@@ -88,7 +95,8 @@ class TestModelsForwardOnly(unittest.TestCase):
         decoder = build_decoder(self.args).to('cuda')
 
         t0 = time.time()
-        decoder(features, feature_masks, pos_encodings)
+        locals = {'a': decoder, 'b': features, 'c': feature_masks, 'd': pos_encodings}
+        cProfile.runctx('a(b, c, d)', globals={}, locals=locals)
         t1 = time.time()
 
         print(f"Memory sample decoder (forward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
