@@ -1,0 +1,37 @@
+Encoder:
+    - Profiling (speed):
+        # masked_fill:
+            * slowest component (approx 3.7 ms)
+            * masked_fill_ could be used instead which avoids clone (approx 1.4 ms faster)
+            * masked_fill could be removed altogether (network should learn to ignore)
+        # softmax:
+            * second slowest component (approx 1.7 ms)
+            * cannot be removed for now
+        # dropout (in attention):
+            * third slowest component (approx 1.6 ms)
+            * could potentially be removed
+        # matmul and bmm (in attention):
+            * form the remaining expensive operations (each approx 1.3 ms)
+            * two bmm operations perform the query-key and weight-value computations
+            * two matmul operations perform the two linear layers in the FFN
+            * all these operations are crucial (ffn_hidden_layer could perhaps be decreased)
+
+    - Profiling (memory):
+        # dropout (in attention):
+            * highest memory consumption (80 Mb)
+            * can be reduced by using inplace dropout (16 Mb reduction)
+            * inplace is slower though, as not fused (most likely not worth it)
+        # masked fill:
+            * joint second highest memory consumption (64 Mb)
+            * can be avoided with inplace version masked_fill_
+            * very much worth it (also faster), as long as autograd doesn't break down
+
+Global decoder:
+    - Profiling (speed):
+        * similar to encoder, but faster (smaller attention matrix)
+        * slowest compenent is masked_fill (approx 0.5 ms) from self_attetion
+        * could again by replaced by in-place masked_fill_ (approx 0.2 ms faster)
+
+    - Profiling (memory):
+        * similar to encoder, but lower (smaller attention matrix)
+        * masked_fill consumption could again be removed (16 Mb reduction)
