@@ -53,15 +53,15 @@ def get_parser():
 
     # *** Sample decoder
     parser.add_argument('--decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
-    parser.add_argument('--num_init_slots', default=100, type=int, help='number of initial object slots per image')
-    parser.add_argument('--samples_per_slot', default=100, type=int, help='number of features sampled per slot')
+    parser.add_argument('--num_init_slots', default=64, type=int, help='number of initial object slots per image')
+    parser.add_argument('--samples_per_slot', default=16, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
     parser.add_argument('--hard_weights', default=True, type=bool, help='use hard weights during forward method')
     parser.add_argument('--seg_head_dim', default=32, type=int, help='projected dimension in segmentation heads')
     parser.add_argument('--curio_weight_obj', default=1.0, type=float, help='curiosity weight for object features')
     parser.add_argument('--curio_weight_edge', default=2.0, type=float, help='curiosity weight for edge features')
     parser.add_argument('--curio_weight_nobj', default=-1.0, type=float, help='curiosity weight for no-obj. features')
-    parser.add_argument('--curio_memory', default=0.9, type=float, help='memory weight in non-sampled positions')
+    parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
 
     # Criterion
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false', help='disables auxiliary losses')

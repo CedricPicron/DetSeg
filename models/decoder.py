@@ -5,7 +5,6 @@ from collections import OrderedDict
 import copy
 import random
 
-import scipy.stats
 import torch
 from torch import nn
 from torch.autograd.function import Function
@@ -233,9 +232,6 @@ class SampleDecoder(nn.Module):
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Initial segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Initial curiosity maps of shape [num_slots_total, H, W].
-
-            def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2].
-            gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
         """
 
@@ -244,34 +240,33 @@ class SampleDecoder(nn.Module):
         device = pos_encodings.device
 
         # Uniform sampling of initial slots within non-padded regions
-        batch_idx = torch.repeat_interleave(torch.arange(batch_size), self.num_init_slots).to(device)
+        batch_idx = torch.arange(num_slots_total, device=device) // self.num_init_slots
         modified_masks = ~feature_masks.view(batch_size, H*W) * torch.randint(9, size=(batch_size, H*W), device=device)
         _, sorted_idx = torch.sort(modified_masks, dim=1, descending=True)
         flat_pos_idx = sorted_idx[:, :self.num_init_slots].flatten()
         slots = pos_encodings[flat_pos_idx, batch_idx, :].unsqueeze(0)
-        pos_idx = torch.stack([flat_pos_idx // W, flat_pos_idx % W], dim=-1)
 
         # Initialize segmentation maps
-        masks = feature_masks[batch_idx]
-        seg_maps = torch.zeros(num_slots_total, 3, H, W, device=device)
-        seg_maps[masks[:, None, :, :].expand(-1, 3, -1, -1)] = mask_fill
-        seg_maps = seg_maps.view(num_slots_total, 3, H*W)
+        seg_maps = torch.zeros(num_slots_total, 3, H*W, device=device)
 
         # Initialize curiosity maps
-        xy_grid = torch.stack(torch.meshgrid(torch.arange(-H+1, H), torch.arange(-W+1, W)), dim=-1)
-        gauss_pdf = scipy.stats.multivariate_normal([0, 0]).pdf
-        gauss_grid = torch.from_numpy(gauss_pdf(xy_grid)).to(device=device, dtype=torch.float32)
+        height_vector = torch.arange(-H+1, H, device=device, dtype=torch.int64)
+        width_vector = torch.arange(-W+1, W, device=device, dtype=torch.int64)
+        xy_grid = torch.stack(torch.meshgrid(height_vector, width_vector), dim=0)
+        gauss_kernel = torch.exp(-torch.norm(xy_grid.to(dtype=torch.float), p=2, dim=0)/4.0)
 
-        xy_grid = xy_grid[-H:, -W:][None, :].expand(num_slots_total, -1, -1, -1).to(device)
-        xy_grid = (xy_grid - pos_idx[:, None, None, :]).permute(3, 0, 1, 2)
-        curio_maps = gauss_grid[xy_grid[0], xy_grid[1]]
-        curio_maps[masks] = mask_fill
+        curio_maps = torch.zeros(num_slots_total, 3*H, 3*W, device=device)
+        slot_idx = torch.arange(num_slots_total)[:, None, None]
+        pos_idx = torch.stack([flat_pos_idx // W, flat_pos_idx % W], dim=0)[:, :, None, None]
 
-        # Compute some useful items for later
-        def_xy_grid = torch.stack(torch.meshgrid(torch.arange(H), torch.arange(W)), dim=-1).to(device)
+        curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+H, pos_idx[1, :]+xy_grid[1]+W] = gauss_kernel
+        curio_maps = curio_maps[:, H:2*H, W:2*W].contiguous()
+        curio_maps.masked_fill_(feature_masks[batch_idx], mask_fill)
+
+        # Compute maximum masked entries of mask from feature_masks
         max_mask_entries = torch.max(torch.sum(feature_masks.view(batch_size, H*W), dim=1)).item()
 
-        return slots, batch_idx, seg_maps, curio_maps, def_xy_grid, gauss_grid, max_mask_entries
+        return slots, batch_idx, seg_maps, curio_maps, max_mask_entries
 
     def forward(self, features, feature_masks, pos):
         """
@@ -335,10 +330,7 @@ class SampleDecoderLayer(nn.Module):
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
-
-            args (Tuple): Tuple containing following fixed items:
-                - def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2];
-                - gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1];
+            args (Tuple): Tuple containing:
                 - max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
 
         Returns:
@@ -392,7 +384,7 @@ class WeightedCrossAttention(nn.Module):
         seg_class (MLP): Multi-layer perceptron (MLP) classifying each sampled feature as object/edge/no-object.
 
         curio_weights (FloatTensor): Tensor of curiosity weights corresponding to the object/edge/no-object classes.
-        curio_memory (float): Determines ratio of current curiosity maintained during update in non-sampled positions.
+        curio_kernel (nn.ConvTranspose2d): Transposed convolution module spreading curiosity information.
     """
 
     def __init__(self, feat_dim, seg_head_dim, samples_dict, mha_dict, curio_dict):
@@ -411,7 +403,7 @@ class WeightedCrossAttention(nn.Module):
                 - dropout (float): dropout probality used throughout the module.
             curio_dict (Dict): Dictionary containing parameters for the curiosity updates:
                 - weights (List): list of curiosity weights corresponding to the object/edge/no-object classes;
-                - memory (float): ratio of current curiosity maintained during update in non-sampled positions.
+                - kernel_size (int): size of curiosity kernel of transposed convolution.
         """
 
         # Intialization of default nn.Module
@@ -437,7 +429,7 @@ class WeightedCrossAttention(nn.Module):
 
         # Parameters defining how the curiosities are learned and updated
         self.register_buffer('curio_weights', torch.tensor(curio_dict['weights']))
-        self.curio_memory = curio_dict['memory']
+        self.curio_kernel = nn.ConvTranspose2d(1, 1, curio_dict['kernel_size'], padding=1, bias=False)
 
     def sample(self, features, pos_encodings, batch_idx, curio_maps, max_mask_entries):
         """
@@ -547,7 +539,7 @@ class WeightedCrossAttention(nn.Module):
 
         return seg_maps, seg_probs
 
-    def update_curio_maps(self, curio_maps, feat_idx, seg_probs, def_xy_grid, gauss_grid):
+    def update_curio_maps(self, curio_maps, feat_idx, seg_probs):
         """
         Update curiosity maps.
 
@@ -555,47 +547,35 @@ class WeightedCrossAttention(nn.Module):
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
             feat_idx (IntTensor): Indices of sampled positions of shape [samples_per_slot, num_slots_total].
             seg_probs (FloatTensor): Segmentation probabilities of shape [samples_per_slot, num_slots_total, 3].
-            def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2].
-            gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1].
 
         Returns:
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
-        samples_per_slot = feat_idx.shape[0]
-        num_slots_total, H, W = curio_maps.shape
-
-        # Get grids centered around sampled positions
-        feat_idx = torch.stack([feat_idx // W, feat_idx % W], dim=-1)
-        xy_grid = def_xy_grid[:, :, None, None, :].expand(H, W, samples_per_slot, num_slots_total, 2)
-        xy_grid = (xy_grid - feat_idx).permute(4, 0, 1, 2, 3)
-
-        # Update curiosity maps with gaussians placed at sampled positions
-        gauss_weights = torch.sum(self.curio_weights*seg_probs, dim=-1)
-        gauss_pdfs = gauss_weights*gauss_grid[xy_grid[0], xy_grid[1]]
-        curio_delta, _ = torch.max(gauss_pdfs.permute(2, 3, 0, 1), dim=0)
-        curio_maps = self.curio_memory*curio_maps + (1-self.curio_memory)*curio_delta
-
         # Overwrite curiosities at sampled positions according to segmentation probabilities
-        feat_idx = feat_idx.permute(2, 0, 1)
-        sampled_curiosities = 1-torch.max(seg_probs, dim=-1)[0]
+        num_slots_total, H, W = curio_maps.shape
+        feat_idx = torch.stack([feat_idx // W, feat_idx % W], dim=-1).permute(2, 0, 1)
+        sampled_curiosities = torch.sum(self.curio_weights*seg_probs, dim=-1)
         curio_maps[torch.arange(num_slots_total), feat_idx[0], feat_idx[1]] = sampled_curiosities
+
+        # Spread curiosities with transposed convolution
+        curio_maps = curio_maps.unsqueeze(1)
+        curio_maps = curio_maps + self.curio_kernel(curio_maps)
+        curio_maps = curio_maps.squeeze(1)
 
         return curio_maps
 
-    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, def_xy_grid, gauss_grid, max_mask_entries):
+    def forward(self, features, pos_encodings, slots, batch_idx, seg_maps, curio_maps, max_mask_entries):
         """
         Forward method of WeightedCrossAttention module.
 
         Args:
             features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
-            pos (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
-            def_xy_grid (IntTensor): Tensor containing the (H,W)-grid coordinates of shape [H, W, 2].
-            gauss_grid (FloatTensor): Tensor containing the Gaussian grid of shape [2*H-1, 2*W-1].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
 
         Returns:
@@ -604,10 +584,10 @@ class WeightedCrossAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
-        sample_dict = self.sample(features, pos, batch_idx, curio_maps, max_mask_entries)
+        sample_dict = self.sample(features, pos_encodings, batch_idx, curio_maps, max_mask_entries)
         slots = self.weighted_attention(slots, sample_dict)
         seg_maps, seg_probs = self.update_seg_maps(slots, seg_maps, sample_dict)
-        curio_maps = self.update_curio_maps(curio_maps, sample_dict['feat_idx'], seg_probs, def_xy_grid, gauss_grid)
+        curio_maps = self.update_curio_maps(curio_maps, sample_dict['feat_idx'], seg_probs)
 
         return slots, seg_maps, curio_maps
 
@@ -726,7 +706,7 @@ def build_decoder(args):
         sample_dict = {'samples_per_slot': args.samples_per_slot, 'coverage_ratio': args.coverage_ratio}
         mha_dict['hard_weights'] = args.hard_weights
         curio_weights = [args.curio_weight_obj, args.curio_weight_edge, args.curio_weight_nobj]
-        curio_dict = {'weights': curio_weights, 'memory': args.curio_memory}
+        curio_dict = {'weights': curio_weights, 'kernel_size': args.curio_kernel_size}
 
         cross_attention = WeightedCrossAttention(args.feat_dim, args.seg_head_dim, sample_dict, mha_dict, curio_dict)
         self_attention = SelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)

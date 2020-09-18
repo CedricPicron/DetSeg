@@ -42,8 +42,8 @@ elif profiling_args.model == 'detr':
     main_args.lr_decoder = 1e-4
     main_args.lr_encoder = 1e-4
     main_args.num_classes = 91
-    main_args.num_encoder_layers = 1
-    main_args.num_decoder_layers = 1
+    main_args.num_encoder_layers = 6
+    main_args.num_decoder_layers = 6
     model = build_detr(main_args).to('cuda')
 
 elif profiling_args.model == 'encoder':
@@ -53,7 +53,7 @@ elif profiling_args.model == 'encoder':
     inputs = [features, feature_masks, pos_encodings]
 
     main_args.lr_encoder = 1e-4
-    main_args.num_encoder_layers = 1
+    main_args.num_encoder_layers = 6
     model = build_encoder(main_args).to('cuda')
 
 elif profiling_args.model == 'global_decoder':
@@ -64,7 +64,7 @@ elif profiling_args.model == 'global_decoder':
 
     main_args.decoder_type = 'global'
     main_args.lr_decoder = 1e-4
-    main_args.num_decoder_layers = 1
+    main_args.num_decoder_layers = 6
     model = build_decoder(main_args).to('cuda')
 
 elif profiling_args.model == 'sample_decoder':
@@ -75,7 +75,7 @@ elif profiling_args.model == 'sample_decoder':
 
     main_args.decoder_type = 'sample'
     main_args.lr_decoder = 1e-4
-    main_args.num_decoder_layers = 1
+    main_args.num_decoder_layers = 6
     model = build_decoder(main_args).to('cuda')
 
 # Warm-up and timing with torch.utils._benchmark.Timer
