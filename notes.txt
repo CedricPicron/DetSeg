@@ -35,3 +35,15 @@ Global decoder:
     - Profiling (memory):
         * similar to encoder, but lower (smaller attention matrix)
         * masked_fill consumption could again be removed (16 Mb reduction)
+
+Some ideas:
+    1. Some in-between models could be designed. For example a decoder with global attention
+       and also enhance with the segmentation and curiosity part. Conversely, one could also
+       design a decoder with sampling but without the segmentation and curiosity part.
+    2. If one wants the increase the number of samples per slot or the number of slots, it is
+       more efficient to first compute the keys and values, and then sample the correct ones.
+       Otherwise, in the default multi-head attention implemention, these keys and values are
+       recomputed many times due many samples being sampled by many different slots.
+    3. Note that the Facebook global decoder adds position encodings (a.k.a. slot embeddings),
+       to the slots at every cross and self-attenion module. Note that currently no such thing 
+       is done in the sample decoder.
