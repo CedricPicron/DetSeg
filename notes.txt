@@ -46,4 +46,12 @@ Some ideas:
        recomputed many times due many samples being sampled by many different slots.
     3. Note that the Facebook global decoder adds position encodings (a.k.a. slot embeddings),
        to the slots at every cross and self-attenion module. Note that currently no such thing 
-       is done in the sample decoder.
+       is done in the sample decoder. Additionally, they also add a final LayerNorm layer at
+       the end of the decoder. Also something which is currently not done in the SampleDecoder.
+    4. Currently no object removal mechanism is implemented. However, when such mechanism is
+       added, one should also change the loss, as currently no loss is attributed to unmatched
+       targets. One could therefore get zero loss when no predictions are made and where all 
+       targets are unmatched. In such a case, one should recover the slot that was spawned the
+       closest to each unmatched target, and use this as matched prediction. Backpropagating
+       losses w.r.t. to these additional prediction-target pairs should allow the network to 
+       learn not to remove these predictions (i.e. slots) in the future.

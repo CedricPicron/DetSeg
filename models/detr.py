@@ -61,14 +61,15 @@ class DETR(nn.Module):
 
         Args:
             images (NestedTensor): NestedTensor which consists of:
-               - images.tensors (FloatTensor): batched images of shape [batch_size, 3, H, W];
-               - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+                - images.tensors (FloatTensor): batched images of shape [batch_size, 3, H, W];
+                - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
-            List of dicts, with each dict consisting of:
-               - "pred_logits": the class logits (with background) of shape [num_slots_total, (num_classes + 1)];
-               - "pred_boxes": the normalized box coordinates (center_x, center_y, height, width) w.r.t. padded images,
-                               of shape [num_slots_total, 4];
+            pred_list (List): List of predictions, where each entry is a dict containing the key:
+                - logits (FloatTensor): the class logits (with background) of shape [num_slots, (num_classes + 1)];
+                - boxes (FloatTensor): the normalized box coordinates (center_x, center_y, height, width) within
+                                       padded images, of shape [num_slots, 4];
+                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots].
             If aux_loss=True, the list length equals the number of decoder layers, else the list length is one.
         """
 
@@ -89,8 +90,9 @@ class DETR(nn.Module):
 
         class_logits = self.class_embed(slots)
         bbox_coord = self.bbox_embed(slots).sigmoid()
+        pred_list = [{'logits': a, 'boxes': b, 'batch_idx': c} for a, b, c in zip(class_logits, bbox_coord, batch_idx)]
 
-        return [{'pred_logits': a, 'pred_boxes': b} for a, b in zip(class_logits, bbox_coord)]
+        return pred_list
 
 
 def build_detr(args):

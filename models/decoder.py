@@ -84,22 +84,21 @@ class GlobalDecoder(nn.Module):
             pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
-            slots (FloatTensor): Object slots of shape [1, batch_size*num_slots, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [batch_size*num_slots].
+            slots (FloatTensor): Object slots of shape [1, num_slots*batch_size, feat_dim].
+            batch_idx (IntTensor): Batch indices of slots (in ascending order) of shape [1, num_slots*batch_size].
         """
 
         batch_size = feature_masks.shape[0]
-        batch_idx = torch.arange(batch_size).repeat(self.num_slots)
-
-        feature_masks = feature_masks.flatten(1)
         slot_embeds = self.slot_embeds.weight.unsqueeze(1).repeat(1, batch_size, 1)
         slots = torch.zeros_like(slot_embeds)
+        feature_masks = feature_masks.flatten(1)
 
         for layer in self.layers:
             slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
 
         slots = self.norm(slots)
-        slots = slots.view(1, -1, self.feat_dim)
+        slots = slots.transpose(0, 1).view(1, -1, self.feat_dim)
+        batch_idx = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
 
         return slots, batch_idx, None
 
@@ -156,6 +155,9 @@ class GlobalDecoderLayer(nn.Module):
             features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
             feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
             pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+
+        Returns:
+            slots (FloatTensor): Updated object slots of shape [num_slots, batch_size, feat_dim].
         """
 
         # Global multi-head self-attention with position encoding
@@ -279,7 +281,7 @@ class SampleDecoder(nn.Module):
 
         Returns:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_idx (IntTensor): Batch indices of slots (in ascending order) of shape [1, num_slots*batch_size].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
         """
 
@@ -290,6 +292,9 @@ class SampleDecoder(nn.Module):
         for layer in self.layers:
             for _ in range(self.iterations):
                 slots, seg_maps, curio_maps = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+
+        # Add leading dimension to batch_idx
+        batch_idx = batch_idx.unsqueeze(0)
 
         return slots, batch_idx, seg_maps
 

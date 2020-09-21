@@ -16,15 +16,14 @@ class SetCriterion(nn.Module):
     This class computes the loss for DETR-based models.
 
     The process happens in two steps:
-        1) we compute the hungarian matching between ground-truth boxes and the outputs of the model;
-        2) we supervise each pair of matched ground-truth / prediction (both class and box).
+        1) we compute the hungarian matching between the model predictions and ground-truth targets;
+        2) we supervise each pair of matched model prediction and ground-truth target (both class and box).
 
     Attributes:
         num_classes (int): Number of object categories (without the no-object category).
-        matcher (nn.Module): Module able to compute a matching between targets and proposals.
-        weight_dict (Dict[str, float]): Dict mapping loss names to their relative weights.
-        no_obj_weight (float): Relative classification weight applied to the no-object category.
-        losses (List[str]): List with names of losses to be applied. See get_loss for list of available losses.
+        matcher (nn.Module): Module computing the matching between predictions and targets.
+        weight_dict (Dict): Dict containing the weights or loss coefficients for the different loss terms.
+        losses (List): List with names of losses to be applied. See get_loss for list of available losses.
         class_weights (Tensor): Tensor of shape [num_classes + 1] with (relative) classification weights.
     """
 
@@ -34,8 +33,8 @@ class SetCriterion(nn.Module):
 
         Args:
             num_classes (int): Number of object categories (without the no-object category).
-            matcher (nn.Module): Module able to compute a matching between targets and proposals.
-            weight_dict (Dict[str, float]): Dict mapping loss names to their relative weights.
+            matcher (nn.Module): Module computing the matching between predictions and targets.
+            weight_dict (Dict): Dict containing the weights or loss coefficients for the different loss terms.
             no_obj_weight (float): Relative classification weight applied to the no-object category.
             losses (List[str]): List with names of losses to be applied. See get_loss for list of available losses.
         """
@@ -44,7 +43,6 @@ class SetCriterion(nn.Module):
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
-        self.no_obj_weight = no_obj_weight
         self.losses = losses
 
         class_weights = torch.ones(self.num_classes + 1)
@@ -55,8 +53,10 @@ class SetCriterion(nn.Module):
     @torch.no_grad()
     def accuracy(output, target, topk=(1,)):
         """Computes the precision@k for the specified values of k"""
+
         if target.numel() == 0:
             return [torch.zeros([], device=output.device)]
+
         maxk = max(topk)
         batch_size = target.size(0)
 
@@ -68,6 +68,7 @@ class SetCriterion(nn.Module):
         for k in topk:
             correct_k = correct[:k].view(-1).float().sum(0)
             res.append(correct_k.mul_(100.0 / batch_size))
+
         return res
 
     def loss_labels(self, outputs, targets, indices, num_boxes, layer_id, log=True):
@@ -77,8 +78,8 @@ class SetCriterion(nn.Module):
         Targets dicts must contain the key "labels" containing a tensor of shape [num_target_boxes].
         """
 
-        assert 'pred_logits' in outputs
-        pred_logits = outputs['pred_logits']
+        assert 'logits' in outputs
+        pred_logits = outputs['logits']
 
         batch_idx, pred_idx = self._get_src_permutation_idx(indices)
         tgt_classes_o = torch.cat([t['labels'][J] for t, (_, J) in zip(targets, indices)])
@@ -111,7 +112,7 @@ class SetCriterion(nn.Module):
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
         """
-        assert 'pred_boxes' in outputs
+        assert 'boxes' in outputs
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
@@ -147,36 +148,57 @@ class SetCriterion(nn.Module):
         return loss_map[loss](outputs, targets, indices, num_boxes, layer_id, **kwargs)
 
     @staticmethod
-    def get_num_boxes(outputs, targets):
-        # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+    def get_num_boxes(tgt_list):
+        """
+        Computes the average number of target boxes across all nodes, for normalization purposes.
+
+        Args:
+            tgt_list (List): List of targets of shape[batch_size], where each entry is a dict containing the keys:
+                - labels (IntTensor): tensor of dim [num_target_boxes] (where num_target_boxes is the number of
+                                      ground-truth objects in the target) containing the ground-truth class indices;
+                - boxes (FloatTensor): tensor of dim [num_target_boxes, 4] containing the target box coordinates.
+
+        Returns:
+            num_boxes (float): Average number of target boxes across all nodes.
+        """
+
+        num_boxes = sum(len(t['labels']) for t in tgt_list)
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_list[0]['boxes'].device)
+
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+        world_size = get_world_size()
+        num_boxes = torch.clamp(num_boxes/world_size, min=1).item()
 
         return num_boxes
 
-    def forward(self, outputs_list, targets):
+    def forward(self, pred_list, tgt_list):
         """
         Forward method of the SetCriterion module. Performs the loss computation.
 
         Args:
-             outputs_list (List[Dict]): List of dicts, see the output specification of the model for the format.
-             targets (List[Dict]): List of dicts, such that len(targets) == batch_size. The expected keys
-                                   in each dict depends on the losses applied, see each loss doc.
+             pred_list (List): List of predictions, where each entry is a dict containing the key:
+                 - logits (FloatTensor): the class logits (with background) of shape [num_slots, (num_classes + 1)];
+                 - boxes (FloatTensor): the normalized box coordinates (center_x, center_y, height, width) within
+                                        padded images, of shape [num_slots, 4];
+                 - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots].
+             tgt_list (List): List of targets of shape[batch_size], where each entry is a dict containing the keys:
+                 - labels (IntTensor): tensor of dim [num_target_boxes] (where num_target_boxes is the number of
+                                       ground-truth objects in the target) containing the ground-truth class indices;
+                 - boxes (FloatTensor): tensor of dim [num_target_boxes, 4] containing the target box coordinates.
 
         Returns:
-            loss_dict (Dict[float]): Dict of different weighted losses, at different layers.
+            loss_dict (Dict): Dict of different weighted losses, at different layers.
         """
 
         loss_dict = {}
-        for layer_id, outputs in enumerate(outputs_list):
-            indices = self.matcher(outputs, targets)
-            num_boxes = self.get_num_boxes(outputs, targets)
+        for layer_id, pred_dict in enumerate(pred_list):
+            idx = self.matcher(pred_dict, tgt_list)
+            num_boxes = self.get_num_boxes(tgt_list)
 
             for loss in self.losses:
-                loss_dict.update(self.get_loss(loss, outputs, targets, indices, num_boxes, layer_id))
+                loss_dict.update(self.get_loss(loss, pred_dict, tgt_list, idx, num_boxes, layer_id))
 
         return loss_dict
 
@@ -189,11 +211,12 @@ def build_criterion(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        SetCriterion module.
+        criterion (SetCriterion): The specified SetCriterion module.
     """
 
     matcher = build_matcher(args)
     weight_dict = {'class': args.loss_coef_class, 'bbox': args.loss_coef_bbox, 'giou': args.loss_coef_giou}
     losses = ['labels', 'boxes', 'cardinality']
+    criterion = SetCriterion(args.num_classes, matcher, weight_dict, args.no_obj_weight, losses)
 
-    return SetCriterion(args.num_classes, matcher, weight_dict, args.no_obj_weight, losses)
+    return criterion

@@ -26,12 +26,15 @@ class SinePositionEncoder(nn.Module):
             temperature (int): Sample points will cover between 1/temperature and 1 of the (co)sine period.
             normalize (bool): Normalize sample points to given scale.
             scale (float): Scale used during normalization (ignored when normalize is False).
+
+        Raises:
+            ValueError: Raised when normalize is False and scale was passed.
         """
 
         super().__init__()
 
         if scale is not None and normalize is False:
-            raise ValueError('normalize should be True if scale is passed')
+            raise ValueError("normalize should be True if scale is passed")
 
         self.temperature = temperature
         self.normalize = normalize
@@ -90,6 +93,6 @@ def build_position_encoder(args):
     if args.position_encoding == 'sine':
         position_encoder = SinePositionEncoder()
     else:
-        raise ValueError(f'Unknown position encoding "{args.position_encoding}" was provided.')
+        raise ValueError(f'Unknown position encoding {args.position_encoding} was provided.')
 
     return position_encoder
