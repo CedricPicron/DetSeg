@@ -68,12 +68,12 @@ def get_parser():
 
     # * Matcher coefficients
     parser.add_argument('--match_coef_class', default=1, type=float, help='class coefficient in the matching cost')
-    parser.add_argument('--match_coef_bbox', default=5, type=float, help='L1 box coefficient in the matching cost')
+    parser.add_argument('--match_coef_l1', default=5, type=float, help='L1 box coefficient in the matching cost')
     parser.add_argument('--match_coef_giou', default=2, type=float, help='GIoU box coefficient in the matching cost')
 
     # * Loss coefficients
     parser.add_argument('--loss_coef_class', default=1, type=float, help='class coefficient in loss')
-    parser.add_argument('--loss_coef_bbox', default=5, type=float, help='L1 box coefficient in loss')
+    parser.add_argument('--loss_coef_l1', default=5, type=float, help='L1 box coefficient in loss')
     parser.add_argument('--loss_coef_giou', default=2, type=float, help='GIoU box coefficient in loss')
     parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
 

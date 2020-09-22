@@ -66,10 +66,12 @@ class DETR(nn.Module):
 
         Returns:
             pred_list (List): List of predictions, where each entry is a dict containing the key:
-                - logits (FloatTensor): the class logits (with background) of shape [num_slots, (num_classes + 1)];
-                - boxes (FloatTensor): the normalized box coordinates (center_x, center_y, height, width) within
-                                       padded images, of shape [num_slots, 4];
-                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots].
+                - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
+                - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
+                                       regions, of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+
             If aux_loss=True, the list length equals the number of decoder layers, else the list length is one.
         """
 
@@ -90,7 +92,9 @@ class DETR(nn.Module):
 
         class_logits = self.class_embed(slots)
         bbox_coord = self.bbox_embed(slots).sigmoid()
+
         pred_list = [{'logits': a, 'boxes': b, 'batch_idx': c} for a, b, c in zip(class_logits, bbox_coord, batch_idx)]
+        [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list
 

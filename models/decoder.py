@@ -97,7 +97,7 @@ class GlobalDecoder(nn.Module):
             slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
 
         slots = self.norm(slots)
-        slots = slots.transpose(0, 1).view(1, -1, self.feat_dim)
+        slots = slots.transpose(0, 1).reshape(1, -1, self.feat_dim)
         batch_idx = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
 
         return slots, batch_idx, None

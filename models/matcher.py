@@ -17,30 +17,30 @@ class HungarianMatcher(nn.Module):
     while the others are unmatched (and thus treated as non-objects).
 
     Attributes:
-        cost_class: Relative weight of the classification error in the matching cost.
-        cost_bbox: Relative weight of the L1 error of the bounding box coordinates in the matching cost.
-        cost_giou: Relative weight of the GIoU loss of the bounding box in the matching cost.
+        cost_class: Relative weight of the classification loss in the matching cost.
+        cost_l1: Relative weight of the L1 bounding box loss in the matching cost.
+        cost_giou: Relative weight of the GIoU bounding box loss in the matching cost.
     """
 
-    def __init__(self, cost_class: float = 1.0, cost_bbox: float = 1.0, cost_giou: float = 1.0):
+    def __init__(self, cost_class: float = 1.0, cost_l1: float = 1.0, cost_giou: float = 1.0):
         """
         Initializes the HungarianMatcher module.
 
         Args:
-            cost_class: Relative weight of the classification error in the matching cost.
-            cost_bbox: Relative weight of the L1 error of the bounding box coordinates in the matching cost.
-            cost_giou: Relative weight of the giou loss of the bounding box in the matching cost.
+            cost_class: Relative weight of the classification loss in the matching cost.
+            cost_l1: Relative weight of the L1 bounding box loss in the matching cost.
+            cost_giou: Relative weight of the GIoU bounding box loss in the matching cost.
 
         Raises:
             ValueError: Error when all cost coefficients are zero.
         """
 
-        if cost_class == 0 and cost_bbox == 0 and cost_giou == 0:
+        if cost_class == 0 and cost_l1 == 0 and cost_giou == 0:
             raise ValueError("All cost coefficients can't be zero.")
 
         super().__init__()
         self.cost_class = cost_class
-        self.cost_bbox = cost_bbox
+        self.cost_l1 = cost_l1
         self.cost_giou = cost_giou
 
     @staticmethod
@@ -67,28 +67,29 @@ class HungarianMatcher(nn.Module):
         return sizes
 
     @torch.no_grad()
-    def forward(self, pred_dict, tgt_list):
+    def forward(self, pred_dict, tgt_dict):
         """
         Forward method of the HungarianMatcher module. Performs the hungarian matching.
 
         Args:
-            pred_dict (Dict): Dictionary containing at least following keys:
-                 - logits (FloatTensor): tensor of shape [num_slots, num_classes] with the classification logits;
-                 - boxes (FloatTensor): tensor of shape [num_slots, 4] with the predicted box coordinates.
-                 - batch_idx (IntTensor): tensor of shape [num_slots] with batch indices of slots (ascending order);
+            pred_dict (Dict): Dictionary containing following keys:
+                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
-            tgt_list (List): List of targets of shape[batch_size], where each entry is a dict containing the keys:
-                 - labels (IntTensor): tensor of dim [num_target_boxes] (where num_target_boxes is the number of
-                                       ground-truth objects in the target) containing the ground-truth class indices;
-                 - boxes (FloatTensor): tensor of dim [num_target_boxes, 4] containing the target box coordinates.
+            tgt_dict (Dict): Dictionary containing following keys:
+                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                       number of objects across batch entries) containing the target class indices;
+                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
-            idx: List of shape [batch_size], containing tuples (pred_idx, tgt_idx) with:
-                - pred_idx (IntTensor): tensor of chosen predictions of shape [min(num_slots_batch, num_target_boxes)];
-                - tgt_idx (IntTensor): tensor of matching targets of shape [min(num_slots_batch, num_target_boxes)].
+            - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
+            - tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
 
         Raises:
-            ValueError: Raised when predictions['batch_idx'] is not sorted in ascending order.
+            ValueError: Raised when pred_dict['batch_idx'] is not sorted in ascending order.
         """
 
         # Check whether batch_idx is sorted
@@ -99,36 +100,36 @@ class HungarianMatcher(nn.Module):
 
         # Compute class probablities of predictions
         pred_prob = pred_dict['logits'].softmax(-1)
-        pred_bbox = pred_dict['boxes']
 
-        # Concatenate the target class indices and boxes accros batch entries
-        tgt_ids = torch.cat([t['labels'] for t in tgt_list])
-        tgt_bbox = torch.cat([t['boxes'] for t in tgt_list])
+        # Some renaming for code readability
+        pred_boxes = pred_dict['boxes']
+        tgt_labels = tgt_dict['labels']
+        tgt_boxes = tgt_dict['boxes']
 
         # Compute the classification cost. Contrary to the criterion loss, we don't use the NLL, but approximate it
         # by 1 - probability[target class]. The 1 is omitted, as the constant doesn't change the matching.
-        cost_class = -pred_prob[:, tgt_ids]
+        cost_class = -pred_prob[:, tgt_labels]
 
         # Compute the L1 cost between boxes
-        cost_bbox = torch.cdist(pred_bbox, tgt_bbox, p=1)
+        cost_l1 = torch.cdist(pred_boxes, tgt_boxes, p=1)
 
         # Compute the GIoU cost between boxes
-        cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(pred_bbox), box_cxcywh_to_xyxy(tgt_bbox))
+        cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(pred_boxes), box_cxcywh_to_xyxy(tgt_boxes))
 
         # Weighted cost matrix
-        C = (self.cost_bbox*cost_bbox + self.cost_class*cost_class + self.cost_giou*cost_giou).cpu()
+        C = (self.cost_class*cost_class + self.cost_l1*cost_l1 + self.cost_giou*cost_giou).cpu()
 
-        # Compute number of predictions and targets in each batch
-        batch_size = len(tgt_list)
+        # Compute cumulative number of predictions and targets in each batch
+        batch_size = len(tgt_dict['sizes'])-1
         pred_sizes = self.get_sizes(batch_idx, batch_size)
-        tgt_sizes = [0].extend([len(t['boxes']) for t in tgt_list])
-        tgt_sizes = torch.cumsum(torch.tensor(tgt_sizes), dim=0)
+        tgt_sizes = tgt_dict['sizes']
 
         # Match predictions with targets
-        idx = [lsa(C[pred_sizes[i]:pred_sizes[i+1], tgt_sizes[i]:tgt_sizes[i+1]]) for i in range(batch_size)]
-        idx = [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in idx]
+        lsa_idx = [lsa(C[pred_sizes[i]:pred_sizes[i+1], tgt_sizes[i]:tgt_sizes[i+1]]) for i in range(batch_size)]
+        pred_idx = torch.cat([torch.as_tensor(pred_idx, dtype=torch.int64) for pred_idx, _ in lsa_idx])
+        tgt_idx = torch.cat([torch.as_tensor(tgt_idx, dtype=torch.int64) for _, tgt_idx in lsa_idx])
 
-        return idx
+        return pred_idx, tgt_idx
 
 
 def build_matcher(args):
@@ -142,6 +143,6 @@ def build_matcher(args):
         matcher (HungarianMatcher): The specified HungarianMatcher module.
     """
 
-    matcher = HungarianMatcher(args.match_coef_class, args.match_coef_bbox, args.match_coef_giou)
+    matcher = HungarianMatcher(args.match_coef_class, args.match_coef_l1, args.match_coef_giou)
 
     return matcher

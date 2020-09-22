@@ -23,11 +23,12 @@ class SetCriterion(nn.Module):
         num_classes (int): Number of object categories (without the no-object category).
         matcher (nn.Module): Module computing the matching between predictions and targets.
         weight_dict (Dict): Dict containing the weights or loss coefficients for the different loss terms.
-        losses (List): List with names of losses to be applied. See get_loss for list of available losses.
+        loss_functions (List): List of loss functions to be applied.
+        analysis_names (List): List with names of analyses to be performed.
         class_weights (Tensor): Tensor of shape [num_classes + 1] with (relative) classification weights.
     """
 
-    def __init__(self, num_classes, matcher, weight_dict, no_obj_weight, losses):
+    def __init__(self, num_classes, matcher, weight_dict, no_obj_weight, loss_names, analysis_names):
         """
         Initializes the SetCriterion module.
 
@@ -36,134 +37,154 @@ class SetCriterion(nn.Module):
             matcher (nn.Module): Module computing the matching between predictions and targets.
             weight_dict (Dict): Dict containing the weights or loss coefficients for the different loss terms.
             no_obj_weight (float): Relative classification weight applied to the no-object category.
-            losses (List[str]): List with names of losses to be applied. See get_loss for list of available losses.
+            loss_names (List): List with names of losses to be applied.
+            analysis_names (List): List with names of analyses to be performed.
         """
 
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
-        self.losses = losses
+
+        self.loss_functions = [getattr(self, f'loss_{name}') for name in loss_names]
+        self.analysis_names = analysis_names
 
         class_weights = torch.ones(self.num_classes + 1)
-        class_weights[-1] = self.no_obj_weight
+        class_weights[-1] = no_obj_weight
         self.register_buffer('class_weights', class_weights)
 
-    @staticmethod
-    @torch.no_grad()
-    def accuracy(output, target, topk=(1,)):
-        """Computes the precision@k for the specified values of k"""
-
-        if target.numel() == 0:
-            return [torch.zeros([], device=output.device)]
-
-        maxk = max(topk)
-        batch_size = target.size(0)
-
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
-
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0)
-            res.append(correct_k.mul_(100.0 / batch_size))
-
-        return res
-
-    def loss_labels(self, outputs, targets, indices, num_boxes, layer_id, log=True):
+    def loss_labels(self, pred_dict, tgt_dict, match_idx, *args):
         """
-        Classification loss (NLL).
+        Method computing the weighted cross-entropy classification loss.
 
-        Targets dicts must contain the key "labels" containing a tensor of shape [num_target_boxes].
+        Args:
+            pred_dict (Dict): Dictionary containing following keys:
+                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+
+            tgt_dict (Dict): Dictionary containing following keys:
+                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                       number of objects across batch entries) containing the target class indices;
+                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+
+            match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
+                - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
+                - tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
+
+        Returns:
+            loss_dict (Dict): Dictionary containing the weighted cross-entropy classification loss.
+            analysis_dict (Dict): Dictionary containing classification related analyses.
         """
 
-        assert 'logits' in outputs
-        pred_logits = outputs['logits']
-
-        batch_idx, pred_idx = self._get_src_permutation_idx(indices)
-        tgt_classes_o = torch.cat([t['labels'][J] for t, (_, J) in zip(targets, indices)])
-
-        tgt_classes = torch.full(pred_logits.shape[:2], self.num_classes, dtype=torch.int64, device=pred_logits.device)
-        tgt_classes[batch_idx, pred_idx] = tgt_classes_o
-
-        loss_ce = F.cross_entropy(pred_logits.transpose(1, 2), tgt_classes, self.class_weights)
-        losses = {f'loss_class_{layer_id}': self.weight_dict['class']*loss_ce}
-        losses[f'class_error_{layer_id}'] = 100 - self.accuracy(pred_logits[batch_idx, pred_idx], tgt_classes_o)[0]
-
-        return losses
-
-    @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes, layer_id):
-        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
-        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
-        """
-        pred_logits = outputs['pred_logits']
+        # Some renaming for code readability
+        pred_logits = pred_dict['logits']
+        num_slots_total = pred_logits.shape[0]
         device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
-        # Count the number of predictions that are NOT "no-object" (which is the last class)
-        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
-        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
-        losses = {f'cardinality_error_{layer_id}': card_err}
-        return losses
+        tgt_labels = tgt_dict['labels']
+        pred_idx, tgt_idx = match_idx
+        layer_id = pred_dict['layer_id']
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes, layer_id):
-        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
-           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
-           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        # Compute target classes
+        tgt_classes = torch.full((num_slots_total,), self.num_classes, dtype=torch.int64, device=device)
+        tgt_classes[pred_idx] = tgt_labels[tgt_idx]
+
+        # Compute cross-entropy loss
+        loss_class = F.cross_entropy(pred_logits, tgt_classes, self.class_weights)
+        loss_dict = {f'loss_class_{layer_id}': self.weight_dict['class']*loss_class}
+
+        # Perform classification related analyses
+        with torch.no_grad():
+            analysis_dict = {}
+
+            # Compute predicted classes if required
+            if 'accuracy' or 'cardinality' in self.analysis_names:
+                pred_classes = torch.argmax(pred_logits, dim=-1)
+
+            # Perform accuracy analysis if requested
+            if 'accuracy' in self.analysis_names:
+                correct_predictions = torch.eq(pred_classes, tgt_classes)
+                accuracy = correct_predictions.sum().item()/len(correct_predictions)
+                analysis_dict[f'accuracy_{layer_id}'] = 100*accuracy
+
+            # Perform cardinality analysis if requested
+            if 'cardinality' in self.analysis_names:
+                pred_cardinality = (pred_classes != self.num_classes).sum().item()
+                tgt_cardinality = len(tgt_labels)
+                cardinality_error = abs(pred_cardinality-tgt_cardinality)
+                analysis_dict[f'card_error_{layer_id}'] = cardinality_error
+
+        return loss_dict, analysis_dict
+
+    def loss_boxes(self, pred_dict, tgt_dict, match_idx, num_boxes):
         """
-        assert 'boxes' in outputs
-        idx = self._get_src_permutation_idx(indices)
-        src_boxes = outputs['pred_boxes'][idx]
-        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        Method computing the weighted L1 and GIoU bounding box losses.
 
-        losses = {}
-        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-        losses[f'loss_bbox_{layer_id}'] = self.weight_dict['bbox'] * (loss_bbox.sum() / num_boxes)
+        Args:
+            pred_dict (Dict): Dictionary containing following keys:
+                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
-        loss_giou = 1 - torch.diag(generalized_box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)))
-        losses[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
+            tgt_dict (Dict): Dictionary containing following keys:
+                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                       number of objects across batch entries) containing the target class indices;
+                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
-        return losses
+            match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
+                - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
+                - tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
 
-    def _get_src_permutation_idx(self, indices):
-        # permute predictions following indices
-        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
-        src_idx = torch.cat([src for (src, _) in indices])
-        return batch_idx, src_idx
+            num_boxes (float): Average number of target boxes across all nodes.
 
-    def _get_tgt_permutation_idx(self, indices):
-        # permute targets following indices
-        batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
-        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
-        return batch_idx, tgt_idx
+        Returns:
+            loss_dict (Dict): Dictionary containing the weighted L1 and GIoU bounding box losses.
+            analysis_dict (Dict): Dictionary containing bounding box related analyses.
+        """
 
-    def get_loss(self, loss, outputs, targets, indices, num_boxes, layer_id, **kwargs):
-        loss_map = {
-            'labels': self.loss_labels,
-            'cardinality': self.loss_cardinality,
-            'boxes': self.loss_boxes,
-        }
-        assert loss in loss_map, f'do you really want to compute {loss} loss?'
-        return loss_map[loss](outputs, targets, indices, num_boxes, layer_id, **kwargs)
+        # Get the predicted and target boxes
+        pred_idx, tgt_idx = match_idx
+        pred_boxes = pred_dict['boxes'][pred_idx, :]
+        tgt_boxes = tgt_dict['boxes'][tgt_idx, :]
+
+        # Compute the L1 and GIoU bounding box losses
+        loss_l1 = F.l1_loss(pred_boxes, tgt_boxes, reduction='sum')
+        loss_giou = 1 - torch.diag(generalized_box_iou(box_cxcywh_to_xyxy(pred_boxes), box_cxcywh_to_xyxy(tgt_boxes)))
+
+        # Populate loss_dict with the weighted bounding box losses
+        loss_dict = {}
+        layer_id = pred_dict['layer_id']
+        loss_dict[f'loss_l1_{layer_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
+        loss_dict[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
+
+        # Perform bounding box related analyses
+        with torch.no_grad():
+            analysis_dict = {}
+
+        return loss_dict, analysis_dict
 
     @staticmethod
-    def get_num_boxes(tgt_list):
+    def get_num_boxes(tgt_dict):
         """
         Computes the average number of target boxes across all nodes, for normalization purposes.
 
         Args:
-            tgt_list (List): List of targets of shape[batch_size], where each entry is a dict containing the keys:
-                - labels (IntTensor): tensor of dim [num_target_boxes] (where num_target_boxes is the number of
-                                      ground-truth objects in the target) containing the ground-truth class indices;
-                - boxes (FloatTensor): tensor of dim [num_target_boxes, 4] containing the target box coordinates.
+            tgt_dict (Dict): Dictionary containing following keys:
+                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                       number of objects across batch entries) containing the target class indices;
+                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
             num_boxes (float): Average number of target boxes across all nodes.
         """
 
-        num_boxes = sum(len(t['labels']) for t in tgt_list)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_list[0]['boxes'].device)
+        num_boxes = len(tgt_dict['labels'])
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_dict['labels'].device)
 
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -173,34 +194,42 @@ class SetCriterion(nn.Module):
 
         return num_boxes
 
-    def forward(self, pred_list, tgt_list):
+    def forward(self, pred_list, tgt_dict):
         """
         Forward method of the SetCriterion module. Performs the loss computation.
 
         Args:
-             pred_list (List): List of predictions, where each entry is a dict containing the key:
-                 - logits (FloatTensor): the class logits (with background) of shape [num_slots, (num_classes + 1)];
-                 - boxes (FloatTensor): the normalized box coordinates (center_x, center_y, height, width) within
-                                        padded images, of shape [num_slots, 4];
-                 - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots].
-             tgt_list (List): List of targets of shape[batch_size], where each entry is a dict containing the keys:
-                 - labels (IntTensor): tensor of dim [num_target_boxes] (where num_target_boxes is the number of
-                                       ground-truth objects in the target) containing the ground-truth class indices;
-                 - boxes (FloatTensor): tensor of dim [num_target_boxes, 4] containing the target box coordinates.
+             pred_list (List): List of predictions, where each entry is a dict containing the keys:
+                - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
+                - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
+                                       regions, of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+
+             tgt_dict (Dict): Dictionary containing following keys:
+                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                       number of objects across batch entries) containing the target class indices;
+                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
-            loss_dict (Dict): Dict of different weighted losses, at different layers.
+            full_loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
+            full_analysis_dict (Dict): Dict of different analyses, at different layers, used for logging purposes only.
         """
 
-        loss_dict = {}
+        full_loss_dict = {}
+        full_analysis_dict = {}
+
         for layer_id, pred_dict in enumerate(pred_list):
-            idx = self.matcher(pred_dict, tgt_list)
-            num_boxes = self.get_num_boxes(tgt_list)
+            match_idx = self.matcher(pred_dict, tgt_dict)
+            num_boxes = self.get_num_boxes(tgt_dict)
 
-            for loss in self.losses:
-                loss_dict.update(self.get_loss(loss, pred_dict, tgt_list, idx, num_boxes, layer_id))
+            for loss_function in self.loss_functions:
+                loss_dict, analysis_dict = loss_function(pred_dict, tgt_dict, match_idx, num_boxes)
+                full_loss_dict.update(loss_dict)
+                full_analysis_dict.update(analysis_dict)
 
-        return loss_dict
+        return full_loss_dict, full_analysis_dict
 
 
 def build_criterion(args):
@@ -215,8 +244,9 @@ def build_criterion(args):
     """
 
     matcher = build_matcher(args)
-    weight_dict = {'class': args.loss_coef_class, 'bbox': args.loss_coef_bbox, 'giou': args.loss_coef_giou}
-    losses = ['labels', 'boxes', 'cardinality']
-    criterion = SetCriterion(args.num_classes, matcher, weight_dict, args.no_obj_weight, losses)
+    weight_dict = {'class': args.loss_coef_class, 'l1': args.loss_coef_l1, 'giou': args.loss_coef_giou}
+    loss_names = ['labels', 'boxes']
+    analysis_names = ['accuracy', 'cardinality']
+    criterion = SetCriterion(args.num_classes, matcher, weight_dict, args.no_obj_weight, loss_names, analysis_names)
 
     return criterion
