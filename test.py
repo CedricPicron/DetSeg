@@ -232,9 +232,10 @@ class TestModelsWithBackward(unittest.TestCase):
         torch.cuda.reset_peak_memory_stats()
 
     def test_backbone(self):
-        images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W)
-        images = nested_tensor_from_tensor_list(images).to('cuda')
         backbone = build_backbone(self.args).to('cuda')
+
+        images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
+        images = nested_tensor_from_tensor_list(images)
 
         self.globals_dict['backbone'] = backbone
         self.globals_dict['images'] = images
@@ -246,10 +247,11 @@ class TestModelsWithBackward(unittest.TestCase):
         print(f"Time backbone (backward): {t: .1f} ms")
 
     def test_encoder(self):
-        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
-        feature_masks = (torch.randn(self.args.batch_size, self.feat_H, self.feat_W) > 0).to('cuda')
-        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
         encoder = build_encoder(self.args).to('cuda')
+
+        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
+        feature_masks = torch.randn(self.args.batch_size, self.feat_H, self.feat_W, device='cuda') > 0
+        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
 
         self.globals_dict['encoder'] = encoder
         self.globals_dict['features'] = features
@@ -264,11 +266,11 @@ class TestModelsWithBackward(unittest.TestCase):
 
     def test_global_decoder(self):
         self.args.decoder_type = 'global'
-
-        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
-        feature_masks = (torch.randn(self.args.batch_size, self.feat_H, self.feat_W) > 0).to('cuda')
-        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
         decoder = build_decoder(self.args).to('cuda')
+
+        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
+        feature_masks = torch.randn(self.args.batch_size, self.feat_H, self.feat_W, device='cuda') > 0
+        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
 
         self.globals_dict['decoder'] = decoder
         self.globals_dict['features'] = features
@@ -283,11 +285,11 @@ class TestModelsWithBackward(unittest.TestCase):
 
     def test_sample_decoder(self):
         self.args.decoder_type = 'sample'
-
-        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
-        feature_masks = (torch.randn(self.args.batch_size, self.feat_H, self.feat_W) > 0).to('cuda')
-        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim).to('cuda')
         decoder = build_decoder(self.args).to('cuda')
+
+        features = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
+        feature_masks = torch.randn(self.args.batch_size, self.feat_H, self.feat_W, device='cuda') > 0
+        pos_encodings = torch.randn(self.feat_H*self.feat_W, self.args.batch_size, self.args.feat_dim, device='cuda')
 
         self.globals_dict['decoder'] = decoder
         self.globals_dict['features'] = features
@@ -301,32 +303,76 @@ class TestModelsWithBackward(unittest.TestCase):
         print(f"Time sample decoder (backward): {t: .1f} ms")
 
     def test_detr(self):
-        self.args.num_encoder_layers = 1
-        self.args.num_decoder_layers = 1
-
-        images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W)
-        images = nested_tensor_from_tensor_list(images).to('cuda')
         detr = build_detr(self.args).to('cuda')
 
-        stmt = 'torch.cat([v for k,v in detr(images)[0].items() if k in keys], dim=1).sum().backward()'
+        images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
+        images = nested_tensor_from_tensor_list(images)
+
         self.globals_dict['detr'] = detr
         self.globals_dict['images'] = images
         self.globals_dict['keys'] = ['logits', 'boxes']
 
+        stmt = 'torch.cat([v for k, v in detr(images)[0].items() if k in keys], dim=1).sum().backward()'
         timer = Timer(stmt=stmt, globals=self.globals_dict)
         t = timer.timeit(number=1)._median*1e3
 
         print(f"Memory DETR model (backward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
         print(f"Time DETR model (backward): {t: .1f} ms")
 
-    def test_matcher(self):
-        return
-
     def test_criterion(self):
-        return
+        criterion = build_criterion(self.args).to('cuda')
+
+        def generate_pred_list(self):
+            num_slots_total = self.args.batch_size * self.args.num_init_slots
+            logits = torch.randn(num_slots_total, self.args.num_classes+1, device='cuda', requires_grad=True)
+            boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
+            batch_idx, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
+            pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 0}]
+
+            return pred_list
+
+        num_target_boxes_total = 20
+        labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
+        boxes = torch.abs(torch.randn(num_target_boxes_total, 4, device='cuda'))
+        sizes, _ = torch.randint(num_target_boxes_total, (self.args.batch_size+1,), device='cuda').sort()
+        tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+        self.globals_dict['criterion'] = criterion
+        self.globals_dict['generate_pred_list'] = generate_pred_list
+        self.globals_dict['self'] = self
+        self.globals_dict['tgt_dict'] = tgt_dict
+
+        stmt = 'torch.stack([v for v in criterion(generate_pred_list(self), tgt_dict)[0].values()]).sum().backward()'
+        timer = Timer(stmt=stmt, globals=self.globals_dict)
+        t = timer.timeit(number=1)._median*1e3
+
+        print(f"Memory criterion (backward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
+        print(f"Time criterion (backward): {t: .1f} ms")
 
     def test_detr_with_criterion(self):
-        return
+        detr = build_detr(self.args).to('cuda')
+        criterion = build_criterion(self.args).to('cuda')
+
+        images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
+        images = nested_tensor_from_tensor_list(images)
+
+        num_target_boxes_total = 20
+        labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
+        boxes = torch.abs(torch.randn(num_target_boxes_total, 4, device='cuda'))
+        sizes, _ = torch.randint(num_target_boxes_total, (self.args.batch_size+1,), device='cuda').sort()
+        tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+        self.globals_dict['detr'] = detr
+        self.globals_dict['criterion'] = criterion
+        self.globals_dict['images'] = images
+        self.globals_dict['tgt_dict'] = tgt_dict
+
+        stmt = 'torch.stack([v for v in criterion(detr(images), tgt_dict)[0].values()]).sum().backward()'
+        timer = Timer(stmt=stmt, globals=self.globals_dict)
+        t = timer.timeit(number=1)._median*1e3
+
+        print(f"Memory DETR with criterion (backward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
+        print(f"Time DETR with criterion (backward): {t: .1f} ms")
 
 
 class TestLoadingFromOriginalDETR(unittest.TestCase):
