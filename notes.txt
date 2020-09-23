@@ -1,40 +1,18 @@
 Encoder:
-    - Profiling (speed):
-        # masked_fill:
-            * slowest component (approx 3.7 ms)
-            * masked_fill_ could be used instead which avoids clone (approx 1.4 ms faster)
-            * masked_fill could be removed altogether (network should learn to ignore)
-        # softmax:
-            * second slowest component (approx 1.7 ms)
+    - Profiling (training speed on 1050):
+        # softmax (backward):
+            * slowest component (approx 4.0 ms)
             * cannot be removed for now
-        # dropout (in attention):
-            * third slowest component (approx 1.6 ms)
-            * could potentially be removed
-        # matmul and bmm (in attention):
-            * form the remaining expensive operations (each approx 1.3 ms)
-            * two bmm operations perform the query-key and weight-value computations
-            * two matmul operations perform the two linear layers in the FFN
-            * all these operations are crucial (ffn_hidden_layer could perhaps be decreased)
+        # masked_fill (forward and backward):
+            * second (forward) and third (backward) slowest components (both approx 3.4 ms)
+            * masked_fill_ does not provide a solution as slower in backward pass (copy needed)
+            * masked_fill could be removed though (network should learn to ignore padded areas)
 
-    - Profiling (memory):
+    - Profiling (training memory):
         # dropout (in attention):
             * highest memory consumption (80 Mb)
             * can be reduced by using inplace dropout (16 Mb reduction)
-            * inplace is slower though, as not fused (most likely not worth it)
-        # masked fill:
-            * joint second highest memory consumption (64 Mb)
-            * can be avoided with inplace version masked_fill_
-            * very much worth it (also faster), as long as autograd doesn't break down
-
-Global decoder:
-    - Profiling (speed):
-        * similar to encoder, but faster (smaller attention matrix)
-        * slowest compenent is masked_fill (approx 0.5 ms) from self_attetion
-        * could again by replaced by in-place masked_fill_ (approx 0.2 ms faster)
-
-    - Profiling (memory):
-        * similar to encoder, but lower (smaller attention matrix)
-        * masked_fill consumption could again be removed (16 Mb reduction)
+            * inplace is slower though (as not fused) and therefore not worth it
 
 Some ideas:
     1. Some in-between models could be designed. For example a decoder with global attention
@@ -55,3 +33,9 @@ Some ideas:
        closest to each unmatched target, and use this as matched prediction. Backpropagating
        losses w.r.t. to these additional prediction-target pairs should allow the network to 
        learn not to remove these predictions (i.e. slots) in the future.
+    5. Currently the GIoU loss is computed by comparing every selected prediction with every 
+       target, followed by taking the diagonal of this GIoU matrix. A more efficient solution
+       would only compare each selected prediction with its corresponding target, avoiding
+       some unnecessary computation. In practice however, it seems that computing the full
+       GIoU matrix is not that expensive, both on time and memory consumption. For simplicity,
+       we therefore keep it as is.

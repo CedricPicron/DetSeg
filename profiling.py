@@ -19,7 +19,7 @@ sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_
 
 # Argument parsing
 parser = argparse.ArgumentParser()
-parser.add_argument('--backward', action='store_true', help='whether to profile models with backward pass')
+parser.add_argument('--forward', action='store_true', help='whether to profile forward pass only')
 parser.add_argument('--memory', action='store_true', help='whether to report memory usage')
 parser.add_argument('--model', default='sample_decoder', choices=model_choices, help='model type to be profiled')
 parser.add_argument('--sort_by', default='cuda_time', choices=sort_choices, help='metric to sort profiler table')
@@ -149,7 +149,7 @@ elif profiling_args.model == 'sample_decoder':
     backward_stmt = 'model(*inputs)[0].sum().backward()'
 
 # Select forward or backward statement
-stmt = backward_stmt if profiling_args.backward else forward_stmt
+stmt = forward_stmt if profiling_args.forward else backward_stmt
 
 # Warm-up and timing with torch.utils._benchmark.Timer
 timer = Timer(stmt=stmt, globals=globals_dict)
