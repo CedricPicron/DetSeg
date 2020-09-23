@@ -73,16 +73,17 @@ class HungarianMatcher(nn.Module):
 
         Args:
             pred_dict (Dict): Dictionary containing following keys:
-                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
-                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
                                        number of objects across batch entries) containing the target class indices;
-                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
             - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];

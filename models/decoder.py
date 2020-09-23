@@ -18,32 +18,39 @@ class GlobalDecoder(nn.Module):
     Attributes:
         feat_dim (int): Feature dimension used in the decoder.
         num_slots (int): Number of slots per image.
+        num_iterations (int): Number of decoder iterations per decoder layer.
         num_layers (int): Number of concatenated decoder layers.
+        return_all (bool): Whether to return all decoder predictions.
         layers (nn.ModulesList): List of decoder layers being concatenated.
         norm (nn.LayerNorm): Final layer normalization before output.
         slot_embeds (nn.Embedding): Learned positional slot embeddings.
     """
 
-    def __init__(self, decoder_layer, feat_dim, num_slots, num_layers, train_decoder):
+    def __init__(self, decoder_layer, decoder_dict, feat_dim, num_slots):
         """
         Initializes the GlobalDecoder module.
 
         Args:
             decoder_layer (nn.Module): Decoder layer module to be concatenated.
+            decoder_dict (Dict): Dictionary containing the decoder parameters:
+                - num_iter (int): number of decoder iterations per decoder layer;
+                - num_layers (int): number of concatenated decoder layers;
+                - return_all (bool): whether to return all decoder predictions;
+                - train (bool): whether decoder should be trained or not.
             feat_dim (int): Feature dimension used in the decoder.
             num_slots (int): Number of slots per image.
-            num_layers (int): Number of concatenated decoder layers.
-            train_decoder (bool): Whether decoder should be trained or not.
         """
 
         super().__init__()
         self.feat_dim = feat_dim
         self.num_slots = num_slots
-        self.num_layers = num_layers
+        self.num_iterations = decoder_dict['num_iter']
+        self.num_layers = decoder_dict['num_layers']
+        self.return_all = decoder_dict['return_all']
 
-        self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_layers)])
+        self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.num_layers)])
         self.norm = nn.LayerNorm(feat_dim)
-        self.requires_grad_(train_decoder)
+        self.requires_grad_(decoder_dict['train'])
         self.slot_embeds = nn.Embedding(num_slots, feat_dim)
 
     def load_from_original_detr(self, state_dict):
@@ -84,21 +91,31 @@ class GlobalDecoder(nn.Module):
             pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
-            slots (FloatTensor): Object slots of shape [1, num_slots*batch_size, feat_dim].
-            batch_idx (IntTensor): Batch indices of slots (in ascending order) of shape [1, num_slots*batch_size].
+            slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
+            batch_idx (IntTensor): Slot batch indices (in ascending order) of shape [num_pred_sets, num_slots_total].
         """
 
         batch_size = feature_masks.shape[0]
+        feature_masks = feature_masks.flatten(1)
         slot_embeds = self.slot_embeds.weight.unsqueeze(1).repeat(1, batch_size, 1)
         slots = torch.zeros_like(slot_embeds)
-        feature_masks = feature_masks.flatten(1)
+        slots_list = []
 
         for layer in self.layers:
-            slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
+            for _ in range(self.num_iterations):
+                slots = layer(slots, slot_embeds, features, feature_masks, pos_encodings)
+                slots_list.append(self.norm(slots)) if self.return_all else None
 
-        slots = self.norm(slots)
-        slots = slots.transpose(0, 1).reshape(1, -1, self.feat_dim)
+        if not self.return_all:
+            slots_list.append(self.norm(slots))
+
+        num_pred_sets = len(slots_list)
+        slots_list.reverse()
+        slots = torch.stack(slots_list, dim=0)
+        slots = slots.transpose(1, 2).reshape(num_pred_sets, batch_size*self.num_slots, self.feat_dim)
+
         batch_idx = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
+        batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
 
         return slots, batch_idx, None
 
@@ -191,11 +208,12 @@ class SampleDecoder(nn.Module):
     Class implementing the SampleDecoder module.
 
     Attributes:
-        decoder_iterations (int): Number of decoder iterations per decoder layer.
         feat_dim (int): Feature dimension used in the decoder.
-        layers (nn.ModuleList): List of decoder layers being concatenated.
         num_init_slots (int): Number of initial slots per image.
+        num_iterations (int): Number of decoder iterations per decoder layer.
         num_layers (int): Number of concatenated decoder layers.
+        return_all (bool): Whether to return all decoder predictions.
+        layers (nn.ModuleList): List of decoder layers being concatenated.
     """
 
     def __init__(self, decoder_layer, decoder_dict, feat_dim, num_init_slots):
@@ -205,8 +223,9 @@ class SampleDecoder(nn.Module):
         Args:
             decoder_layer (nn.Module): Decoder layer module to be concatenated.
             decoder_dict (Dict): Dictionary containing the decoder parameters:
-                - iterations (int): number of decoder iterations per decoder layer;
+                - num_iter (int): number of decoder iterations per decoder layer;
                 - num_layers (int): number of concatenated decoder layers;
+                - return_all (bool): whether to return all decoder predictions;
                 - train (bool): whether decoder should be trained or not.
             feat_dim (int): Feature dimension used in the decoder.
             num_init_slots (int): Number of initial slots per image.
@@ -214,9 +233,10 @@ class SampleDecoder(nn.Module):
 
         super().__init__()
         self.feat_dim = feat_dim
-        self.iterations = decoder_dict['iterations']
         self.num_init_slots = num_init_slots
+        self.num_iterations = decoder_dict['num_iter']
         self.num_layers = decoder_dict['num_layers']
+        self.return_all = decoder_dict['return_all']
 
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.num_layers)])
         self.requires_grad_(decoder_dict['train'])
@@ -280,21 +300,28 @@ class SampleDecoder(nn.Module):
             pos (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
-            slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices of slots (in ascending order) of shape [1, num_slots*batch_size].
-            seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
+            slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
+            batch_idx (IntTensor): Slot batch indices (in ascending order) of shape [num_pred_sets, num_slots_total].
+            seg_maps (FloatTensor): Segmentation maps at last decoder layer of shape [num_slots_total, 3, H*W].
         """
 
         # Initialize slots, segmentation/curiosity maps and other useful stuff
         slots, batch_idx, seg_maps, curio_maps, *args = self.forward_init(feature_masks, pos)
+        slots_list = []
 
-        # Loop over different decoder layers
         for layer in self.layers:
-            for _ in range(self.iterations):
+            for _ in range(self.num_iterations):
                 slots, seg_maps, curio_maps = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+                slots_list.append(slots) if self.return_all else None
 
-        # Add leading dimension to batch_idx
-        batch_idx = batch_idx.unsqueeze(0)
+        if not self.return_all:
+            slots_list.append(slots)
+
+        num_pred_sets = len(slots_list)
+        slots_list.reverse()
+        slots = torch.stack(slots_list, dim=0)
+        slots = slots.transpose(1, 2).reshape(num_pred_sets, -1, self.feat_dim)
+        batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
 
         return slots, batch_idx, seg_maps
 
@@ -704,8 +731,9 @@ def build_decoder(args):
         decoder (SampleDecoder): The specified SampleDecoder module.
     """
 
+    decoder_dict = {'num_iter': args.num_decoder_iterations, 'num_layers': args.num_decoder_layers}
+    decoder_dict.update({'return_all': args.aux_loss, 'train': args.lr_decoder > 0})
     mha_dict = {'num_heads': args.num_heads, 'dropout': args.mha_dropout}
-    train = args.lr_decoder > 0
 
     if args.decoder_type == 'sample':
         sample_dict = {'samples_per_slot': args.samples_per_slot, 'coverage_ratio': args.coverage_ratio}
@@ -718,12 +746,11 @@ def build_decoder(args):
         ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
 
         decoder_layer = SampleDecoderLayer(cross_attention, self_attention, ffn)
-        decoder_dict = {'iterations': args.decoder_iterations, 'num_layers': args.num_decoder_layers, 'train': train}
         decoder = SampleDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_init_slots)
 
     elif args.decoder_type == 'global':
         ffn_dict = {'hidden_dim': args.ffn_hidden_dim, 'dropout': args.ffn_dropout}
         decoder_layer = GlobalDecoderLayer(args.feat_dim, mha_dict, ffn_dict)
-        decoder = GlobalDecoder(decoder_layer, args.feat_dim, args.num_slots, args.num_decoder_layers, train)
+        decoder = GlobalDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_slots)
 
     return decoder

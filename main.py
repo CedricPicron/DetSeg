@@ -47,12 +47,12 @@ def get_parser():
     parser.add_argument('--decoder_type', default='sample', choices=['global', 'sample'], help='decoder type')
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
     parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
+    parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
 
     # *** Global decoder
     parser.add_argument('--num_slots', default=100, type=int, help='number of object slots per image')
 
     # *** Sample decoder
-    parser.add_argument('--decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
     parser.add_argument('--num_init_slots', default=64, type=int, help='number of initial object slots per image')
     parser.add_argument('--samples_per_slot', default=16, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
@@ -64,7 +64,7 @@ def get_parser():
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
 
     # Criterion
-    parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false', help='disables auxiliary losses')
+    parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')
 
     # * Matcher coefficients
     parser.add_argument('--match_coef_class', default=1, type=float, help='class coefficient in the matching cost')

@@ -25,10 +25,9 @@ class DETR(nn.Module):
         decoder (nn.Module): Module implementing the DETR decoder.
         class_embed (nn.Linear): Module projecting decoder features to class logits.
         bbox_embed (MLP): Module projecting decoder features to bbox "logits" (i.e. before sigmoid).
-        aux_loss (bool): Apply loss at every decoder layer if True, else only after last decoder layer.
     """
 
-    def __init__(self, backbone, position_encoder, encoder, decoder, num_classes, aux_loss=False):
+    def __init__(self, backbone, position_encoder, encoder, decoder, num_classes):
         """
         Initializes the DETR module.
 
@@ -39,7 +38,6 @@ class DETR(nn.Module):
             encoder (nn.Module): Module implementing the DETR encoder.
             decoder (nn.Module): Module implementing the DETR decoder.
             num_classes (int): Number of object classes (without background class).
-            aux_loss (bool): Apply loss at every decoder layer if True, else only after last decoder layer.
         """
 
         super().__init__()
@@ -53,7 +51,6 @@ class DETR(nn.Module):
 
         self.class_embed = nn.Linear(decoder.feat_dim, num_classes + 1)
         self.bbox_embed = MLP(decoder.feat_dim, decoder.feat_dim, 4, 3)
-        self.aux_loss = aux_loss
 
     def forward(self, images: NestedTensor):
         """
@@ -70,9 +67,10 @@ class DETR(nn.Module):
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
                 - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
+                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
-            If aux_loss=True, the list length equals the number of decoder layers, else the list length is one.
+            The list size is [1] or [num_decoder_layers*num_decoder_iterations] depending on args.aux_loss.
         """
 
         if isinstance(images, (list, torch.Tensor)):
@@ -93,8 +91,10 @@ class DETR(nn.Module):
         class_logits = self.class_embed(slots)
         bbox_coord = self.bbox_embed(slots).sigmoid()
 
+        num_layers = self.decoder.num_layers
+        iters = self.decoder.num_iterations
         pred_list = [{'logits': a, 'boxes': b, 'batch_idx': c} for a, b, c in zip(class_logits, bbox_coord, batch_idx)]
-        [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
+        [pred_dict.update({'layer_id': num_layers-i, 'iter_id': i//iters+1}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list
 
@@ -118,6 +118,6 @@ def build_detr(args):
     # Temporary hack
     args.num_classes = 91
 
-    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes, args.aux_loss)
+    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes)
 
     return detr

@@ -49,7 +49,7 @@ elif profiling_args.model == 'criterion':
         logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
         batch_idx, _ = torch.randint(main_args.batch_size, (num_slots_total,), device='cuda').sort()
-        pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 0}]
+        pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 6, 'iter_id': 1}]
 
         return pred_list
 

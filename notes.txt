@@ -39,3 +39,9 @@ Some ideas:
        some unnecessary computation. In practice however, it seems that computing the full
        GIoU matrix is not that expensive, both on time and memory consumption. For simplicity,
        we therefore keep it as is.
+    6. The current version supports auxiliary losses. It however assumes that the number of
+       slots remains constant across the different prediction sets. Given that currently no
+       object removal and addition mechansims are implemented, this is not a problem. However,
+       when such mechanisms are added, one should take care of this limitation. Note that one
+       can alternatively opt for a solution where each addition is accompanied with a removal,
+       such that the total number of object slots always remains the same.

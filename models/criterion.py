@@ -59,16 +59,17 @@ class SetCriterion(nn.Module):
 
         Args:
             pred_dict (Dict): Dictionary containing following keys:
-                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
-                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                       number of objects across batch entries) containing the target class indices;
-                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                      number of objects across batch entries) containing the target class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
             match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
                 - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
@@ -85,15 +86,16 @@ class SetCriterion(nn.Module):
         device = pred_logits.device
         tgt_labels = tgt_dict['labels']
         pred_idx, tgt_idx = match_idx
-        layer_id = pred_dict['layer_id']
 
-        # Compute target classes
+        # Compute target classes and resulting cross-entropy loss
         tgt_classes = torch.full((num_slots_total,), self.num_classes, dtype=torch.int64, device=device)
         tgt_classes[pred_idx] = tgt_labels[tgt_idx]
-
-        # Compute cross-entropy loss
         loss_class = F.cross_entropy(pred_logits, tgt_classes, self.class_weights)
-        loss_dict = {f'loss_class_{layer_id}': self.weight_dict['class']*loss_class}
+
+        # Place weighted cross-entropy in loss dictionary
+        layer_id = pred_dict['layer_id']
+        iter_id = pred_dict['iter_id']
+        loss_dict = {f'loss_class_{layer_id}_{iter_id}': self.weight_dict['class']*loss_class}
 
         # Perform classification related analyses
         with torch.no_grad():
@@ -107,14 +109,14 @@ class SetCriterion(nn.Module):
             if 'accuracy' in self.analysis_names:
                 correct_predictions = torch.eq(pred_classes, tgt_classes)
                 accuracy = correct_predictions.sum().item()/len(correct_predictions)
-                analysis_dict[f'accuracy_{layer_id}'] = 100*accuracy
+                analysis_dict[f'accuracy_{layer_id}_{iter_id}'] = 100*accuracy
 
             # Perform cardinality analysis if requested
             if 'cardinality' in self.analysis_names:
                 pred_cardinality = (pred_classes != self.num_classes).sum().item()
                 tgt_cardinality = len(tgt_labels)
                 cardinality_error = abs(pred_cardinality-tgt_cardinality)
-                analysis_dict[f'card_error_{layer_id}'] = cardinality_error
+                analysis_dict[f'card_error_{layer_id}_{iter_id}'] = cardinality_error
 
         return loss_dict, analysis_dict
 
@@ -124,16 +126,17 @@ class SetCriterion(nn.Module):
 
         Args:
             pred_dict (Dict): Dictionary containing following keys:
-                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
-                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                       number of objects across batch entries) containing the target class indices;
-                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                      number of objects across batch entries) containing the target class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
             match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
                 - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
@@ -155,11 +158,12 @@ class SetCriterion(nn.Module):
         loss_l1 = F.l1_loss(pred_boxes, tgt_boxes, reduction='sum')
         loss_giou = 1 - torch.diag(generalized_box_iou(box_cxcywh_to_xyxy(pred_boxes), box_cxcywh_to_xyxy(tgt_boxes)))
 
-        # Populate loss_dict with the weighted bounding box losses
+        # Place weighted bounding box losses in loss dictionary
         loss_dict = {}
         layer_id = pred_dict['layer_id']
-        loss_dict[f'loss_l1_{layer_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
-        loss_dict[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
+        iter_id = pred_dict['iter_id']
+        loss_dict[f'loss_l1_{layer_id}_{iter_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
+        loss_dict[f'loss_giou_{layer_id}_{iter_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
 
         # Perform bounding box related analyses
         with torch.no_grad():
@@ -174,10 +178,10 @@ class SetCriterion(nn.Module):
 
         Args:
             tgt_dict (Dict): Dictionary containing following keys:
-                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                       number of objects across batch entries) containing the target class indices;
-                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                      number of objects across batch entries) containing the target class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
             num_boxes (float): Average number of target boxes across all nodes.
@@ -199,18 +203,19 @@ class SetCriterion(nn.Module):
         Forward method of the SetCriterion module. Performs the loss computation.
 
         Args:
-             pred_list (List): List of predictions, where each entry is a dict containing the keys:
+            pred_list (List): List of predictions, where each entry is a dict containing the key:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
                 - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
+                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
-             tgt_dict (Dict): Dictionary containing following keys:
-                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                       number of objects across batch entries) containing the target class indices;
-                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+            tgt_dict (Dict): Dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                    number of objects across batch entries) containing the target class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 
         Returns:
             full_loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
