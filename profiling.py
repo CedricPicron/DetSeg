@@ -10,7 +10,7 @@ from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
 from models.encoder import build_encoder
-from utils.data import nested_tensor_from_tensor_list
+from utils.data import nested_tensor_from_image_list
 
 
 # Lists of model and sort choices
@@ -32,13 +32,13 @@ if profiling_args.model == 'backbone':
     model = build_backbone(main_args).to('cuda')
 
     images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_tensor_list(images).to('cuda')
+    images = nested_tensor_from_image_list(images).to('cuda')
 
     inputs = [images]
     globals_dict = {'model': model, 'inputs': inputs}
 
     forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs)[-1].tensors.sum().backward()'
+    backward_stmt = 'model(*inputs)[-1].tensor.sum().backward()'
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 91
@@ -71,7 +71,7 @@ elif profiling_args.model == 'detr':
 
     detr = build_detr(main_args).to('cuda')
     images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_tensor_list(images).to('cuda')
+    images = nested_tensor_from_image_list(images).to('cuda')
 
     keys = ['logits', 'boxes']
     globals_dict = {'detr': detr, 'images': images, 'keys': keys}
@@ -89,7 +89,7 @@ elif profiling_args.model == 'detr_criterion':
     criterion = build_criterion(main_args).to('cuda')
 
     images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_tensor_list(images).to('cuda')
+    images = nested_tensor_from_image_list(images).to('cuda')
 
     num_target_boxes_total = 20
     labels = torch.randint(main_args.num_classes, (num_target_boxes_total,), device='cuda')

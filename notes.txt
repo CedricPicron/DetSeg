@@ -45,3 +45,9 @@ Some ideas:
        when such mechanisms are added, one should take care of this limitation. Note that one
        can alternatively opt for a solution where each addition is accompanied with a removal,
        such that the total number of object slots always remains the same.
+    7. Some improvements could be made in the matcher and criterion implementation. Both loop
+       over the different prediction sets, which might be suboptimal. A better alternative
+       could consist of looping over the different batch entries. This would for example
+       avoid unnecessary computation in the matcher, where every prediction is matched with
+       every target from all batch entries, instead of only with targets from the concerned
+       batch entry.

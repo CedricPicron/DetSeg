@@ -77,7 +77,7 @@ class Backbone(nn.Module):
             out (List[NestedTensor]): List of feature maps, with each feature map a NestedTensor.
         """
 
-        conv_feature_maps = self.body(images.tensors)
+        conv_feature_maps = self.body(images.tensor)
 
         original_mask = images.mask
         assert original_mask is not None, 'No mask specified in NestedTensor'

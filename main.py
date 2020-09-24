@@ -1,9 +1,12 @@
 import argparse
 
 import torch
+from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
+from datasets.build import build_dataset
 from models.criterion import build_criterion
 from models.detr import build_detr
+from utils.data import collate_fn
 import utils.distributed as distributed
 
 
@@ -14,10 +17,14 @@ def get_parser():
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per GPU')
+    parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
     parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
+
+    # Dataset
+    parser.add_argument('--dataset', default='coco', type=str, help='name of dataset used for training and validation')
 
     # Model
     # * Backbone
@@ -84,11 +91,28 @@ def main(args):
     distributed.init_distributed_mode(args)
     print(args)
 
+    # Get training and validation datasets
+    train_dataset, val_dataset = build_dataset(args)
+
+    # Get training and validation samplers
+    if args.distributed:
+        train_sampler = DistributedSampler(train_dataset)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    else:
+        train_sampler = RandomSampler(train_dataset)
+        val_sampler = SequentialSampler(val_dataset)
+
+    # Get training and validation dataloaders
+    dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
+    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
+    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
+
     device = torch.device(args.device)
     model = build_detr(args).to(device)
     criterion = build_criterion(args).to(device)
 
-    return model, criterion
+    return model, criterion, train_dataloader, val_dataloader
 
 
 if __name__ == '__main__':

@@ -213,7 +213,7 @@ class SetCriterion(nn.Module):
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                    number of objects across batch entries) containing the target class indices;
+                                      number of objects across batch entries) containing the target class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
                 - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
 

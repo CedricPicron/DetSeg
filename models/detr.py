@@ -2,7 +2,6 @@
 DETR modules and build function.
 """
 
-import torch
 from torch import nn
 
 from .backbone import build_backbone
@@ -10,7 +9,6 @@ from .position import build_position_encoder
 from .encoder import build_encoder
 from .decoder import build_decoder
 from .utils import MLP
-from utils.data import NestedTensor, nested_tensor_from_tensor_list
 
 
 class DETR(nn.Module):
@@ -52,13 +50,13 @@ class DETR(nn.Module):
         self.class_embed = nn.Linear(decoder.feat_dim, num_classes + 1)
         self.bbox_embed = MLP(decoder.feat_dim, decoder.feat_dim, 4, 3)
 
-    def forward(self, images: NestedTensor):
+    def forward(self, images):
         """
         Forward method of DETR module.
 
         Args:
-            images (NestedTensor): NestedTensor which consists of:
-                - images.tensors (FloatTensor): batched images of shape [batch_size, 3, H, W];
+            images (NestedTensor): NestedTensor consisting of:
+                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
                 - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
@@ -72,9 +70,6 @@ class DETR(nn.Module):
 
             The list size is [1] or [num_decoder_layers*num_decoder_iterations] depending on args.aux_loss.
         """
-
-        if isinstance(images, (list, torch.Tensor)):
-            images = nested_tensor_from_tensor_list(images)
 
         masked_conv_features = self.backbone(images)[-1]
         conv_features, feature_masks = masked_conv_features.decompose()
@@ -114,10 +109,6 @@ def build_detr(args):
     position_encoder = build_position_encoder(args)
     encoder = build_encoder(args)
     decoder = build_decoder(args)
-
-    # Temporary hack
-    args.num_classes = 91
-
     detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes)
 
     return detr

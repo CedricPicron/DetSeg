@@ -1,99 +1,106 @@
-from typing import List, Optional
+"""
+Data loading utilities.
+"""
 
 import torch
-from torch import Tensor
-import torchvision
 
 
 def collate_fn(batch):
-    batch = list(zip(*batch))
-    batch[0] = nested_tensor_from_tensor_list(batch[0])
-    return tuple(batch)
+    """
+    The collate function used during data loading.
+
+    Args:
+        batch (List): List of size [batch_size] containing tuples of:
+            - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
+            - tgt_dict (Dict): dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
+                                       coordinates in the (center_x, center_y, width, height) format.
+
+    Returns:
+        images (NestedTensor): NestedTensor consisting of:
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
+            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+
+        tgt_dict (Dict): Dictionary containing following keys:
+            - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                  number of objects across batch entries) containing the target class indices;
+            - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+            - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+    """
+
+    # Get batch images and target dictionaries
+    images, tgt_dicts = list(zip(*batch))
+
+    # Compute images nested tensor
+    images = nested_tensor_from_image_list(images)
+
+    # Concatenating the target labels and boxes across batch entries
+    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts], dim=0)
+    tgt_boxes = torch.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts], dim=0)
+
+    # Computing the cumulative sizes of batch entries
+    tgt_sizes = [0].extend([len(tgt_dict['labels']) for tgt_dict in tgt_dicts])
+    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
+    tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
+
+    # Place labels, boxes and size in new target dictionary
+    tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
+
+    return images, tgt_dict
 
 
-def _max_by_axis(the_list):
-    # type: (List[List[int]]) -> List[int]
-    maxes = the_list[0]
-    for sublist in the_list[1:]:
-        for index, item in enumerate(sublist):
-            maxes[index] = max(maxes[index], item)
-    return maxes
+def nested_tensor_from_image_list(image_list):
+    """
+    Create nested tensor from list of image tensors.
 
+    Args:
+        image_list (List): List of size [batch_size] with image tensors of shape [3, height, width]. Each image tensor
+                           is allowed to have a different height and width.
 
-def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
-    # TODO make this more general
-    if tensor_list[0].ndim == 3:
-        if torchvision._is_tracing():
-            # nested_tensor_from_tensor_list() does not export well to ONNX
-            # call _onnx_nested_tensor_from_tensor_list() instead
-            return _onnx_nested_tensor_from_tensor_list(tensor_list)
+    Returns:
+        images (NestedTensor): NestedTensor consisting of:
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_height, max_width];
+            - images.mask (BoolTensor): boolean masks of inactive pixels of shape [batch_size, max_height, max_width].
+    """
 
-        # TODO make it support different-sized images
-        max_size = _max_by_axis([list(img.shape) for img in tensor_list])
-        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
-        batch_shape = [len(tensor_list)] + max_size
-        b, c, h, w = batch_shape
-        dtype = tensor_list[0].dtype
-        device = tensor_list[0].device
-        tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
-        mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
-        for img, pad_img, m in zip(tensor_list, tensor, mask):
-            pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
-            m[: img.shape[1], :img.shape[2]] = False
-    else:
-        raise ValueError('not supported')
-    return NestedTensor(tensor, mask)
+    # Compute different sizes
+    batch_size = len(image_list)
+    max_h, max_w = torch.tensor([list(img.shape[1:]) for img in image_list]).max(dim=0)[0].tolist()
 
+    # Some renaming for code readability
+    dtype = image_list[0].dtype
+    device = image_list[0].device
 
-# _onnx_nested_tensor_from_tensor_list() is an implementation of
-# nested_tensor_from_tensor_list() that is supported by ONNX tracing.
-@torch.jit.unused
-def _onnx_nested_tensor_from_tensor_list(tensor_list):
-    max_size = []
-    for i in range(tensor_list[0].dim()):
-        max_size_i = torch.max(torch.stack([img.shape[i] for img in tensor_list]).to(torch.float32)).to(torch.int64)
-        max_size.append(max_size_i)
-    max_size = tuple(max_size)
+    # Initialize the padded images and masks
+    padded_images = torch.zeros(batch_size, 3, max_h, max_w, dtype=dtype, device=device)
+    masks = torch.ones(batch_size, max_h, max_w, dtype=torch.bool, device=device)
 
-    # work around for
-    # pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
-    # m[: img.shape[1], :img.shape[2]] = False
-    # which is not yet supported in onnx
-    padded_imgs = []
-    padded_masks = []
-    for img in tensor_list:
-        padding = [(s1 - s2) for s1, s2 in zip(max_size, tuple(img.shape))]
-        padded_img = torch.nn.functional.pad(img, (0, padding[2], 0, padding[1], 0, padding[0]))
-        padded_imgs.append(padded_img)
+    # Fill the padded images and masks
+    for image, padded_image, mask in zip(image_list, padded_images, masks):
+        h, w = image.shape[1:]
+        padded_image[:, :h, :w].copy_(image)
+        mask[:h, :w] = False
 
-        m = torch.zeros_like(img[0], dtype=torch.int, device=img.device)
-        padded_mask = torch.nn.functional.pad(m, (0, padding[2], 0, padding[1]), "constant", 1)
-        padded_masks.append(padded_mask.to(torch.bool))
+    # Create nested tensor from padded images and masks
+    images = NestedTensor(padded_images, masks)
 
-    tensor = torch.stack(padded_imgs)
-    mask = torch.stack(padded_masks)
-
-    return NestedTensor(tensor, mask=mask)
+    return images
 
 
 class NestedTensor(object):
-    def __init__(self, tensors, mask: Optional[Tensor]):
-        self.tensors = tensors
+    def __init__(self, tensor, mask):
+        self.tensor = tensor
         self.mask = mask
 
     def to(self, device):
-        # type: (Device) -> NestedTensor # noqa
-        cast_tensor = self.tensors.to(device)
-        mask = self.mask
-        if mask is not None:
-            assert mask is not None
-            cast_mask = mask.to(device)
-        else:
-            cast_mask = None
+        cast_tensor = self.tensor.to(device)
+        cast_mask = self.mask.to(device) if self.mask is not None else None
+
         return NestedTensor(cast_tensor, cast_mask)
 
     def decompose(self):
-        return self.tensors, self.mask
+        return self.tensor, self.mask
 
     def __repr__(self):
-        return str(self.tensors)
+        return str(self.tensor)

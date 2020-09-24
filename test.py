@@ -11,7 +11,7 @@ from models.detr import build_detr
 from models.matcher import build_matcher
 from models.encoder import build_encoder
 from models.position import SinePositionEncoder
-from utils.data import nested_tensor_from_tensor_list
+from utils.data import nested_tensor_from_image_list
 
 
 class TestModelsForwardOnly(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestModelsForwardOnly(unittest.TestCase):
         backbone = build_backbone(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         self.globals_dict['backbone'] = backbone
         self.globals_dict['images'] = images
@@ -125,7 +125,7 @@ class TestModelsForwardOnly(unittest.TestCase):
         detr = build_detr(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         self.globals_dict['detr'] = detr
         self.globals_dict['images'] = images
@@ -191,7 +191,7 @@ class TestModelsForwardOnly(unittest.TestCase):
         criterion = build_criterion(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         num_target_boxes_total = 20
         labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
@@ -235,12 +235,12 @@ class TestModelsWithBackward(unittest.TestCase):
         backbone = build_backbone(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         self.globals_dict['backbone'] = backbone
         self.globals_dict['images'] = images
 
-        timer = Timer(stmt='backbone(images)[-1].tensors.sum().backward()', globals=self.globals_dict)
+        timer = Timer(stmt='backbone(images)[-1].tensor.sum().backward()', globals=self.globals_dict)
         t = timer.timeit(number=1)._median*1e3
 
         print(f"Memory backbone (backward): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
@@ -306,7 +306,7 @@ class TestModelsWithBackward(unittest.TestCase):
         detr = build_detr(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         self.globals_dict['detr'] = detr
         self.globals_dict['images'] = images
@@ -354,7 +354,7 @@ class TestModelsWithBackward(unittest.TestCase):
         criterion = build_criterion(self.args).to('cuda')
 
         images = torch.randn(self.args.batch_size, 3, self.pixel_H, self.pixel_W, device='cuda')
-        images = nested_tensor_from_tensor_list(images)
+        images = nested_tensor_from_image_list(images)
 
         num_target_boxes_total = 20
         labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
