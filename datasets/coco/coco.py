@@ -44,7 +44,7 @@ class CocoDataset(VisionDataset):
 
         Returns:
             image (FloatTensor): Tensor containing the transformed image tensor of shape [3, H, W].
-            tgt_dict (Dict): Dictionary containing following keys:
+            target (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
                                        coordinates in the (center_x, center_y, width, height) format.
@@ -81,13 +81,17 @@ class CocoDataset(VisionDataset):
         labels = labels[keep]
         boxes = boxes[keep]
 
-        # Place labels and boxes in target dictionary
-        tgt_dict = {'labels': labels, 'boxes': boxes}
+        # Some additional properties useful for conversion to coco api
+        area = torch.tensor([obj["area"] for obj in annotations])[keep]
+        iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in annotations])[keep]
+
+        # Place target properties into target dictionary
+        target = {'labels': labels, 'boxes': boxes, 'area': area, 'iscrowd': iscrowd}
 
         # Perform image and bounding box transformations
-        image, tgt_dict = self.transforms(image, tgt_dict)
+        image, target = self.transforms(image, target)
 
-        return image, tgt_dict
+        return image, target
 
     def __len__(self):
         """
@@ -114,7 +118,7 @@ def get_coco_transforms():
 
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
     default_resize = T.RandomResize(scales, max_size=1333)
-    cropped_resize = T.Compose(crop, default_resize)
+    cropped_resize = T.Compose([crop, default_resize])
 
     train_resize = T.RandomSelect(default_resize, cropped_resize)
     val_resize = T.RandomResize([800], max_size=1333)
@@ -141,10 +145,10 @@ def build_coco(args):
     """
 
     coco_root = Path() / 'datasets' / 'coco'
-    train_image_folder = coco_root / 'train2017'
-    val_image_folder = coco_root / 'val2017'
-    train_annotation_file = coco_root / 'annotations' / 'instance_train2017.json'
-    val_annotation_file = coco_root / 'annotations' / 'instance_val2017.json'
+    train_image_folder = coco_root / 'images' / 'train2017'
+    val_image_folder = coco_root / 'images' / 'val2017'
+    train_annotation_file = coco_root / 'annotations' / 'instances_train2017.json'
+    val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 
     train_transforms, val_transforms = get_coco_transforms()
     train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms)

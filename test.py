@@ -1,8 +1,11 @@
+import time
 import unittest
 
 import torch
 from torch.utils._benchmark import Timer
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
+from datasets.build import build_dataset
 from main import get_parser
 from models.backbone import build_backbone
 from models.criterion import build_criterion
@@ -11,16 +14,69 @@ from models.detr import build_detr
 from models.matcher import build_matcher
 from models.encoder import build_encoder
 from models.position import SinePositionEncoder
-from utils.data import nested_tensor_from_image_list
+from utils.data import collate_fn, nested_tensor_from_image_list
+
+
+class TestDataLoading(unittest.TestCase):
+    def setUp(self):
+        print("")
+
+        self.args = get_parser().parse_args()
+        self.globals_dict = {}
+
+    def tearDown(self):
+        torch.cuda.reset_peak_memory_stats()
+
+    def test_coco(self):
+        self.args.dataset = 'coco'
+
+        start_loading_time = time.time()
+        train_dataset, val_dataset = build_dataset(self.args)
+        end_loading_time = time.time()
+
+        load_time = end_loading_time - start_loading_time
+        print(f"Load time COCO dataset: {load_time: .1f} s")
+
+        train_sampler = RandomSampler(train_dataset)
+        val_sampler = SequentialSampler(val_dataset)
+
+        dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': self.args.num_workers, 'pin_memory': False}
+        train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, self.args.batch_size, drop_last=True)
+        train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
+        val_dataloader = DataLoader(val_dataset, self.args.batch_size, sampler=val_sampler, **dataloader_kwargs)
+
+        train_images, train_tgt_dict = next(iter(train_dataloader))
+        val_image, val_tgt_dict = next(iter(val_dataloader))
+
+        detr = build_detr(self.args).to('cuda')
+        criterion = build_criterion(self.args).to('cuda')
+
+        def test_train_iteration(dataloader, detr, criterion):
+            images, tgt_dict = next(iter(train_dataloader))
+            images = images.to('cuda')
+            tgt_dict = {k: v.to('cuda') for k, v in tgt_dict.items()}
+            torch.stack([v for v in criterion(detr(images), tgt_dict)[0].values()]).sum().backward()
+
+        self.globals_dict['test_train_iteration'] = test_train_iteration
+        self.globals_dict['dataloader'] = train_dataloader
+        self.globals_dict['detr'] = detr
+        self.globals_dict['criterion'] = criterion
+
+        stmt = 'test_train_iteration(dataloader, detr, criterion)'
+        timer = Timer(stmt=stmt, globals=self.globals_dict)
+        t = timer.timeit(number=5)._median*1e3
+
+        print(f"Memory full model on COCO (train iteration): {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
+        print(f"Time full model on COCO (train iteration): {t: .1f} ms")
 
 
 class TestModelsForwardOnly(unittest.TestCase):
     def setUp(self):
         print("")
-        self.globals_dict = {}
 
         self.args = get_parser().parse_args()
         self.args.num_classes = 91
+        self.globals_dict = {}
 
         self.pixel_H = 1024
         self.pixel_W = 1024
@@ -214,10 +270,10 @@ class TestModelsForwardOnly(unittest.TestCase):
 class TestModelsWithBackward(unittest.TestCase):
     def setUp(self):
         print("")
-        self.globals_dict = {}
 
         self.args = get_parser().parse_args()
         self.args.num_classes = 91
+        self.globals_dict = {}
 
         self.pixel_H = 1024
         self.pixel_W = 1024

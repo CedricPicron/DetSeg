@@ -69,8 +69,8 @@ class Backbone(nn.Module):
         Forward method of Backbone module.
 
         Args:
-            images (NestedTensor): NestedTensor which consists of:
-               - images.tensors (FloatTensor): batched images of shape [batch_size, 3, H, W];
+            images (NestedTensor): NestedTensor consisting of:
+               - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
                - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:

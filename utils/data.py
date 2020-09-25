@@ -12,7 +12,7 @@ def collate_fn(batch):
     Args:
         batch (List): List of size [batch_size] containing tuples of:
             - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
-            - tgt_dict (Dict): dictionary containing following keys:
+            - target (Dict): dictionary containing at least following two keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
                                        coordinates in the (center_x, center_y, width, height) format.
@@ -30,17 +30,17 @@ def collate_fn(batch):
     """
 
     # Get batch images and target dictionaries
-    images, tgt_dicts = list(zip(*batch))
+    images, targets = list(zip(*batch))
 
     # Compute images nested tensor
     images = nested_tensor_from_image_list(images)
 
     # Concatenating the target labels and boxes across batch entries
-    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts], dim=0)
-    tgt_boxes = torch.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts], dim=0)
+    tgt_labels = torch.cat([target['labels'] for target in targets], dim=0)
+    tgt_boxes = torch.cat([target['boxes'] for target in targets], dim=0)
 
     # Computing the cumulative sizes of batch entries
-    tgt_sizes = [0].extend([len(tgt_dict['labels']) for tgt_dict in tgt_dicts])
+    tgt_sizes = [0] + [len(target['labels']) for target in targets]
     tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
     tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
 
@@ -89,18 +89,50 @@ def nested_tensor_from_image_list(image_list):
 
 
 class NestedTensor(object):
+    """
+    Class implementing the NestedTensor data structure.
+
+    Attributes:
+        tensor (Tensor): A tensor with padded entries.
+        mask (BoolTensor): A boolean mask encoding the padded entries of the tensor.
+    """
+
     def __init__(self, tensor, mask):
+        """
+        Initializes the NestedTensor data structure.
+
+        Args:
+            tensor (Tensor): A tensor with padded entries.
+            mask (BoolTensor): A boolean mask encoding the padded entries of the tensor.
+        """
+
         self.tensor = tensor
         self.mask = mask
 
     def to(self, device):
+        """
+        Method to cast NestedTensor to specified device.
+
+        Args:
+            device (torch.device): The device to cast the NestedTensor to.
+
+        Returns:
+            cast_nested_tensor (NestedTensor): The new NestedTensor residing on the specified device.
+        """
+
         cast_tensor = self.tensor.to(device)
         cast_mask = self.mask.to(device) if self.mask is not None else None
+        cast_nested_tensor = NestedTensor(cast_tensor, cast_mask)
 
-        return NestedTensor(cast_tensor, cast_mask)
+        return cast_nested_tensor
 
     def decompose(self):
-        return self.tensor, self.mask
+        """
+        Method decomposing the NestedTensor into its tensor and mask constituents.
 
-    def __repr__(self):
-        return str(self.tensor)
+        Returns:
+            tensor (Tensor): The NestedTensor's tensor with padded entries.
+            mask (BoolTensor): The NestedTensor's mask encoding the padded entries of the tensor.
+        """
+
+        return self.tensor, self.mask

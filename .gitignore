@@ -1,2 +1,4 @@
 **/__pycache__/**
+datasets/coco/annotations
+datasets/coco/images
 .vscode
