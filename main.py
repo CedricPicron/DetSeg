@@ -14,10 +14,10 @@ def get_parser():
     parser = argparse.ArgumentParser(add_help=False)
 
     # General
-    parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
+    parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
-    parser.add_argument('--batch_size', default=2, type=int, help='batch size per GPU')
-    parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
+    parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
+    parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
@@ -26,11 +26,14 @@ def get_parser():
     # Dataset
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset used for training and validation')
 
+    # Data loading
+    parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
+    parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
+
     # Model
     # * Backbone
     parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
-    parser.add_argument('--lr_backbone', default=0.0, type=float, help='backbone learning rate')
 
     # * Position encoding
     parser.add_argument('--position_encoding', default='sine', type=str, help='type of position encoding')
@@ -47,12 +50,10 @@ def get_parser():
     parser.add_argument('--ffn_hidden_dim', default=2048, type=float, help='hidden dimension of feedforward network')
 
     # ** Encoder
-    parser.add_argument('--lr_encoder', default=0.0, type=float, help='encoder learning rate')
     parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
 
     # ** Decoder
     parser.add_argument('--decoder_type', default='sample', choices=['global', 'sample'], help='decoder type')
-    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
     parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
     parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
 
@@ -84,10 +85,20 @@ def get_parser():
     parser.add_argument('--loss_coef_giou', default=2, type=float, help='GIoU box coefficient in loss')
     parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
 
+    # Optimizer
+    parser.add_argument('--lr_backbone', default=0.0, type=float, help='backbone learning rate')
+    parser.add_argument('--lr_encoder', default=0.0, type=float, help='encoder learning rate')
+    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
+    parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
+
+    # Scheduler
+    parser.add_argument('--lr_drop', default=200, type=int, help='scheduler period of learning rate decay')
+
     return parser
 
 
 def main(args):
+    # Initialize distributed mode if needed
     distributed.init_distributed_mode(args)
     print(args)
 
@@ -108,11 +119,38 @@ def main(args):
     train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
     val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
 
+    # Get model/criterion and put them on correct device
     device = torch.device(args.device)
     model = build_detr(args).to(device)
     criterion = build_criterion(args).to(device)
 
-    return model, criterion, train_dataloader, val_dataloader
+    # Load model from checkpoint if required
+    if args.checkpoint:
+        checkpoint = torch.load(args.checkpoint, map_location='cpu')
+        model.load_state_dict(checkpoint['model'])
+
+    # Wrap model into DDP if needed
+    if args.distributed:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+
+    # Get training optimizer, scheduler and start epoch
+    params = model.named_parameters()
+    backbone_dict = {'params': [p for n, p in params if 'backbone' in n and p.requires_grad], 'lr': args.lr_backbone}
+    encoder_dict = {'params': [p for n, p in params if 'encoder' in n and p.requires_grad], 'lr': args.lr_encoder}
+    decoder_dict = {'params': [p for n, p in params if 'decoder' in n and p.requires_grad], 'lr': args.lr_decoder}
+    param_dicts = [backbone_dict, encoder_dict, decoder_dict]
+
+    optimizer = torch.optim.AdamW(param_dicts, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
+    start_epoch = 1
+
+    # Load optimizer, scheduler and start epoch from checkpoint if required
+    if args.checkpoint and not args.eval:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        scheduler.load_state_dict(checkpoint['scheduler'])
+        start_epoch = checkpoint['epoch']
+
+    return model, criterion, train_dataloader, val_dataloader, scheduler, start_epoch
 
 
 if __name__ == '__main__':
