@@ -1,102 +1,111 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
-Train and eval functions used in main.py
+Collection of training, evaluation and saving functions.
 """
+import json
 import math
-import os
+from pathlib import Path
 import sys
-from typing import Iterable
 
 import torch
+from torch.nn.utils import clip_grad_norm_
 
-import util.misc as utils
-from datasets.coco_eval import CocoEvaluator
-from datasets.panoptic_eval import PanopticEvaluator
+from utils.logging import MetricLogger
+import utils.distributed as distributed
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
-                    data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_freq=10):
+    """
+    Train model for one epoch.
+
+    Args:
+        model (nn.Module): Module computing predictions from images.
+        criterion (nn.Module): Module comparing predictions with targets.
+        dataloader (torch.utils.data.Dataloader): Training dataloader.
+        optimizer (torch.optim.Optimizer): Optimizer used for optimizing the model from gradients.
+        epoch (int): Current training epoch.
+        max_grad_norm (float): Maximum gradient norm (clipped if larger).
+        print_freq (int): Logger print frequency.
+    """
+
+    device = next(model.parameters()).device
     model.train()
     criterion.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
 
-    for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+    metric_logger = MetricLogger(delimiter="  ")
+    header = f"Epoch {epoch}:"
 
-        outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
+    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+        images = images.to(device)
+        tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
+
+        # Get loss and analysis dictionaries
+        pred_list = model(images)
+        loss_dict, analysis_dict = criterion(pred_list, tgt_dict)
         loss = sum(loss_dict.values())
 
+        # Update model parameters
         optimizer.zero_grad()
         loss.backward()
-        if max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+        clip_grad_norm_(model.parameters(), max_grad_norm) if max_grad_norm > 0 else None
         optimizer.step()
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        loss_reduced = sum(loss_dict_reduced.values()).item()
+        # Average analysis and loss dictionaries over all GPUs for logging purposes
+        analysis_dict = distributed.reduce_dict(analysis_dict)
+        loss_dict = distributed.reduce_dict(loss_dict)
+        loss = sum(loss_dict.values()).item()
 
-        if not math.isfinite(loss_reduced):
-            print(f"Loss is {loss_reduced}, stopping training.")
-            print(loss_dict_reduced)
+        # Check whether loss if finite
+        if not math.isfinite(loss):
+            print(f"Loss dictionary: {loss_dict}")
+            print(f"Loss is {loss}, stopping training.")
             sys.exit(1)
 
-        metric_logger.update(loss=loss_reduced, **loss_dict_reduced)
-        metric_logger.update(class_error=loss_dict_reduced['class_error'])
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        # Update logger
+        metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
-    # gather the stats from all processes
+    # Get epoch training statistics
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    train_stats['lr'] = optimizer.param_groups[0]['lr']
+
+    return train_stats
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir):
+def evaluate(model, criterion, postprocessors, dataloader, base_ds, device, output_dir, print_freq=10):
+    device = next(model.parameters()).device
     model.eval()
     criterion.eval()
 
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
-    header = 'Test:'
+    metric_logger = MetricLogger(delimiter="  ")
+    header = "Test:"
 
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
-    panoptic_evaluator = None
-    if 'panoptic' in postprocessors.keys():
-        panoptic_evaluator = PanopticEvaluator(
-            data_loader.dataset.ann_file,
-            data_loader.dataset.ann_folder,
-            output_dir=os.path.join(output_dir, "panoptic_eval"),
-        )
+    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+        images = images.to(device)
+        tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
-    for samples, targets in metric_logger.log_every(data_loader, 10, header):
-        samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        # Get loss and analysis dictionaries
+        pred_list = model(images)
+        loss_dict, analysis_dict = criterion(pred_list, tgt_dict)
+        loss = sum(loss_dict.values())
 
-        outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
-        weight_dict = criterion.weight_dict
+        # Average analysis and loss dictionaries over all GPUs for logging purposes
+        analysis_dict = distributed.reduce_dict(analysis_dict)
+        loss_dict = distributed.reduce_dict(loss_dict)
+        loss = sum(loss_dict.values()).item()
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                      for k, v in loss_dict_reduced.items()}
-        metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
-                             **loss_dict_reduced_scaled,
-                             **loss_dict_reduced_unscaled)
-        metric_logger.update(class_error=loss_dict_reduced['class_error'])
+        # Check whether loss if finite
+        if not math.isfinite(loss):
+            print(f"Loss dictionary: {loss_dict}")
+            print(f"Loss is {loss}, stopping training.")
+            sys.exit(1)
+
+        # Update logger
+        metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
@@ -107,39 +116,75 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         if coco_evaluator is not None:
             coco_evaluator.update(res)
 
-        if panoptic_evaluator is not None:
-            res_pano = postprocessors["panoptic"](outputs, target_sizes, orig_target_sizes)
-            for i, target in enumerate(targets):
-                image_id = target["image_id"].item()
-                file_name = f"{image_id:012d}.png"
-                res_pano[i]["image_id"] = image_id
-                res_pano[i]["file_name"] = file_name
-
-            panoptic_evaluator.update(res_pano)
-
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     if coco_evaluator is not None:
         coco_evaluator.synchronize_between_processes()
-    if panoptic_evaluator is not None:
-        panoptic_evaluator.synchronize_between_processes()
 
     # accumulate predictions from all images
     if coco_evaluator is not None:
         coco_evaluator.accumulate()
         coco_evaluator.summarize()
-    panoptic_res = None
-    if panoptic_evaluator is not None:
-        panoptic_res = panoptic_evaluator.summarize()
     stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     if coco_evaluator is not None:
         if 'bbox' in postprocessors.keys():
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
         if 'segm' in postprocessors.keys():
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-    if panoptic_res is not None:
-        stats['PQ_all'] = panoptic_res["All"]
-        stats['PQ_th'] = panoptic_res["Things"]
-        stats['PQ_st'] = panoptic_res["Stuff"]
     return stats, coco_evaluator
+
+
+def save_checkpoint(args, epoch, model, optimizer, scheduler):
+    """
+    Function used for checkpoint saving.
+
+    No checkpoints are saved when args.output_dir is an empty string.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+        epoch (int): Number of epochs trained.
+        model (nn.Module): Model module to be saved.
+        optimizer (torch.optim.Optimizer): Optimizer to be saved.
+        scheduler (torch.optim.lr_scheduler): Scheduler to be saved.
+    """
+
+    if args.output_dir and distributed.is_main_process():
+        output_dir = Path(args.output_dir)
+        checkpoint_paths = [output_dir / 'checkpoint.pth']
+
+        # Extra checkpoint before LR drop and every 100 epochs
+        if epoch % args.lr_drop == 0 or epoch % 100 == 0:
+            checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
+
+        # Checkpoint saving
+        for checkpoint_path in checkpoint_paths:
+            checkpoint = {'args': args, 'epoch': epoch}
+            checkpoint['model'] = model.state_dict()
+            checkpoint['optimizer'] = optimizer.state_dict()
+            checkpoint['scheduler'] = scheduler.state_dict()
+            torch.save(checkpoint, checkpoint_path)
+
+
+def save_log(output_dir, epoch, train_stats, test_stats):
+    """
+    Function used for log saving.
+
+    No logs are saved when output_dir is and empty string.
+
+    Args:
+        output_dir (str): String containg the path to the output directory used for saving.
+        epoch (int): Number of epochs trained.
+        train_stats (Dict): Dictionary containing the training statistics.
+        test_stats (Dict): Dictionary containing the test statistics.
+    """
+
+    if output_dir and distributed.is_main_process():
+        output_dir = Path(output_dir)
+
+        log_dict = {'epoch', epoch}
+        log_dict.update({f'train_{k}': v for k, v in train_stats.items()})
+        log_dict.update({f'test_{k}': v for k, v in test_stats.items()})
+
+        with (output_dir / 'log.txt').open('a') as log_file:
+            log_file.write(json.dumps(log_dict) + "\n")

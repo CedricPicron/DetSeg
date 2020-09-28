@@ -1,9 +1,15 @@
+"""
+Main program.
+"""
 import argparse
+import datetime
+import time
 
 import torch
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
 from datasets.build import build_dataset
+from engine import evaluate, save_checkpoint, save_log, train
 from models.criterion import build_criterion
 from models.detr import build_detr
 from utils.data import collate_fn
@@ -16,6 +22,7 @@ def get_parser():
     # General
     parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
+    parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
 
@@ -64,7 +71,7 @@ def get_parser():
     parser.add_argument('--num_init_slots', default=64, type=int, help='number of initial object slots per image')
     parser.add_argument('--samples_per_slot', default=16, type=int, help='number of features sampled per slot')
     parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
-    parser.add_argument('--hard_weights', default=True, type=bool, help='use hard weights during forward method')
+    parser.add_argument('--hard_weights', action='store_true', help='use hard weights during forward method')
     parser.add_argument('--seg_head_dim', default=32, type=int, help='projected dimension in segmentation heads')
     parser.add_argument('--curio_weight_obj', default=1.0, type=float, help='curiosity weight for object features')
     parser.add_argument('--curio_weight_edge', default=2.0, type=float, help='curiosity weight for edge features')
@@ -89,6 +96,7 @@ def get_parser():
     parser.add_argument('--lr_backbone', default=0.0, type=float, help='backbone learning rate')
     parser.add_argument('--lr_encoder', default=0.0, type=float, help='encoder learning rate')
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
+    parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
 
     # Scheduler
@@ -133,6 +141,11 @@ def main(args):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
 
+    # Evaluate loaded model if required and return
+    if args.eval:
+        evaluate(val_dataloader)
+        return
+
     # Get training optimizer, scheduler and start epoch
     params = model.named_parameters()
     backbone_dict = {'params': [p for n, p in params if 'backbone' in n and p.requires_grad], 'lr': args.lr_backbone}
@@ -145,12 +158,31 @@ def main(args):
     start_epoch = 1
 
     # Load optimizer, scheduler and start epoch from checkpoint if required
-    if args.checkpoint and not args.eval:
+    if args.checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch']
 
-    return model, criterion, train_dataloader, val_dataloader, scheduler, start_epoch
+    # Start training timer
+    print('Start training')
+    start_time = time.time()
+
+    # Main training loop
+    for epoch in range(start_epoch, args.epochs+1):
+        train_sampler.set_epoch(epoch) if args.distributed else None
+        train_stats = train(model, criterion, train_dataloader, optimizer, epoch, args.max_grad_norm)
+        scheduler.step()
+
+        checkpoint_model = model.module if args.distributed else model
+        save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
+
+        test_stats = evaluate(val_dataloader)
+        save_log(args.output_dir, epoch, train_stats, test_stats)
+
+    # End training timer and report total training time
+    total_time = time.time() - start_time
+    total_time = str(datetime.timedelta(seconds=int(total_time)))
+    print(f"Training {args.epochs+1 - start_epoch} epochs finished after {total_time}")
 
 
 if __name__ == '__main__':

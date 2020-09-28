@@ -1,3 +1,6 @@
+"""
+Distributed training utilities.
+"""
 import os
 
 import torch
@@ -25,7 +28,7 @@ def init_distributed_mode(args):
 
 def set_master_only_printing(is_master):
     """
-    This function disables printing when not in master process
+    Disables printing when not in master process.
     """
     import builtins
     builtin_print = builtins.print
@@ -62,6 +65,27 @@ def is_main_process():
     return get_rank() == 0
 
 
-def save_on_master(*args, **kwargs):
-    if is_main_process():
-        torch.save(*args, **kwargs)
+@torch.no_grad()
+def reduce_dict(input_dict, average=True):
+    """
+    Reduce dictionary values across all processes.
+
+    Args:
+        input_dict (Dict): Input dictionary for which values will be reduced.
+        average (bool): If true, average values, else simply take the sum.
+
+    Returns:
+        reduced_dict (Dict): Dictionary with reduced values for all input keys.
+    """
+
+    if not is_dist_avail_and_initialized():
+        return input_dict
+
+    keys = sorted(input_dict.keys())
+    values = torch.stack([input_dict[key] for key in keys], dim=0)
+    torch.distributed.all_reduce(values)
+
+    values = values/get_world_size() if average else values
+    reduced_dict = {k: v for k, v in zip(keys, values)}
+
+    return reduced_dict

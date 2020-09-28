@@ -24,6 +24,10 @@ class TestDataLoading(unittest.TestCase):
         self.args = get_parser().parse_args()
         self.globals_dict = {}
 
+        self.args.lr_backbone = 1e-5
+        self.args.lr_encoder = 1e-4
+        self.args.lr_decoder = 1e-4
+
     def tearDown(self):
         torch.cuda.reset_peak_memory_stats()
 
