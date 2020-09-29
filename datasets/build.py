@@ -17,7 +17,7 @@ def build_dataset(args):
     Returns:
         train_dataset (torch.utils.data.Dataset): The specified training dataset.
         val_dataset (torch.utils.data.Dataset): The specified validation dataset.
-        evaluator (object): Object capable of evaluating predictions and storing them.
+        evaluator (object): Object capable of computing evaluations from predictions and storing them.
 
     Raises:
         ValueError: Raised when unknown dataset name is provided in args.dataset.

@@ -1,4 +1,5 @@
 **/__pycache__/**
+condor/*
 datasets/coco/annotations
 datasets/coco/images
 .vscode

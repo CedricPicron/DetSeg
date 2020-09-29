@@ -57,7 +57,7 @@ def val_collate_fn(batch):
     Args:
         batch (List): List of size [batch_size] containing tuples of:
             - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
-            - target (Dict): dictionary containing at least following keys:
+            - target (Dict): dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
                                        coordinates in the (center_x, center_y, width, height) format;

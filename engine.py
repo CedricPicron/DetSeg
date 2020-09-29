@@ -13,7 +13,7 @@ from utils.logging import MetricLogger
 import utils.distributed as distributed
 
 
-def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_freq=10):
+def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
     """
     Train model for one epoch.
 
@@ -22,9 +22,12 @@ def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_f
         criterion (nn.Module): Module comparing predictions with targets.
         dataloader (torch.utils.data.Dataloader): Training dataloader.
         optimizer (torch.optim.Optimizer): Optimizer used for optimizing the model from gradients.
-        epoch (int): Current training epoch.
         max_grad_norm (float): Maximum gradient norm (clipped if larger).
-        print_freq (int): Logger print frequency.
+        epoch (int): Current training epoch.
+        print_freq (int): Logger print frequency (defaults to 10).
+
+    Returns:
+        train_stats (Dict): Dictionary containing the epoch training statistics.
     """
 
     device = next(model.parameters()).device
@@ -73,9 +76,26 @@ def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_f
 
 @torch.no_grad()
 def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10):
+    """
+    Evaluate model.
+
+    Args:
+        model (nn.Module): Module to be evaluated computing predictions from images.
+        criterion (nn.Module): Module comparing predictions with targets.
+        dataloader (torch.utils.data.Dataloader): Validation dataloader.
+        evaluator (object): Object capable of computing evaluations from predictions and storing them.
+        epoch (int): Training epochs completed (defaults to None).
+        print_freq (int): Logger print frequency (defaults to 10).
+
+    Returns:
+        val_stats (Dict): Dictionary containing the validation statistics.
+        evaluator (object): Updated evaluator object containing the evaluations.
+    """
+
     device = next(model.parameters()).device
     model.eval()
     criterion.eval()
+    evaluator.reset()
 
     metric_logger = MetricLogger(delimiter="  ")
     header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
@@ -83,6 +103,7 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
     for images, tgt_dict, eval_dict in metric_logger.log_every(dataloader, print_freq, header):
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
+        eval_dict = {k: v.to(device) for k, v in eval_dict.items()}
 
         # Get loss and analysis dictionaries
         pred_list = model(images)
@@ -116,8 +137,8 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
     metric_logger.synchronize_between_processes()
     val_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    for eval_type in evaluator.eval_types:
-        val_stats[f'eval_{eval_type}'] = evaluator.eval[eval_type].stats.tolist()
+    for metric in evaluator.metrics:
+        val_stats[f'eval_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
 
     return val_stats, evaluator
 
@@ -130,7 +151,7 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler):
 
     Args:
         args (argparse.Namespace): Command-line arguments.
-        epoch (int): Number of epochs trained.
+        epoch (int): Training epochs completed.
         model (nn.Module): Model module to be saved.
         optimizer (torch.optim.Optimizer): Optimizer to be saved.
         scheduler (torch.optim.lr_scheduler): Scheduler to be saved.
@@ -161,7 +182,7 @@ def save_log(output_dir, epoch, train_stats, val_stats):
 
     Args:
         output_dir (str): String containg the path to the output directory used for saving.
-        epoch (int): Number of epochs trained.
+        epoch (int): Training epochs completed.
         train_stats (Dict): Dictionary containing the training statistics.
         val_stats (Dict): Dictionary containing the val statistics.
     """

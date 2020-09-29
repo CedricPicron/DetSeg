@@ -1,5 +1,5 @@
 """
-Main program.
+Main program script.
 """
 import argparse
 import datetime
@@ -107,6 +107,13 @@ def get_parser():
 
 
 def main(args):
+    """
+    Function containing the main program script.
+
+    Args:
+        args (argparse.Namespace): Command-line arguments.
+    """
+
     # Initialize distributed mode if needed
     distributed.init_distributed_mode(args)
     print(args)
@@ -149,10 +156,10 @@ def main(args):
         _, evaluator = evaluate(model, criterion, val_dataloader, evaluator)
         output_dir = Path(args.output_dir)
 
-        if distributed.is_main_process():
-            for eval_type in evaluator.eval_types:
-                eval_predictions = evaluator.eval[eval_type].eval
-                torch.save(eval_predictions, output_dir / f'eval_{eval_type}.pth')
+        if args.output_dir and distributed.is_main_process():
+            for metric in evaluator.metrics:
+                evaluations = evaluator.sub_evaluators[metric].eval
+                torch.save(evaluations, output_dir / f'eval_{metric}.pth')
 
         return
 
@@ -174,13 +181,12 @@ def main(args):
         start_epoch = checkpoint['epoch']
 
     # Start training timer
-    print('Start training')
     start_time = time.time()
 
     # Main training loop
     for epoch in range(start_epoch, args.epochs+1):
         train_sampler.set_epoch(epoch) if args.distributed else None
-        train_stats = train(model, criterion, train_dataloader, optimizer, epoch, args.max_grad_norm)
+        train_stats = train(model, criterion, train_dataloader, optimizer, args.max_grad_norm, epoch)
         scheduler.step()
 
         checkpoint_model = model.module if args.distributed else model
@@ -196,8 +202,9 @@ def main(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='python main.py',
-                                     description='SampleDETR training and evaluation script',
-                                     parents=[get_parser()],
-                                     formatter_class=argparse.MetavarTypeHelpFormatter)
+    prog = "python main.py"
+    description = "SampleDETR training and evaluation script"
+    fmt = argparse.MetavarTypeHelpFormatter
+
+    parser = argparse.ArgumentParser(prog=prog, description=description, parents=[get_parser()], formatter_class=fmt)
     main(parser.parse_args())

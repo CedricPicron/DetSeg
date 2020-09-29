@@ -1,8 +1,12 @@
 """
-COCO dataset and build function.
+COCO dataset/evaluator and build function.
 """
+import copy
+import contextlib
+import os
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
@@ -12,6 +16,7 @@ from torchvision.datasets.vision import VisionDataset
 
 import datasets.transforms as T
 from utils.box_ops import box_cxcywh_to_xywh
+import utils.distributed as distributed
 
 
 class CocoDataset(VisionDataset):
@@ -33,9 +38,11 @@ class CocoDataset(VisionDataset):
             transforms (object): The transforms to be applied on both image and its bounding boxes.
         """
 
-        super().__init__(image_folder, transforms=transforms)
-        self.coco = COCO(annotation_file)
-        self.image_ids = list(sorted(self.coco.imgs.keys()))
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                super().__init__(image_folder, transforms=transforms)
+                self.coco = COCO(annotation_file)
+                self.image_ids = list(sorted(self.coco.imgs.keys()))
 
     def __getitem__(self, index):
         """
@@ -51,9 +58,7 @@ class CocoDataset(VisionDataset):
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
                                        coordinates in the (center_x, center_y, width, height) format;
                 - image_id (IntTensor): tensor of shape [1] containing the image id;
-                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation);
-                - area (FloatTensor): tesnor of shape [num_target_boxes] containing the area of each target box;
-                - iscrowd (IntTensor): tensor of shape [num_target_boxes] containing the iscrowd annotations.
+                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
         """
 
         # Load image
@@ -90,12 +95,9 @@ class CocoDataset(VisionDataset):
         # Place target properties into target dictionary
         target = {'labels': labels, 'boxes': boxes}
 
-        # Add some additional properties useful during evaluation
+        # Add some additional properties, useful during evaluation
         target['image_id'] = torch.tensor([image_id])
         target['image_size'] = torch.tensor([int(h), int(w)])
-
-        target['area'] = torch.tensor([obj['area'] for obj in annotations])[keep]
-        target['iscrowd'] = torch.tensor([obj['iscrowd'] if 'iscrowd' in obj else 0 for obj in annotations])[keep]
 
         # Perform image and bounding box transformations
         image, target = self.transforms(image, target)
@@ -115,31 +117,39 @@ class CocoDataset(VisionDataset):
 
 class CocoEvaluator(object):
     """
-    Evaluator object capable of evaluating predictions and storing them.
+    Evaluator object capable of computing evaluations from predictions on COCO data, and storing them.
 
     Attributes:
         coco (COCO): Object containing the COCO dataset annotations.
-        eval_types (List): List of strings containing the evaluation metrics to be used.
-        sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric from eval_types.
+        metrics (List): List of strings containing the evaluation metrics to be used.
+        sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric.
         image_ids (List): List of evaluated image ids.
-        image_evals (Dict): Dictionary of lists (in same order as image_ids) of image evaluations for each metric.
+        image_evals (Dict): Dictionary of lists containing image evaluations for each metric.
     """
 
-    def __init__(self, coco, eval_types=['bbox']):
+    def __init__(self, coco, metrics=['bbox']):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             coco (COCO): Object containing the COCO dataset annotations.
-            eval_types (List): List of strings containing the evaluation metrics to be used.
+            metrics (List): List of strings containing the evaluation metrics to be used.
         """
 
         self.coco = coco
-        self.eval_types = eval_types
-        self.sub_evaluators = {eval_type: COCOeval(coco, iouType=eval_type) for eval_type in eval_types}
+        self.metrics = metrics
+        self.sub_evaluators = {metric: COCOeval(coco, iouType=metric) for metric in self.metrics}
 
         self.image_ids = []
-        self.image_evals = {eval_type: [] for eval_type in eval_types}
+        self.image_evals = {metric: [] for metric in self.metrics}
+
+    def reset(self):
+        """
+        Resets the CocoEvaluator evaluator by reinitializing its image_ids and image_evals attributes.
+        """
+
+        self.image_ids = []
+        self.image_evals = {metric: [] for metric in self.metrics}
 
     def update(self, pred_dict, eval_dict):
         """
@@ -172,18 +182,125 @@ class CocoEvaluator(object):
         boxes = scale*boxes
 
         # Get image ids and update image_ids attribute
-        image_ids = eval_dict['image_ids']
+        image_ids = eval_dict['image_ids'].tolist()
         self.image_ids.extend(image_ids)
 
+        # Get image id for every prediction
+        pred_image_ids = eval_dict['image_ids'][batch_idx]
+
         # Go from tensors to lists
-        image_ids = image_ids[batch_idx].tolist()
+        pred_image_ids = pred_image_ids.tolist()
         labels = labels.tolist()
         boxes = boxes.tolist()
         scores = scores.tolist()
 
-        for eval_type in self.eval_types:
-            if eval_type == 'bbox':
-                continue
+        # Perform evaluation for every evaluation type
+        for metric in self.metrics:
+            result_dicts = []
+
+            if metric == 'bbox':
+                for i, image_id in enumerate(pred_image_ids):
+                    result_dict = {}
+                    result_dict['image_id'] = image_id
+                    result_dict['category_id'] = labels[i]
+                    result_dict['bbox'] = boxes[i]
+                    result_dict['score'] = scores[i]
+                    result_dicts.append(result_dict)
+
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stdout(devnull):
+                    coco_api_predictions = COCO.loadRes(self.coco, result_dicts)
+
+            sub_evaluator = self.sub_evaluators[metric]
+            sub_evaluator.cocoDt = coco_api_predictions
+            sub_evaluator.params.imgIds = image_ids
+
+            image_evals = CocoEvaluator.evaluate(sub_evaluator)
+            self.image_evals[metric].append(image_evals)
+
+    @staticmethod
+    def evaluate(sub_evaluator):
+        p = sub_evaluator.params
+        p.imgIds = list(np.unique(p.imgIds))
+
+        if p.useCats:
+            p.catIds = list(np.unique(p.catIds))
+
+        p.maxDets = sorted(p.maxDets)
+        sub_evaluator.params = p
+
+        sub_evaluator._prepare()
+        catIds = p.catIds if p.useCats else [-1]
+
+        if p.iouType == 'segm' or p.iouType == 'bbox':
+            computeIoU = sub_evaluator.computeIoU
+        elif p.iouType == 'keypoints':
+            computeIoU = sub_evaluator.computeOks
+
+        sub_evaluator.ious = {(imgId, catId): computeIoU(imgId, catId)
+                              for imgId in p.imgIds
+                              for catId in catIds}
+
+        evaluateImg = sub_evaluator.evaluateImg
+        maxDet = p.maxDets[-1]
+        evalImgs = [evaluateImg(imgId, catId, areaRng, maxDet)
+                    for catId in catIds
+                    for areaRng in p.areaRng
+                    for imgId in p.imgIds]
+
+        # Some post-processing (not in pycocotools)
+        evalImgs = np.asarray(evalImgs).reshape(len(catIds), len(p.areaRng), len(p.imgIds))
+        sub_evaluator._paramsEval = copy.deepcopy(sub_evaluator.params)
+
+        return evalImgs
+
+    def synchronize_between_processes(self):
+        for metric in self.metrics:
+            self.image_evals[metric] = np.concatenate(self.image_evals[metric], axis=2)
+            CocoEvaluator.sync_evaluator(self.sub_evaluators[metric], self.image_ids, self.image_evals[metric])
+
+    @staticmethod
+    def sync_evaluator(sub_evaluator, image_ids, image_evals):
+        image_ids, image_evals = CocoEvaluator.merge(image_ids, image_evals)
+        image_ids = list(image_ids)
+        image_evals = list(image_evals.flatten())
+
+        sub_evaluator.evalImgs = image_evals
+        sub_evaluator.params.imgIds = image_ids
+        sub_evaluator._paramsEval = copy.deepcopy(sub_evaluator.params)
+
+    @staticmethod
+    def merge(image_ids, image_evals):
+        all_img_ids = distributed.all_gather(image_ids)
+        all_eval_imgs = distributed.all_gather(image_evals)
+
+        merged_img_ids = []
+        for p in all_img_ids:
+            merged_img_ids.extend(p)
+
+        merged_eval_imgs = []
+        for p in all_eval_imgs:
+            merged_eval_imgs.append(p)
+
+        merged_img_ids = np.array(merged_img_ids)
+        merged_eval_imgs = np.concatenate(merged_eval_imgs, 2)
+
+        # Keep only unique (and in sorted order) images
+        merged_img_ids, idx = np.unique(merged_img_ids, return_index=True)
+        merged_eval_imgs = merged_eval_imgs[..., idx]
+
+        return merged_img_ids, merged_eval_imgs
+
+    def accumulate(self):
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                for sub_evaluator in self.sub_evaluators.values():
+                    sub_evaluator.accumulate()
+
+    def summarize(self):
+        for metric, sub_evaluator in self.sub_evaluators.items():
+            print(f"Evaluation metric: {metric}")
+            sub_evaluator.summarize()
 
 
 def get_coco_transforms():
@@ -224,7 +341,7 @@ def build_coco(args):
     Returns:
         train_dataset (torch.utils.data.Dataset): The specified COCO training dataset.
         val_dataset (torch.utils.data.Dataset): The specified COCO validation dataset.
-        evaluator (object): The COCO evaluator capable of evaluating predictions and storing them.
+        evaluator (object): The COCO evaluator capable of computing evaluations from predictions and storing them.
     """
 
     coco_root = Path() / 'datasets' / 'coco'
