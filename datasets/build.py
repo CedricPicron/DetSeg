@@ -17,6 +17,7 @@ def build_dataset(args):
     Returns:
         train_dataset (torch.utils.data.Dataset): The specified training dataset.
         val_dataset (torch.utils.data.Dataset): The specified validation dataset.
+        evaluator (object): Object capable of evaluating predictions and storing them.
 
     Raises:
         ValueError: Raised when unknown dataset name is provided in args.dataset.
@@ -24,8 +25,8 @@ def build_dataset(args):
 
     if args.dataset == 'coco':
         args.num_classes = 91
-        train_dataset, val_dataset = build_coco(args)
+        train_dataset, val_dataset, evaluator = build_coco(args)
     else:
         raise ValueError(f"Unknown dataset name {args.dataset} was provided.")
 
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, evaluator

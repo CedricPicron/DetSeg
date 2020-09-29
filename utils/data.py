@@ -5,14 +5,14 @@ Data loading utilities.
 import torch
 
 
-def collate_fn(batch):
+def train_collate_fn(batch):
     """
-    The collate function used during data loading.
+    The collate function used during training data loading.
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
             - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
-            - target (Dict): dictionary containing at least following two keys:
+            - target (Dict): dictionary containing at least following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
                                        coordinates in the (center_x, center_y, width, height) format.
@@ -48,6 +48,62 @@ def collate_fn(batch):
     tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
 
     return images, tgt_dict
+
+
+def val_collate_fn(batch):
+    """
+    The collate function used during validation data loading.
+
+    Args:
+        batch (List): List of size [batch_size] containing tuples of:
+            - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
+            - target (Dict): dictionary containing at least following keys:
+                - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
+                - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
+                                       coordinates in the (center_x, center_y, width, height) format;
+                - image_id (IntTensor): tensor of shape [1] containing the image id;
+                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
+
+    Returns:
+        images (NestedTensor): NestedTensor consisting of:
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
+            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+
+        tgt_dict (Dict): Dictionary containing following keys:
+            - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
+                                  number of objects across batch entries) containing the target class indices;
+            - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
+            - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+
+        eval_dict (Dict): Dictionary containing following keys:
+            - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
+            - image_sizes (IntTensor): tensor of shape [batch_size, 2] containing the image sizes.
+    """
+
+    # Get batch images and target dictionaries
+    images, targets = list(zip(*batch))
+
+    # Compute images nested tensor
+    images = nested_tensor_from_image_list(images)
+
+    # Concatenating the target labels and boxes across batch entries
+    tgt_labels = torch.cat([target['labels'] for target in targets], dim=0)
+    tgt_boxes = torch.cat([target['boxes'] for target in targets], dim=0)
+
+    # Computing the cumulative sizes of batch entries
+    tgt_sizes = [0] + [len(target['labels']) for target in targets]
+    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
+    tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
+
+    # Place labels, boxes and size in new target dictionary
+    tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
+
+    # Place image ids and image sizes in evaluation dictionary
+    image_ids = torch.cat([target['image_id'] for target in targets], dim=0)
+    image_sizes = torch.stack([target['image_size'] for target in targets], dim=0)
+    eval_dict = {'image_ids': image_ids, 'image_sizes': image_sizes}
+
+    return images, tgt_dict, eval_dict
 
 
 def nested_tensor_from_image_list(image_list):

@@ -32,7 +32,7 @@ def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_f
     criterion.train()
 
     metric_logger = MetricLogger(delimiter="  ")
-    header = f"Epoch {epoch}:"
+    header = f"Train epoch {epoch}:"
 
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
         images = images.to(device)
@@ -72,19 +72,15 @@ def train(model, criterion, dataloader, optimizer, epoch, max_grad_norm, print_f
 
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, dataloader, base_ds, device, output_dir, print_freq=10):
+def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10):
     device = next(model.parameters()).device
     model.eval()
     criterion.eval()
 
     metric_logger = MetricLogger(delimiter="  ")
-    header = "Test:"
+    header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
 
-    iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
-    coco_evaluator = CocoEvaluator(base_ds, iou_types)
-    # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
-
-    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+    for images, tgt_dict, eval_dict in metric_logger.log_every(dataloader, print_freq, header):
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
@@ -107,32 +103,23 @@ def evaluate(model, criterion, postprocessors, dataloader, base_ds, device, outp
         # Update logger
         metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        results = postprocessors['bbox'](outputs, orig_target_sizes)
-        if 'segm' in postprocessors.keys():
-            target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-            results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes)
-        res = {target['image_id'].item(): output for target, output in zip(targets, results)}
-        if coco_evaluator is not None:
-            coco_evaluator.update(res)
+        # Update evaluator
+        pred_dict = pred_list[0]
+        evaluator.update(pred_dict, eval_dict)
 
-    # gather the stats from all processes
+    # Accumulate predictions from all images and summarize
+    evaluator.synchronize_between_processes()
+    evaluator.accumulate()
+    evaluator.summarize()
+
+    # Get epoch validation statistics
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    if coco_evaluator is not None:
-        coco_evaluator.synchronize_between_processes()
+    val_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    # accumulate predictions from all images
-    if coco_evaluator is not None:
-        coco_evaluator.accumulate()
-        coco_evaluator.summarize()
-    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    if coco_evaluator is not None:
-        if 'bbox' in postprocessors.keys():
-            stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
-        if 'segm' in postprocessors.keys():
-            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-    return stats, coco_evaluator
+    for eval_type in evaluator.eval_types:
+        val_stats[f'eval_{eval_type}'] = evaluator.eval[eval_type].stats.tolist()
+
+    return val_stats, evaluator
 
 
 def save_checkpoint(args, epoch, model, optimizer, scheduler):
@@ -166,7 +153,7 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler):
             torch.save(checkpoint, checkpoint_path)
 
 
-def save_log(output_dir, epoch, train_stats, test_stats):
+def save_log(output_dir, epoch, train_stats, val_stats):
     """
     Function used for log saving.
 
@@ -176,7 +163,7 @@ def save_log(output_dir, epoch, train_stats, test_stats):
         output_dir (str): String containg the path to the output directory used for saving.
         epoch (int): Number of epochs trained.
         train_stats (Dict): Dictionary containing the training statistics.
-        test_stats (Dict): Dictionary containing the test statistics.
+        val_stats (Dict): Dictionary containing the val statistics.
     """
 
     if output_dir and distributed.is_main_process():
@@ -184,7 +171,7 @@ def save_log(output_dir, epoch, train_stats, test_stats):
 
         log_dict = {'epoch', epoch}
         log_dict.update({f'train_{k}': v for k, v in train_stats.items()})
-        log_dict.update({f'test_{k}': v for k, v in test_stats.items()})
+        log_dict.update({f'val_{k}': v for k, v in val_stats.items()})
 
         with (output_dir / 'log.txt').open('a') as log_file:
             log_file.write(json.dumps(log_dict) + "\n")

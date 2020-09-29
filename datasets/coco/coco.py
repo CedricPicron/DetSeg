@@ -5,10 +5,13 @@ from pathlib import Path
 
 from PIL import Image
 from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 import torch
+import torch.nn.functional as F
 from torchvision.datasets.vision import VisionDataset
 
 import datasets.transforms as T
+from utils.box_ops import box_cxcywh_to_xywh
 
 
 class CocoDataset(VisionDataset):
@@ -46,7 +49,11 @@ class CocoDataset(VisionDataset):
             target (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
-                                       coordinates in the (center_x, center_y, width, height) format.
+                                       coordinates in the (center_x, center_y, width, height) format;
+                - image_id (IntTensor): tensor of shape [1] containing the image id;
+                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation);
+                - area (FloatTensor): tesnor of shape [num_target_boxes] containing the area of each target box;
+                - iscrowd (IntTensor): tensor of shape [num_target_boxes] containing the iscrowd annotations.
         """
 
         # Load image
@@ -80,12 +87,15 @@ class CocoDataset(VisionDataset):
         labels = labels[keep]
         boxes = boxes[keep]
 
-        # Some additional properties useful for conversion to coco api
-        area = torch.tensor([obj["area"] for obj in annotations])[keep]
-        iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in annotations])[keep]
-
         # Place target properties into target dictionary
-        target = {'labels': labels, 'boxes': boxes, 'area': area, 'iscrowd': iscrowd}
+        target = {'labels': labels, 'boxes': boxes}
+
+        # Add some additional properties useful during evaluation
+        target['image_id'] = torch.tensor([image_id])
+        target['image_size'] = torch.tensor([int(h), int(w)])
+
+        target['area'] = torch.tensor([obj['area'] for obj in annotations])[keep]
+        target['iscrowd'] = torch.tensor([obj['iscrowd'] if 'iscrowd' in obj else 0 for obj in annotations])[keep]
 
         # Perform image and bounding box transformations
         image, target = self.transforms(image, target)
@@ -101,6 +111,79 @@ class CocoDataset(VisionDataset):
         """
 
         return len(self.image_ids)
+
+
+class CocoEvaluator(object):
+    """
+    Evaluator object capable of evaluating predictions and storing them.
+
+    Attributes:
+        coco (COCO): Object containing the COCO dataset annotations.
+        eval_types (List): List of strings containing the evaluation metrics to be used.
+        sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric from eval_types.
+        image_ids (List): List of evaluated image ids.
+        image_evals (Dict): Dictionary of lists (in same order as image_ids) of image evaluations for each metric.
+    """
+
+    def __init__(self, coco, eval_types=['bbox']):
+        """
+        Initializes the CocoEvaluator evaluator.
+
+        Args:
+            coco (COCO): Object containing the COCO dataset annotations.
+            eval_types (List): List of strings containing the evaluation metrics to be used.
+        """
+
+        self.coco = coco
+        self.eval_types = eval_types
+        self.sub_evaluators = {eval_type: COCOeval(coco, iouType=eval_type) for eval_type in eval_types}
+
+        self.image_ids = []
+        self.image_evals = {eval_type: [] for eval_type in eval_types}
+
+    def update(self, pred_dict, eval_dict):
+        """
+        Updates the evaluator object with the given predictions.
+
+        Args:
+            pred_dict (Dict): Dictionary containing at least following keys:
+                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+
+            eval_dict (Dict): Dictionary containing following keys:
+                - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
+                - image_sizes (IntTensor): tensor of shape [batch_size, 2] containing the image sizes.
+        """
+
+        # Compute max scores and resulting labels among object classes
+        probs = F.softmax(pred_dict['logits'], dim=-1)
+        scores, labels = probs[:, :-1].max(dim=-1)
+
+        # Convert boxes to (left, top, right, bottom) format
+        boxes = box_cxcywh_to_xywh(pred_dict['boxes'])
+
+        # Convert boxes from relative to absolute coordinates
+        batch_idx = pred_dict['batch_idx']
+        image_sizes = eval_dict['image_sizes']
+
+        h, w = image_sizes[batch_idx, :].unbind(1)
+        scale = torch.stack([w, h, w, h], dim=1)
+        boxes = scale*boxes
+
+        # Get image ids and update image_ids attribute
+        image_ids = eval_dict['image_ids']
+        self.image_ids.extend(image_ids)
+
+        # Go from tensors to lists
+        image_ids = image_ids[batch_idx].tolist()
+        labels = labels.tolist()
+        boxes = boxes.tolist()
+        scores = scores.tolist()
+
+        for eval_type in self.eval_types:
+            if eval_type == 'bbox':
+                continue
 
 
 def get_coco_transforms():
@@ -141,6 +224,7 @@ def build_coco(args):
     Returns:
         train_dataset (torch.utils.data.Dataset): The specified COCO training dataset.
         val_dataset (torch.utils.data.Dataset): The specified COCO validation dataset.
+        evaluator (object): The COCO evaluator capable of evaluating predictions and storing them.
     """
 
     coco_root = Path() / 'datasets' / 'coco'
@@ -152,5 +236,6 @@ def build_coco(args):
     train_transforms, val_transforms = get_coco_transforms()
     train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms)
     val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms)
+    evaluator = CocoEvaluator(val_dataset.coco)
 
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, evaluator

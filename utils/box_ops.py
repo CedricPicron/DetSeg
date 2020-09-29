@@ -5,6 +5,23 @@ import torch
 from torchvision.ops.boxes import box_area
 
 
+def box_cxcywh_to_xywh(boxes_cxcywh):
+    """
+    Function transforming boxes from (center_x, center_y, width, height) to (left, top, widht, height) format.
+
+    Args:
+        boxes_cxcywh (Tensor): Boxes in (center_x, center_y, width, height) format of shape [*, 4].
+
+    Returns:
+        boxes_xywh (Tensor): Transformed boxes in (left, top, width, height) format of shape [*, 4].
+    """
+
+    cx, cy, w, h = boxes_cxcywh.unbind(dim=-1)
+    boxes_xywh = torch.stack([cx-0.5*w, cy-0.5*h, w, h], dim=-1)
+
+    return boxes_xywh
+
+
 def box_cxcywh_to_xyxy(boxes_cxcywh):
     """
     Function transforming boxes from (center_x, center_y, width, height) to (left, top, right, bottom) format.

@@ -3,6 +3,7 @@ Main program.
 """
 import argparse
 import datetime
+from pathlib import Path
 import time
 
 import torch
@@ -12,7 +13,7 @@ from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train
 from models.criterion import build_criterion
 from models.detr import build_detr
-from utils.data import collate_fn
+from utils.data import train_collate_fn, val_collate_fn
 import utils.distributed as distributed
 
 
@@ -21,7 +22,7 @@ def get_parser():
 
     # General
     parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
-    parser.add_argument('--device', default='cuda', type=str, help='device to use training/testing')
+    parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
     parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
@@ -110,8 +111,8 @@ def main(args):
     distributed.init_distributed_mode(args)
     print(args)
 
-    # Get training and validation datasets
-    train_dataset, val_dataset = build_dataset(args)
+    # Get training/validation datasets and evaluator
+    train_dataset, val_dataset, evaluator = build_dataset(args)
 
     # Get training and validation samplers
     if args.distributed:
@@ -122,10 +123,12 @@ def main(args):
         val_sampler = SequentialSampler(val_dataset)
 
     # Get training and validation dataloaders
-    dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
+    train_dataloader_kwargs = {'collate_fn': train_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
-    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
-    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
+    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **train_dataloader_kwargs)
+
+    val_dataloader_kwargs = {'collate_fn': val_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
+    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **val_dataloader_kwargs)
 
     # Get model/criterion and put them on correct device
     device = torch.device(args.device)
@@ -143,7 +146,14 @@ def main(args):
 
     # Evaluate loaded model if required and return
     if args.eval:
-        evaluate(val_dataloader)
+        _, evaluator = evaluate(model, criterion, val_dataloader, evaluator)
+        output_dir = Path(args.output_dir)
+
+        if distributed.is_main_process():
+            for eval_type in evaluator.eval_types:
+                eval_predictions = evaluator.eval[eval_type].eval
+                torch.save(eval_predictions, output_dir / f'eval_{eval_type}.pth')
+
         return
 
     # Get training optimizer, scheduler and start epoch
@@ -176,8 +186,8 @@ def main(args):
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        test_stats = evaluate(val_dataloader)
-        save_log(args.output_dir, epoch, train_stats, test_stats)
+        val_stats, _ = evaluate(model, criterion, val_dataloader, evaluator, epoch=epoch)
+        save_log(args.output_dir, epoch, train_stats, val_stats)
 
     # End training timer and report total training time
     total_time = time.time() - start_time
