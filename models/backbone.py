@@ -22,6 +22,7 @@ class Backbone(nn.Module):
     Attributes:
         body (IntermediateLayerGetter): Module computing the feature maps.
         num_channels (int): Number of channels of last feature map.
+        trained (bool): Whether backbone is trained or not.
     """
 
     def __init__(self, name: str, train_backbone: bool, dilation: bool):
@@ -45,6 +46,7 @@ class Backbone(nn.Module):
         return_layers = {'layer4': '0'}
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
         self.num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
+        self.trained = train_backbone
 
     def load_from_original_detr(self, state_dict):
         """

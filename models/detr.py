@@ -2,12 +2,13 @@
 DETR modules and build function.
 """
 
+import torch
 from torch import nn
 
 from .backbone import build_backbone
 from .position import build_position_encoder
 from .encoder import build_encoder
-from .decoder import build_decoder
+from .decoder import build_decoder, GlobalDecoder
 from .utils import MLP
 
 
@@ -49,6 +50,19 @@ class DETR(nn.Module):
 
         self.class_embed = nn.Linear(decoder.feat_dim, num_classes + 1)
         self.bbox_embed = MLP(decoder.feat_dim, decoder.feat_dim, 4, 3)
+
+    def load_from_original_detr(self):
+        """
+        Loads backbone, encoder and global decoder from original detr if untrained.
+        """
+
+        original_detr_url = 'https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth'
+        state_dict = torch.hub.load_state_dict_from_url(original_detr_url)['model']
+        is_global_decoder = isinstance(self.decoder, GlobalDecoder)
+
+        self.backbone.load_from_original_detr(state_dict) if not self.backbone.trained else None
+        self.encoder.load_from_original_detr(state_dict) if not self.encoder.trained else None
+        self.decoder.load_from_original_detr(state_dict) if not self.decoder.trained and is_global_decoder else None
 
     def forward(self, images):
         """

@@ -108,14 +108,14 @@ class SetCriterion(nn.Module):
             # Perform accuracy analysis if requested
             if 'accuracy' in self.analysis_names:
                 correct_predictions = torch.eq(pred_classes, tgt_classes)
-                accuracy = correct_predictions.sum().item()/len(correct_predictions)
+                accuracy = correct_predictions.sum() * (1/len(correct_predictions))
                 analysis_dict[f'accuracy_{layer_id}_{iter_id}'] = 100*accuracy
 
             # Perform cardinality analysis if requested
             if 'cardinality' in self.analysis_names:
-                pred_cardinality = (pred_classes != self.num_classes).sum().item()
+                pred_cardinality = (pred_classes != self.num_classes).sum()
                 tgt_cardinality = len(tgt_labels)
-                cardinality_error = abs(pred_cardinality-tgt_cardinality)
+                cardinality_error = torch.abs(pred_cardinality-tgt_cardinality)
                 analysis_dict[f'card_error_{layer_id}_{iter_id}'] = cardinality_error
 
         return loss_dict, analysis_dict

@@ -220,6 +220,16 @@ class CocoEvaluator(object):
 
     @staticmethod
     def evaluate(sub_evaluator):
+        """
+        Evaluates a metric from given sub_evaluator.
+
+        Copied from pycocotools, but without print statements and with additional post-processing.
+
+        Args:
+            sub_evaluator (COCOeval): Object used for evaluating a specific metric on COCO.
+        """
+
+        # Copied from pycocotools, but without print statements
         p = sub_evaluator.params
         p.imgIds = list(np.unique(p.imgIds))
 
@@ -255,49 +265,87 @@ class CocoEvaluator(object):
         return evalImgs
 
     def synchronize_between_processes(self):
+        """
+        Synchronization of CocoEvaluator objects across different processes.
+        """
+
         for metric in self.metrics:
             self.image_evals[metric] = np.concatenate(self.image_evals[metric], axis=2)
             CocoEvaluator.sync_evaluator(self.sub_evaluators[metric], self.image_ids, self.image_evals[metric])
 
     @staticmethod
     def sync_evaluator(sub_evaluator, image_ids, image_evals):
-        image_ids, image_evals = CocoEvaluator.merge(image_ids, image_evals)
-        image_ids = list(image_ids)
-        image_evals = list(image_evals.flatten())
+        """
+        Synchronization of sub-evaluators across different processes.
 
-        sub_evaluator.evalImgs = image_evals
-        sub_evaluator.params.imgIds = image_ids
+        Args:
+            sub_evaluator (COCOeval): Object used for evaluating a specific metric on COCO.
+            image_ids (List): List of image indices processed by this CocoEvaluator.
+            image_evals (List): List of image evaluations processed by this CocoEvaluator.
+        """
+
+        # Merge image indices and image evaluations across processes
+        merged_image_ids, merged_image_evals = CocoEvaluator.merge(image_ids, image_evals)
+
+        # Update sub-evaluator with merged image indices and evaluations
+        sub_evaluator.evalImgs = merged_image_evals
+        sub_evaluator.params.imgIds = merged_image_ids
         sub_evaluator._paramsEval = copy.deepcopy(sub_evaluator.params)
 
     @staticmethod
     def merge(image_ids, image_evals):
-        all_img_ids = distributed.all_gather(image_ids)
-        all_eval_imgs = distributed.all_gather(image_evals)
+        """
+        Merges image indices and image evaluations across different processes.
 
-        merged_img_ids = []
-        for p in all_img_ids:
-            merged_img_ids.extend(p)
+        Args:
+            image_ids (List): List of image indices processed by this CocoEvaluator.
+            image_evals (List): List of image evaluations processed by this CocoEvaluator.
 
-        merged_eval_imgs = []
-        for p in all_eval_imgs:
-            merged_eval_imgs.append(p)
+        Returns:
+            merged_image_ids (List): List of merged image indices from all processes.
+            merged_image_evals (List): List of merged image evaluations from all processes.
+        """
 
-        merged_img_ids = np.array(merged_img_ids)
-        merged_eval_imgs = np.concatenate(merged_eval_imgs, 2)
+        # Gather image indices and image evaluations across processes
+        gathered_image_ids = distributed.all_gather(image_ids)
+        gathered_image_evals = distributed.all_gather(image_evals)
+
+        # Create merged lists
+        merged_image_ids = []
+        for image_ids in gathered_image_ids:
+            merged_image_ids.extend(image_ids)
+
+        merged_image_evals = []
+        for image_evals in gathered_image_evals:
+            merged_image_evals.append(image_ids)
 
         # Keep only unique (and in sorted order) images
-        merged_img_ids, idx = np.unique(merged_img_ids, return_index=True)
-        merged_eval_imgs = merged_eval_imgs[..., idx]
+        merged_image_ids = np.array(merged_image_ids)
+        merged_image_evals = np.concatenate(merged_image_evals, 2)
 
-        return merged_img_ids, merged_eval_imgs
+        merged_image_ids, idx = np.unique(merged_image_ids, return_index=True)
+        merged_image_evals = merged_image_evals[..., idx]
+
+        image_ids = list(image_ids)
+        image_evals = list(image_evals.flatten())
+
+        return merged_image_ids, merged_image_evals
 
     def accumulate(self):
+        """
+        Accumulates evaluations for each metric and stores them in their corresponding sub-evaluator.
+        """
+
         with open(os.devnull, 'w') as devnull:
             with contextlib.redirect_stdout(devnull):
                 for sub_evaluator in self.sub_evaluators.values():
                     sub_evaluator.accumulate()
 
     def summarize(self):
+        """
+        Summarizes evaluations for each metric and prints them.
+        """
+
         for metric, sub_evaluator in self.sub_evaluators.items():
             print(f"Evaluation metric: {metric}")
             sub_evaluator.summarize()

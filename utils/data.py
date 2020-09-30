@@ -1,5 +1,5 @@
 """
-Data loading utilities.
+Data loading and data structure utilities.
 """
 
 import torch

@@ -25,6 +25,7 @@ def get_parser():
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
     parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
+    parser.add_argument('--load_orig_detr', action='store_true', help='load untrained detr parts from original detr')
     parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
 
     # Distributed
@@ -141,6 +142,10 @@ def main(args):
     device = torch.device(args.device)
     model = build_detr(args).to(device)
     criterion = build_criterion(args).to(device)
+
+    # Load untrained model parts from original detr if required
+    if args.load_orig_detr:
+        model.load_from_original_detr()
 
     # Load model from checkpoint if required
     if args.checkpoint:

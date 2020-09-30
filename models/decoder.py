@@ -24,6 +24,7 @@ class GlobalDecoder(nn.Module):
         layers (nn.ModulesList): List of decoder layers being concatenated.
         norm (nn.LayerNorm): Final layer normalization before output.
         slot_embeds (nn.Embedding): Learned positional slot embeddings.
+        trained (bool): Whether global decoder is trained or not.
     """
 
     def __init__(self, decoder_layer, decoder_dict, feat_dim, num_slots):
@@ -52,6 +53,7 @@ class GlobalDecoder(nn.Module):
         self.norm = nn.LayerNorm(feat_dim)
         self.requires_grad_(decoder_dict['train'])
         self.slot_embeds = nn.Embedding(num_slots, feat_dim)
+        self.trained = decoder_dict['train']
 
     def load_from_original_detr(self, state_dict):
         """
@@ -121,6 +123,24 @@ class GlobalDecoder(nn.Module):
 
 
 class GlobalDecoderLayer(nn.Module):
+    """
+    Class implementing the GlobalDecoderLayer module.
+
+    Decoder layer with global multi-head self-attention, followed by cross-attention and a feedforward network (FFN).
+
+    Attributes:
+        self_attn (nn.MultiheadAtttenion): Multi-head attention module used for self-attenion.
+        dropout1 (nn.Dropout): Dropout module after self-attention.
+        norm1 (nn.LayerNorm): Layernorm module after self-attention skip connection.
+        multihead_attn (nn.MultiheadAtttenion): Multi-head attention module used for cross-attenion.
+        dropout2 (nn.Dropout): Dropout module after cross-attention.
+        norm2 (nn.LayerNorm): Layernorm module after cross-attention skip connection.
+        linear1 (nn.Linear): First FFN linear layer.
+        dropout (nn.Dropout): Dropout module after first FFN layer.
+        linear2 (nn.Linear): Second FFN linear layer.
+        dropout3 (nn.Dropout): Dropout module after second FFN layer.
+        norm3 (nn.LayerNorm): Layernorm module after FFN skip connection.
+    """
 
     def __init__(self, feat_dim, mha_dict, ffn_dict):
         """
@@ -214,6 +234,7 @@ class SampleDecoder(nn.Module):
         num_layers (int): Number of concatenated decoder layers.
         return_all (bool): Whether to return all decoder predictions.
         layers (nn.ModuleList): List of decoder layers being concatenated.
+        trained (bool): Whether the sample decoder is trained or not.
     """
 
     def __init__(self, decoder_layer, decoder_dict, feat_dim, num_init_slots):
@@ -240,6 +261,12 @@ class SampleDecoder(nn.Module):
 
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.num_layers)])
         self.requires_grad_(decoder_dict['train'])
+        self.trained = decoder_dict['train']
+
+        if self.num_iterations == 1:
+            for name, child_module in self.layers[-1].cross_attention.named_children():
+                if name in ['slot_proj', 'feat_proj', 'curio_kernel']:
+                    child_module.requires_grad_(False)
 
     def forward_init(self, feature_masks, pos_encodings, mask_fill=-1e6):
         """
@@ -309,14 +336,21 @@ class SampleDecoder(nn.Module):
         slots, batch_idx, seg_maps, curio_maps, *args = self.forward_init(feature_masks, pos)
         slots_list = []
 
-        for layer in self.layers:
-            for _ in range(self.num_iterations):
+        # Add emplacement for skip_seg_curio boolean
+        args.append(False)
+
+        # Compute slots and segmentation maps
+        for layer_id, layer in enumerate(self.layers):
+            for i in range(self.num_iterations):
+                args[-1] = ((layer_id+1) == self.num_layers) and ((i+1) == self.num_iterations) and (i == 0)
                 slots, seg_maps, curio_maps = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
                 slots_list.append(slots) if self.return_all else None
 
+        # Add final slots to slots list if not already done
         if not self.return_all:
             slots_list.append(slots)
 
+        # Some post-processsing
         num_pred_sets = len(slots_list)
         slots_list.reverse()
         slots = torch.stack(slots_list, dim=0)
@@ -362,8 +396,9 @@ class SampleDecoderLayer(nn.Module):
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
-            args (Tuple): Tuple containing:
+            args (List): List containing:
                 - max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
+                - skip_seg_curio (bool): Whether to skip segmentation and curiosity computation.
 
         Returns:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
@@ -597,18 +632,19 @@ class WeightedCrossAttention(nn.Module):
 
         return curio_maps
 
-    def forward(self, features, pos_encodings, slots, batch_idx, seg_maps, curio_maps, max_mask_entries):
+    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, skip_seg_curio):
         """
         Forward method of WeightedCrossAttention module.
 
         Args:
             features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
-            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+            pos (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, 3, H*W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
+            skip_seg_curio (bool): Whether to skip segmentation and curiosity computation.
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -616,10 +652,12 @@ class WeightedCrossAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
-        sample_dict = self.sample(features, pos_encodings, batch_idx, curio_maps, max_mask_entries)
+        sample_dict = self.sample(features, pos, batch_idx, curio_maps, max_mask_entries)
         slots = self.weighted_attention(slots, sample_dict)
-        seg_maps, seg_probs = self.update_seg_maps(slots, seg_maps, sample_dict)
-        curio_maps = self.update_curio_maps(curio_maps, sample_dict['feat_idx'], seg_probs)
+
+        if not skip_seg_curio:
+            seg_maps, seg_probs = self.update_seg_maps(slots, seg_maps, sample_dict)
+            curio_maps = self.update_curio_maps(curio_maps, sample_dict['feat_idx'], seg_probs)
 
         return slots, seg_maps, curio_maps
 

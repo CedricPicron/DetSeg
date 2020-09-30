@@ -16,6 +16,7 @@ class Encoder(nn.Module):
         feat_dim (int): Feature dimension used in the encoder.
         layers (nn.ModulesList): List of encoder layers being concatenated.
         num_layers (int): Number of concatenated encoder layers.
+        trained (bool): Whether encoder is trained or not.
     """
 
     def __init__(self, encoder_layer, feat_dim, num_layers, train_encoder):
@@ -35,6 +36,7 @@ class Encoder(nn.Module):
 
         self.layers = nn.ModuleList([copy.deepcopy(encoder_layer) for _ in range(num_layers)])
         self.requires_grad_(train_encoder)
+        self.trained = train_encoder
 
     def load_from_original_detr(self, state_dict):
         """
@@ -91,17 +93,17 @@ class SelfAttentionEncoderLayer(nn.Module):
     """
     Class implementing the SelfAttentionEncoderLayer.
 
-    Encoder layer with global multi-head self-attention, followed by a FFN.
+    Encoder layer with global multi-head self-attention, followed by a feedforward network (FFN).
 
     Attributes:
-        self_attn (nn.MultiheadAtttenion): Multi-head attention (MHA) module.
-        drop1 (nn.Dropout): Dropout module after global MHA.
-        norm1 (nn.LayerNorm): Layernorm after MHA skip connection.
+        self_attn (nn.MultiheadAtttenion): Multi-head attention module used for self-attention.
+        dropout1 (nn.Dropout): Dropout module after self-attention.
+        norm1 (nn.LayerNorm): Layernorm module after self-attention skip connection.
         linear1 (nn.Linear): First FFN linear layer.
         dropout (nn.Dropout): Dropout module after first FFN layer.
         linear2 (nn.Linear): Second FFN linear layer.
         dropout2 (nn.Dropout): Dropout module after second FFN layer.
-        norm2 (nn.LayerNorm): Layernorm after FFN skip connection.
+        norm2 (nn.LayerNorm): Layernorm module after FFN skip connection.
     """
 
     def __init__(self, feat_dim, mha_dict, ffn_dict):

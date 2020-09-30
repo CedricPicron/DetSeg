@@ -2,4 +2,6 @@
 condor/*
 datasets/coco/annotations
 datasets/coco/images
+outputs/*
+test/*
 .vscode

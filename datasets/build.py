@@ -1,5 +1,5 @@
 """
-Dataset build function.
+Dataset/evaluator build function.
 """
 
 from .coco.coco import build_coco

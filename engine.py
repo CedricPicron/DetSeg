@@ -190,7 +190,7 @@ def save_log(output_dir, epoch, train_stats, val_stats):
     if output_dir and distributed.is_main_process():
         output_dir = Path(output_dir)
 
-        log_dict = {'epoch', epoch}
+        log_dict = {'epoch': epoch}
         log_dict.update({f'train_{k}': v for k, v in train_stats.items()})
         log_dict.update({f'val_{k}': v for k, v in val_stats.items()})
 

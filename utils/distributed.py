@@ -1,6 +1,7 @@
 """
 Distributed utilities.
 """
+import builtins
 import os
 import pickle
 
@@ -8,19 +9,23 @@ import torch
 
 
 def init_distributed_mode(args):
+    """
+    Initializes distributed mode.
+    """
+
     if 'RANK' not in os.environ or 'WORLD_SIZE' not in os.environ:
-        print('Not using distributed mode')
+        print("Not using distributed mode.")
         args.distributed = False
         return
 
     args.distributed = True
-    args.rank = int(os.environ["RANK"])
+    args.rank = int(os.environ['RANK'])
     args.world_size = int(os.environ['WORLD_SIZE'])
 
     args.gpu = int(os.environ['LOCAL_RANK'])
     torch.cuda.set_device(args.gpu)
 
-    print('| distributed init (rank {}): {}'.format(args.rank, args.dist_url), flush=True)
+    print(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
     torch.distributed.init_process_group(backend='nccl', init_method=args.dist_url,
                                          world_size=args.world_size, rank=args.rank)
 
@@ -30,8 +35,11 @@ def init_distributed_mode(args):
 def set_master_only_printing(is_master):
     """
     Disables printing when not in master process.
+
+    Args:
+        is_master (bool): Boolean indicating whether process is master process.
     """
-    import builtins
+
     builtin_print = builtins.print
 
     def print(*args, **kwargs):
@@ -43,6 +51,13 @@ def set_master_only_printing(is_master):
 
 
 def is_dist_avail_and_initialized():
+    """
+    Checks whether the distributed package is available and whether the default process group is initialized.
+
+    Returns:
+        Boolean indicating distributed package availability and default process group initialization.
+    """
+
     if not torch.distributed.is_available():
         return False
     if not torch.distributed.is_initialized():
@@ -51,25 +66,46 @@ def is_dist_avail_and_initialized():
 
 
 def get_world_size():
+    """
+    Gets world size (i.e. size of process group).
+
+    Returns:
+        Integer containing the world size.
+    """
+
     if not is_dist_avail_and_initialized():
         return 1
     return torch.distributed.get_world_size()
 
 
 def get_rank():
+    """
+    Gets process rank (i.e. process rank within process group).
+
+    Returns:
+        Integer containing the process rank.
+    """
+
     if not is_dist_avail_and_initialized():
         return 0
     return torch.distributed.get_rank()
 
 
 def is_main_process():
+    """
+    Checks whether process corresponds to main process of process group.
+
+    Returns:
+        Boolean indicating whether process is main process or not.
+    """
+
     return get_rank() == 0
 
 
 @torch.no_grad()
 def reduce_dict(input_dict, average=True):
     """
-    Reduce dictionary values across all processes.
+    Reduce dictionary values across different processes.
 
     Args:
         input_dict (Dict): Input dictionary for which values will be reduced.
@@ -92,47 +128,47 @@ def reduce_dict(input_dict, average=True):
     return reduced_dict
 
 
-def all_gather(data):
+def all_gather(input_data):
     """
-    Run all_gather on arbitrary picklable data (not necessarily tensors).
+    Gathers a list of arbitrary picklable data (not necessarily tensors) across different processes.
 
     Args:
-        data: Any picklable object.
+        input_data (object): Any picklable object to be gathered across processes.
 
     Returns:
-        list[data]: List of data gathered from each rank.
+        gathered_data (List): List of data gathered from each process.
     """
 
+    # Get world size and return if world size is one
     world_size = get_world_size()
     if world_size == 1:
-        return [data]
+        return [input_data]
 
-    # serialized to a Tensor
-    buffer = pickle.dumps(data)
+    # Transform serialized object to byte tensor
+    buffer = pickle.dumps(input_data)
     storage = torch.ByteStorage.from_buffer(buffer)
     tensor = torch.ByteTensor(storage).to("cuda")
 
-    # obtain Tensor size of each rank
+    # Obtain max tensor size
     local_size = torch.tensor([tensor.numel()], device="cuda")
     size_list = [torch.tensor([0], device="cuda") for _ in range(world_size)]
     torch.distributed.all_gather(size_list, local_size)
     size_list = [int(size.item()) for size in size_list]
     max_size = max(size_list)
 
-    # receiving Tensor from all ranks
-    # we pad the tensor because torch all_gather does not support
-    # gathering tensors of different shapes
-    tensor_list = []
-    for _ in size_list:
-        tensor_list.append(torch.empty((max_size,), dtype=torch.uint8, device="cuda"))
+    # Pad tensors as only tensors of same shape can be gathered
     if local_size != max_size:
         padding = torch.empty(size=(max_size - local_size,), dtype=torch.uint8, device="cuda")
         tensor = torch.cat((tensor, padding), dim=0)
+
+    # Gather padded tensors in tensor_list
+    tensor_list = [torch.empty((max_size,), dtype=torch.uint8, device="cuda") for _ in size_list]
     torch.distributed.all_gather(tensor_list, tensor)
 
-    data_list = []
+    # Post-processing with padding removal and reserialization
+    gathered_data = []
     for size, tensor in zip(size_list, tensor_list):
         buffer = tensor.cpu().numpy().tobytes()[:size]
-        data_list.append(pickle.loads(buffer))
+        gathered_data.append(pickle.loads(buffer))
 
-    return data_list
+    return gathered_data
