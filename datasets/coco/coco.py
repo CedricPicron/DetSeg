@@ -317,17 +317,17 @@ class CocoEvaluator(object):
 
         merged_image_evals = []
         for image_evals in gathered_image_evals:
-            merged_image_evals.append(image_ids)
+            merged_image_evals.append(image_evals)
 
         # Keep only unique (and in sorted order) images
         merged_image_ids = np.array(merged_image_ids)
-        merged_image_evals = np.concatenate(merged_image_evals, 2)
+        merged_image_evals = np.concatenate(merged_image_evals, axis=2)
 
         merged_image_ids, idx = np.unique(merged_image_ids, return_index=True)
         merged_image_evals = merged_image_evals[..., idx]
 
-        image_ids = list(image_ids)
-        image_evals = list(image_evals.flatten())
+        merged_image_ids = list(merged_image_ids)
+        merged_image_evals = list(merged_image_evals.flatten())
 
         return merged_image_ids, merged_image_evals
 
@@ -387,9 +387,9 @@ def build_coco(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        train_dataset (torch.utils.data.Dataset): The specified COCO training dataset.
-        val_dataset (torch.utils.data.Dataset): The specified COCO validation dataset.
-        evaluator (object): The COCO evaluator capable of computing evaluations from predictions and storing them.
+        train_dataset (CocoDataset): The specified COCO training dataset.
+        val_dataset (CocoDataset): The specified COCO validation dataset.
+        evaluator (CocoEvaluator): COCO evaluator capable of computing evaluations from predictions and storing them.
     """
 
     coco_root = Path() / 'datasets' / 'coco'
