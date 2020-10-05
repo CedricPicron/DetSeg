@@ -15,6 +15,21 @@ from utils.data import NestedTensor
 from utils.distributed import is_main_process
 
 
+class FrozenBatchNorm2d (FrozenBatchNorm2d):
+    """
+    Two-dimensional batch normalization layer with frozen statistics.
+
+    Copy from torchvision, but with default eps of 1e-5.
+
+    Attributes:
+        num_features (int): Expected number of 2D input feature maps.
+        eps (float): Value added to the denominator for numerical stability (defaults to 1e-5).
+    """
+
+    def __init__(self, num_features, eps=1e-5):
+        super().__init__(num_features, eps=eps)
+
+
 class Backbone(nn.Module):
     """
     Class implementing the Backbone module.
@@ -50,9 +65,9 @@ class Backbone(nn.Module):
 
     def load_from_original_detr(self, state_dict):
         """
-        Load backbone from one of Facebook's original DETR model.
+        Loads backbone from the state_dict of an original Facebook DETR model.
 
-        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
         """
 
         backbone_identifier = 'backbone.0.'
@@ -82,7 +97,7 @@ class Backbone(nn.Module):
         conv_feature_maps = self.body(images.tensor)
 
         original_mask = images.mask
-        assert original_mask is not None, 'No mask specified in NestedTensor'
+        assert original_mask is not None, "No mask specified in NestedTensor images."
         original_mask = original_mask[None].float()
 
         out: List[NestedTensor] = []

@@ -57,9 +57,9 @@ class GlobalDecoder(nn.Module):
 
     def load_from_original_detr(self, state_dict):
         """
-        Load decoder from one of Facebook's original DETR model.
+        Loads decoder from the state_dict of an original Facebook DETR model.
 
-        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
         """
 
         decoder_identifier = 'transformer.decoder.'
