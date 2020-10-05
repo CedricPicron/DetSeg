@@ -114,6 +114,34 @@ class DETR(nn.Module):
         self.class_head.load_state_dict(class_head_state_dict)
         self.bbox_head.load_state_dict(bbox_head_state_dict)
 
+    @staticmethod
+    def get_sizes(batch_idx, batch_size):
+        """
+        Computes the cumulative number of predictions across batch entries.
+
+        Args:
+            batch_idx (IntTensor): Batch indices (sorted in ascending order) of shape [num_pred_sets, num_slots_total].
+            batch_size (int): Total number of batch entries.
+
+        Returns:
+            sizes (IntTensor): Cumulative sizes of batch entries of shape [num_pred_sets, batch_size+1].
+        """
+
+        num_pred_sets, num_slots_total = batch_idx.shape
+        sizes = torch.zeros(num_pred_sets, batch_size+1, dtype=torch.int)
+
+        for i in range(num_pred_sets):
+            prev_idx = 0
+
+            for j, curr_idx in enumerate(batch_idx[i]):
+                if curr_idx != prev_idx:
+                    sizes[i, prev_idx+1:curr_idx+1] = j
+                    prev_idx = curr_idx
+
+            sizes[i, curr_idx+1:] = num_slots_total
+
+        return sizes
+
     def forward(self, images):
         """
         Forward method of DETR module.
@@ -124,11 +152,12 @@ class DETR(nn.Module):
                 - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
-            pred_list (List): List of predictions, where each entry is a dict containing the key:
+            pred_list (List): List of predictions, where each entry is a dict containing following keys:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
+                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions;
                 - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
@@ -146,13 +175,15 @@ class DETR(nn.Module):
 
         encoder_features = self.encoder(proj_features, feature_masks, pos_encodings)
         slots, batch_idx, seg_maps = self.decoder(encoder_features, feature_masks, pos_encodings)
+        sizes = self.get_sizes(batch_idx, batch_size)
 
         class_logits = self.class_head(slots)
         bbox_coord = self.bbox_head(slots).sigmoid()
 
         num_layers = self.decoder.num_layers
         iters = self.decoder.num_iterations
-        pred_list = [{'logits': a, 'boxes': b, 'batch_idx': c} for a, b, c in zip(class_logits, bbox_coord, batch_idx)]
+        pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
+        [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
         [pred_dict.update({'layer_id': num_layers-i, 'iter_id': i//iters+1}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list

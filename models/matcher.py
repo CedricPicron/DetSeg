@@ -43,61 +43,27 @@ class HungarianMatcher(nn.Module):
         self.cost_l1 = cost_l1
         self.cost_giou = cost_giou
 
-    @staticmethod
-    def get_sizes(batch_idx, batch_size):
-        """
-        Computes the cumulative number of predictions across batch entries.
-
-        Args:
-            batch_idx (IntTensor): Tensor of shape [num_slots] with batch indices of slots (in ascending order);
-            batch_size (int): Total number of images in batch.
-        """
-
-        prev_idx = 0
-        sizes = [0]
-
-        for i, curr_idx in enumerate(batch_idx):
-            if curr_idx != prev_idx:
-                sizes.extend([i] * (curr_idx-prev_idx))
-                prev_idx = curr_idx
-
-        current_length = len(sizes)
-        sizes.extend([len(batch_idx)] * (batch_size+1 - current_length))
-
-        return sizes
-
     @torch.no_grad()
     def forward(self, pred_dict, tgt_dict):
         """
         Forward method of the HungarianMatcher module. Performs the hungarian matching.
 
         Args:
-            pred_dict (Dict): Dictionary containing following keys:
+            pred_dict (Dict): Dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
-                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
+                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
                                       number of objects across batch entries) containing the target class indices;
                 - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+                - sizes (IntTensor): cumulative number of targets across batch entries of shape [batch_size+1].
 
         Returns:
-            - pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
-            - tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
-
-        Raises:
-            ValueError: Raised when pred_dict['batch_idx'] is not sorted in ascending order.
+            pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))].
+            tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
         """
-
-        # Check whether batch_idx is sorted
-        batch_idx = pred_dict['batch_idx']
-        if len(batch_idx) > 1:
-            if not ((batch_idx[1:]-batch_idx[:-1]) >= 0).all():
-                raise ValueError("pred_dict['batch_idx'] must be sorted in ascending order.")
 
         # Compute class probablities of predictions
         pred_prob = pred_dict['logits'].softmax(-1)
@@ -120,15 +86,15 @@ class HungarianMatcher(nn.Module):
         # Weighted cost matrix
         C = (self.cost_class*cost_class + self.cost_l1*cost_l1 + self.cost_giou*cost_giou).cpu()
 
-        # Compute cumulative number of predictions and targets in each batch
+        # Compute cumulative number of predictions and targets in each batch entry
         batch_size = len(tgt_dict['sizes'])-1
-        pred_sizes = self.get_sizes(batch_idx, batch_size)
-        tgt_sizes = tgt_dict['sizes']
+        pred_sizes = pred_dict['sizes'].tolist()
+        tgt_sizes = tgt_dict['sizes'].tolist()
 
         # Match predictions with targets
         lsa_idx = [lsa(C[pred_sizes[i]:pred_sizes[i+1], tgt_sizes[i]:tgt_sizes[i+1]]) for i in range(batch_size)]
-        pred_idx = torch.cat([torch.as_tensor(pred_idx, dtype=torch.int64) for pred_idx, _ in lsa_idx])
-        tgt_idx = torch.cat([torch.as_tensor(tgt_idx, dtype=torch.int64) for _, tgt_idx in lsa_idx])
+        pred_idx = torch.cat([torch.as_tensor(pred_sizes[i]+j, dtype=torch.int64) for i, (j, _) in enumerate(lsa_idx)])
+        tgt_idx = torch.cat([torch.as_tensor(tgt_sizes[i]+j, dtype=torch.int64) for i, (_, j) in enumerate(lsa_idx)])
 
         return pred_idx, tgt_idx
 

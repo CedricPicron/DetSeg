@@ -58,10 +58,9 @@ class SetCriterion(nn.Module):
         Method computing the weighted cross-entropy classification loss.
 
         Args:
-            pred_dict (Dict): Dictionary containing following keys:
+            pred_dict (Dict): Dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
                 - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
@@ -107,15 +106,22 @@ class SetCriterion(nn.Module):
 
             # Perform accuracy analysis if requested
             if 'accuracy' in self.analysis_names:
-                correct_predictions = torch.eq(pred_classes, tgt_classes)
+                correct_predictions = torch.eq(pred_classes[pred_idx], tgt_classes[pred_idx])
                 accuracy = correct_predictions.sum() * (1/len(correct_predictions))
                 analysis_dict[f'accuracy_{layer_id}_{iter_id}'] = 100*accuracy
 
             # Perform cardinality analysis if requested
             if 'cardinality' in self.analysis_names:
-                pred_cardinality = (pred_classes != self.num_classes).sum()
-                tgt_cardinality = len(tgt_labels)
-                cardinality_error = torch.abs(pred_cardinality-tgt_cardinality)
+                pred_sizes = pred_dict['sizes']
+                tgt_sizes = tgt_dict['sizes']
+
+                batch_size = len(tgt_sizes)-1
+                pred_object = pred_classes != self.num_classes
+                pred_cardinalities = [pred_object[pred_sizes[i]:pred_sizes[i+1]].sum() for i in range(batch_size)]
+                pred_cardinalities = torch.tensor(pred_cardinalities, device=tgt_sizes.device)
+
+                tgt_cardinalities = tgt_sizes[1:] - tgt_sizes[:-1]
+                cardinality_error = F.l1_loss(pred_cardinalities.float(), tgt_cardinalities.float())
                 analysis_dict[f'card_error_{layer_id}_{iter_id}'] = cardinality_error
 
         return loss_dict, analysis_dict
@@ -125,10 +131,8 @@ class SetCriterion(nn.Module):
         Method computing the weighted L1 and GIoU bounding box losses.
 
         Args:
-            pred_dict (Dict): Dictionary containing following keys:
-                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
+            pred_dict (Dict): Dictionary containing at least following keys:
                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
                 - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
@@ -203,11 +207,11 @@ class SetCriterion(nn.Module):
         Forward method of the SetCriterion module. Performs the loss computation.
 
         Args:
-            pred_list (List): List of predictions, where each entry is a dict containing the key:
+            pred_list (List): List of predictions, where each entry is a dict containing at least following keys:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (sorted in ascending order) of shape [num_slots_total];
+                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions;
                 - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 

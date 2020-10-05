@@ -55,7 +55,7 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
         loss_dict = distributed.reduce_dict(loss_dict)
-        loss = sum(loss_dict.values()).item()
+        loss = loss.item()
 
         # Check whether loss if finite
         if not math.isfinite(loss):
@@ -108,7 +108,6 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
         # Get loss and analysis dictionaries
         pred_list = model(images)
         loss_dict, analysis_dict = criterion(pred_list, tgt_dict)
-        loss = sum(loss_dict.values())
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
