@@ -95,8 +95,8 @@ def get_parser():
     parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
 
     # Optimizer
-    parser.add_argument('--lr_backbone', default=0.0, type=float, help='backbone learning rate')
-    parser.add_argument('--lr_encoder', default=0.0, type=float, help='encoder learning rate')
+    parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
+    parser.add_argument('--lr_encoder', default=1e-4, type=float, help='encoder learning rate')
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
     parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
