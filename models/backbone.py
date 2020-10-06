@@ -65,7 +65,7 @@ class Backbone(nn.Module):
 
     def load_from_original_detr(self, state_dict):
         """
-        Loads backbone from the state_dict of an original Facebook DETR model.
+        Loads backbone from state_dict of an original Facebook DETR model.
 
         state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
         """

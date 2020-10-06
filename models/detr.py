@@ -25,9 +25,10 @@ class DETR(nn.Module):
         decoder (nn.Module): Module implementing the DETR decoder.
         class_head (nn.Linear): Module projecting decoder features to class logits.
         bbox_head (MLP): Module projecting decoder features to bounding box logits (i.e. values before sigmoid).
+        train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
     """
 
-    def __init__(self, backbone, position_encoder, encoder, decoder, num_classes):
+    def __init__(self, backbone, position_encoder, encoder, decoder, num_classes, train_dict):
         """
         Initializes the DETR module.
 
@@ -38,19 +39,25 @@ class DETR(nn.Module):
             encoder (nn.Module): Module implementing the DETR encoder.
             decoder (nn.Module): Module implementing the DETR decoder.
             num_classes (int): Number of object classes (without background class).
+            train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
         """
 
         super().__init__()
         self.backbone = backbone
-
         self.position_encoder = position_encoder
+
         self.projector = nn.Conv2d(backbone.num_channels, encoder.feat_dim, kernel_size=1)
+        self.projector.requires_grad_(train_dict['projector'])
 
         self.encoder = encoder
         self.decoder = decoder
 
         self.class_head = nn.Linear(decoder.feat_dim, num_classes+1)
+        self.class_head.requires_grad_(train_dict['class_head'])
+
         self.bbox_head = MLP(decoder.feat_dim, decoder.feat_dim, 4, 3)
+        self.bbox_head.requires_grad_(train_dict['bbox_head'])
+        self.train_dict = train_dict
 
     def load_from_original_detr(self):
         """
@@ -62,14 +69,15 @@ class DETR(nn.Module):
         is_global_decoder = isinstance(self.decoder, GlobalDecoder)
 
         self.backbone.load_from_original_detr(state_dict) if not self.backbone.trained else None
-        self.load_projector_from_original_detr(state_dict) if not self.backbone.trained else None
+        self.load_projector_from_original_detr(state_dict) if not self.train_dict['projector'] else None
         self.encoder.load_from_original_detr(state_dict) if not self.encoder.trained else None
         self.decoder.load_from_original_detr(state_dict) if not self.decoder.trained and is_global_decoder else None
-        self.load_heads_from_original_detr(state_dict) if not self.decoder.trained and is_global_decoder else None
+        self.load_class_head_from_original_detr(state_dict) if not self.train_dict['class_head'] else None
+        self.load_bbox_head_from_original_detr(state_dict) if not self.train_dict['bbox_head'] else None
 
     def load_projector_from_original_detr(self, state_dict):
         """
-        Loads projector from the state_dict of an original Facebook DETR model.
+        Loads projector from state_dict of an original Facebook DETR model.
 
         Args:
             state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
@@ -86,32 +94,42 @@ class DETR(nn.Module):
 
         self.projector.load_state_dict(projector_state_dict)
 
-    def load_heads_from_original_detr(self, state_dict):
+    def load_class_head_from_original_detr(self, state_dict):
         """
-        Loads classification and bounding box heads from the state_dict of an original Facebook DETR model.
+        Loads classification head from state_dict of an original Facebook DETR model.
 
         Args:
             state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
         """
 
         class_head_identifier = 'class_embed.'
-        class_identifier_length = len(class_head_identifier)
+        identifier_length = len(class_head_identifier)
         class_head_state_dict = OrderedDict()
-
-        bbox_head_identifier = 'bbox_embed.'
-        bbox_identifier_length = len(bbox_head_identifier)
-        bbox_head_state_dict = OrderedDict()
 
         for original_name, state in state_dict.items():
             if class_head_identifier in original_name:
-                new_name = original_name[class_identifier_length:]
+                new_name = original_name[identifier_length:]
                 class_head_state_dict[new_name] = state
 
-            elif bbox_head_identifier in original_name:
-                new_name = original_name[bbox_identifier_length:]
+        self.class_head.load_state_dict(class_head_state_dict)
+
+    def load_bbox_head_from_original_detr(self, state_dict):
+        """
+        Loads bounding box head from state_dict of an original Facebook DETR model.
+
+        Args:
+            state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
+        """
+
+        bbox_head_identifier = 'bbox_embed.'
+        identifier_length = len(bbox_head_identifier)
+        bbox_head_state_dict = OrderedDict()
+
+        for original_name, state in state_dict.items():
+            if bbox_head_identifier in original_name:
+                new_name = original_name[identifier_length:]
                 bbox_head_state_dict[new_name] = state
 
-        self.class_head.load_state_dict(class_head_state_dict)
         self.bbox_head.load_state_dict(bbox_head_state_dict)
 
     @staticmethod
@@ -204,6 +222,12 @@ def build_detr(args):
     position_encoder = build_position_encoder(args)
     encoder = build_encoder(args)
     decoder = build_decoder(args)
-    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes)
+
+    train_projector = args.lr_projector > 0
+    train_class_head = args.lr_class_head > 0
+    train_bbox_head = args.lr_bbox_head > 0
+
+    train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
+    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes, train_dict)
 
     return detr

@@ -71,8 +71,11 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
     train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
     train_stats['lr_backbone'] = optimizer.param_groups[0]['lr']
-    train_stats['lr_encoder'] = optimizer.param_groups[1]['lr']
-    train_stats['lr_decoder'] = optimizer.param_groups[2]['lr']
+    train_stats['lr_projector'] = optimizer.param_groups[1]['lr']
+    train_stats['lr_encoder'] = optimizer.param_groups[2]['lr']
+    train_stats['lr_decoder'] = optimizer.param_groups[3]['lr']
+    train_stats['lr_class_head'] = optimizer.param_groups[4]['lr']
+    train_stats['lr_bbox_head'] = optimizer.param_groups[5]['lr']
 
     return train_stats
 

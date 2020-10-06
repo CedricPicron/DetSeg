@@ -40,7 +40,7 @@ class Encoder(nn.Module):
 
     def load_from_original_detr(self, state_dict):
         """
-        Loads encoder from the state_dict of an original Facebook DETR model.
+        Loads encoder from state_dict of an original Facebook DETR model.
 
         state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
         """

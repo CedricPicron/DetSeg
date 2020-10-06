@@ -96,8 +96,11 @@ def get_parser():
 
     # Optimizer
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
+    parser.add_argument('--lr_projector', default=1e-4, type=float, help='projector learning rate')
     parser.add_argument('--lr_encoder', default=1e-4, type=float, help='encoder learning rate')
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
+    parser.add_argument('--lr_class_head', default=1e-4, type=float, help='classification head learning rate')
+    parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='bounding box head learning rate')
     parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
 
@@ -169,13 +172,17 @@ def main(args):
         return
 
     # Get training optimizer, scheduler and start epoch
-    params = model.named_parameters()
-    backbone_dict = {'params': [p for n, p in params if 'backbone' in n and p.requires_grad], 'lr': args.lr_backbone}
-    encoder_dict = {'params': [p for n, p in params if 'encoder' in n and p.requires_grad], 'lr': args.lr_encoder}
-    decoder_dict = {'params': [p for n, p in params if 'decoder' in n and p.requires_grad], 'lr': args.lr_decoder}
-    param_dicts = [backbone_dict, encoder_dict, decoder_dict]
+    param_families = ['backbone', 'projector', 'encoder', 'decoder', 'class_head', 'bbox_head']
+    param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
-    optimizer = torch.optim.AdamW(param_dicts, weight_decay=args.weight_decay)
+    for param_name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            for family_name in param_families:
+                if family_name in param_name:
+                    param_dicts[family_name]['params'].append(parameter)
+                    break
+
+    optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
     start_epoch = 1
 
