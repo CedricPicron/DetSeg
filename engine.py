@@ -69,7 +69,10 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
     # Get epoch training statistics
     metric_logger.synchronize_between_processes()
     train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    train_stats['lr'] = optimizer.param_groups[0]['lr']
+
+    train_stats['lr_backbone'] = optimizer.param_groups[0]['lr']
+    train_stats['lr_encoder'] = optimizer.param_groups[1]['lr']
+    train_stats['lr_decoder'] = optimizer.param_groups[2]['lr']
 
     return train_stats
 
