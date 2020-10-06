@@ -184,7 +184,7 @@ class DETR(nn.Module):
         iters = self.decoder.num_iterations
         pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
         [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
-        [pred_dict.update({'layer_id': num_layers-i, 'iter_id': i//iters+1}) for i, pred_dict in enumerate(pred_list)]
+        [pred_dict.update({'layer_id': num_layers-i, 'iter_id': i % iters+1}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list
 
