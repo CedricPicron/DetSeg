@@ -1,4 +1,5 @@
 **/__pycache__/**
+analysis/*
 condor/*
 datasets/coco/annotations
 datasets/coco/images
