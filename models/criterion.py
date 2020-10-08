@@ -62,7 +62,6 @@ class SetCriterion(nn.Module):
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
-                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
@@ -93,8 +92,7 @@ class SetCriterion(nn.Module):
 
         # Place weighted cross-entropy in loss dictionary
         layer_id = pred_dict['layer_id']
-        iter_id = pred_dict['iter_id']
-        loss_dict = {f'loss_class_{layer_id}_{iter_id}': self.weight_dict['class']*loss_class}
+        loss_dict = {f'loss_class_{layer_id}': self.weight_dict['class']*loss_class}
 
         # Perform classification related analyses
         with torch.no_grad():
@@ -108,7 +106,7 @@ class SetCriterion(nn.Module):
             if 'accuracy' in self.analysis_names:
                 correct_predictions = torch.eq(pred_classes[pred_idx], tgt_classes[pred_idx])
                 accuracy = correct_predictions.sum() * (1/len(correct_predictions))
-                analysis_dict[f'accuracy_{layer_id}_{iter_id}'] = 100*accuracy
+                analysis_dict[f'accuracy_{layer_id}'] = 100*accuracy
 
             # Perform cardinality analysis if requested
             if 'cardinality' in self.analysis_names:
@@ -122,7 +120,7 @@ class SetCriterion(nn.Module):
 
                 tgt_cardinalities = tgt_sizes[1:] - tgt_sizes[:-1]
                 cardinality_error = F.l1_loss(pred_cardinalities.float(), tgt_cardinalities.float())
-                analysis_dict[f'card_error_{layer_id}_{iter_id}'] = cardinality_error
+                analysis_dict[f'card_error_{layer_id}'] = cardinality_error
 
         return loss_dict, analysis_dict
 
@@ -134,7 +132,6 @@ class SetCriterion(nn.Module):
             pred_dict (Dict): Dictionary containing at least following keys:
                 - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
-                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
@@ -165,9 +162,8 @@ class SetCriterion(nn.Module):
         # Place weighted bounding box losses in loss dictionary
         loss_dict = {}
         layer_id = pred_dict['layer_id']
-        iter_id = pred_dict['iter_id']
-        loss_dict[f'loss_l1_{layer_id}_{iter_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
-        loss_dict[f'loss_giou_{layer_id}_{iter_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
+        loss_dict[f'loss_l1_{layer_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
+        loss_dict[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
 
         # Perform bounding box related analyses
         with torch.no_grad():
@@ -212,8 +208,7 @@ class SetCriterion(nn.Module):
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
-                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
@@ -229,7 +224,7 @@ class SetCriterion(nn.Module):
         full_loss_dict = {}
         full_analysis_dict = {}
 
-        for layer_id, pred_dict in enumerate(pred_list):
+        for pred_dict in pred_list:
             match_idx = self.matcher(pred_dict, tgt_dict)
             num_boxes = self.get_num_boxes(tgt_dict)
 

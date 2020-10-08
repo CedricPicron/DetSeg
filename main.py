@@ -64,20 +64,21 @@ def get_parser():
     # ** Decoder
     parser.add_argument('--decoder_type', default='sample', choices=['global', 'sample'], help='decoder type')
     parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
-    parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
 
     # *** Global decoder
     parser.add_argument('--num_slots', default=100, type=int, help='number of object slots per image')
 
     # *** Sample decoder
     parser.add_argument('--num_init_slots', default=64, type=int, help='number of initial object slots per image')
+    parser.add_argument('--no_curio_sharing', action='store_true', help='do not share curiosity kernel between layers')
+
+    # *** Sample decoder layer
+    parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
+    parser.add_argument('--iter_type', default='outside', type=str, choices=['inside', 'outside'], help='iter type')
     parser.add_argument('--samples_per_slot', default=16, type=int, help='number of features sampled per slot')
-    parser.add_argument('--coverage_ratio', default=0.1, type=float, help='ratio of coverage samples')
+    parser.add_argument('--coverage_ratio', default=0.5, type=float, help='ratio of coverage samples')
     parser.add_argument('--hard_weights', action='store_true', help='use hard weights during forward method')
     parser.add_argument('--seg_head_dim', default=32, type=int, help='projected dimension in segmentation heads')
-    parser.add_argument('--curio_weight_obj', default=1.0, type=float, help='curiosity weight for object features')
-    parser.add_argument('--curio_weight_edge', default=2.0, type=float, help='curiosity weight for edge features')
-    parser.add_argument('--curio_weight_nobj', default=-1.0, type=float, help='curiosity weight for no-obj. features')
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
 
     # Criterion

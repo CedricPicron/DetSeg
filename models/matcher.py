@@ -66,7 +66,7 @@ class HungarianMatcher(nn.Module):
         """
 
         # Compute class probablities of predictions
-        pred_prob = pred_dict['logits'].softmax(-1)
+        pred_prob = pred_dict['logits'].softmax(dim=-1)
 
         # Some renaming for code readability
         pred_boxes = pred_dict['boxes']

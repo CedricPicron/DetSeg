@@ -34,7 +34,7 @@ class SinePositionEncoder(nn.Module):
         super().__init__()
 
         if scale is not None and normalize is False:
-            raise ValueError("normalize should be True if scale is passed")
+            raise ValueError("Normalize should be True if scale is passed.")
 
         self.temperature = temperature
         self.normalize = normalize

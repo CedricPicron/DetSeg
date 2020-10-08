@@ -176,8 +176,7 @@ class DETR(nn.Module):
                                        regions, of shape [num_slots_total, 4];
                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
-                - iter_id (int): integer corresponding to the iteration of the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
             The list size is [1] or [num_decoder_layers*num_decoder_iterations] depending on args.aux_loss.
         """
@@ -198,11 +197,9 @@ class DETR(nn.Module):
         class_logits = self.class_head(slots)
         bbox_coord = self.bbox_head(slots).sigmoid()
 
-        num_layers = self.decoder.num_layers
-        iters = self.decoder.num_iterations
         pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
         [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
-        [pred_dict.update({'layer_id': num_layers-i, 'iter_id': i % iters+1}) for i, pred_dict in enumerate(pred_list)]
+        [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list
 
