@@ -66,7 +66,7 @@ class HungarianMatcher(nn.Module):
         """
 
         # Compute class probablities of predictions
-        pred_prob = pred_dict['logits'].softmax(dim=-1)
+        pred_probs = pred_dict['logits'].softmax(dim=-1)
 
         # Some renaming for code readability
         pred_boxes = pred_dict['boxes']
@@ -75,7 +75,7 @@ class HungarianMatcher(nn.Module):
 
         # Compute the classification cost. Contrary to the criterion loss, we don't use the NLL, but approximate it
         # by 1 - probability[target class]. The 1 is omitted, as the constant doesn't change the matching.
-        cost_class = -pred_prob[:, tgt_labels]
+        cost_class = -pred_probs[:, tgt_labels]
 
         # Compute the L1 cost between boxes
         cost_l1 = torch.cdist(pred_boxes, tgt_boxes, p=1)

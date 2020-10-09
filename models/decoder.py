@@ -329,13 +329,13 @@ class SampleDecoder(nn.Module):
         slots = pos_encodings[flat_pos_idx, batch_idx, :].unsqueeze(0)
 
         # Initialize segmentation maps
-        seg_maps = torch.zeros(num_slots_total, 2, H*W, device=device)
+        seg_maps = torch.full((num_slots_total, 2, H*W), 0.5, device=device, dtype=torch.float32)
 
         # Initialize curiosity maps
         height_vector = torch.arange(-H+1, H, device=device, dtype=torch.int64)
         width_vector = torch.arange(-W+1, W, device=device, dtype=torch.int64)
         xy_grid = torch.stack(torch.meshgrid(height_vector, width_vector), dim=0)
-        gauss_kernel = torch.exp(-torch.norm(xy_grid.to(dtype=torch.float), p=2, dim=0)/4.0)
+        gauss_kernel = torch.exp(-torch.norm(xy_grid.to(dtype=torch.float32), p=2, dim=0)/4.0)
 
         curio_maps = torch.zeros(num_slots_total, 3*H, 3*W, device=device)
         slot_idx = torch.arange(num_slots_total)[:, None, None]
