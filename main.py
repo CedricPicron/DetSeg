@@ -75,11 +75,11 @@ def get_parser():
     # *** Sample decoder layer
     parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
     parser.add_argument('--iter_type', default='outside', type=str, choices=['inside', 'outside'], help='iter type')
-    parser.add_argument('--samples_per_slot', default=16, type=int, help='number of features sampled per slot')
-    parser.add_argument('--coverage_ratio', default=0.5, type=float, help='ratio of coverage samples')
-    parser.add_argument('--hard_weights', action='store_true', help='use hard weights during forward method')
-    parser.add_argument('--seg_head_dim', default=32, type=int, help='projected dimension in segmentation heads')
+    parser.add_argument('--num_pos_samples', default=16, type=int, help='number of positive features sampled per slot')
+    parser.add_argument('--num_neg_samples', default=16, type=int, help='number of negative features sampled per slot')
+    parser.add_argument('--sample_type', default='after', type=str, choices=['before', 'after'], help='sample type')
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
+    parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
 
     # Criterion
     parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')

@@ -51,3 +51,5 @@ Some ideas:
        avoid unnecessary computation in the matcher, where every prediction is matched with
        every target from all batch entries, instead of only with targets from the concerned
        batch entry.
+    8. Note that the current curiosity mechanism is purely geometrical given the segmentation
+       map. One idea would be to extend this to more content-based curiosity.
