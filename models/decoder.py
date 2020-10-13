@@ -89,9 +89,10 @@ class GlobalDecoder(nn.Module):
             feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
             pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
-        Returns:
-            slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Slot batch indices (in ascending order) of shape [num_pred_sets, num_slots_total].
+       Returns:
+            output_dict (Dict): Dictionary containing following keys:
+                slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
+                batch_idx (IntTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
         """
 
         batch_size = feature_masks.shape[0]
@@ -114,8 +115,9 @@ class GlobalDecoder(nn.Module):
 
         batch_idx = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
         batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
+        output_dict = {'slots': slots, 'batch_idx': batch_idx}
 
-        return slots, batch_idx, None
+        return output_dict
 
 
 class GlobalDecoderLayer(nn.Module):
@@ -301,13 +303,14 @@ class SampleDecoder(nn.Module):
 
         return layers
 
-    def forward_init(self, feature_masks, pos_encodings, mask_fill=-1e6):
+    def forward_init(self, feature_masks, pos_encodings, mask_fill=-1):
         """
         Initializes slots, segmentation/curiosity maps and other useful stuff.
 
         Args:
             feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
             pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+            mask_fill (float): Initial curiosity map values at masked entries before layer normalization.
 
         Returns:
             slots (FloatTensor): Initial slots of shape [1, num_slots_total, feat_dim].
@@ -329,7 +332,7 @@ class SampleDecoder(nn.Module):
         slots = pos_encodings[flat_pos_idx, batch_idx, :].unsqueeze(0)
 
         # Initialize segmentation maps
-        seg_maps = torch.full((num_slots_total, H, W), 0.5, device=device, dtype=torch.float32)
+        seg_maps = torch.zeros(num_slots_total, H, W, device=device, dtype=torch.float32)
 
         # Initialize curiosity maps
         height_vector = torch.arange(-H+1, H, device=device, dtype=torch.int64)
@@ -344,6 +347,7 @@ class SampleDecoder(nn.Module):
         curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+H, pos_idx[1, :]+xy_grid[1]+W] = gauss_kernel
         curio_maps = curio_maps[:, H:2*H, W:2*W].contiguous()
         curio_maps.masked_fill_(feature_masks[batch_idx], mask_fill)
+        curio_maps = F.layer_norm(curio_maps, [H, W])
 
         # Compute maximum masked entries of mask from feature_masks
         max_mask_entries = torch.max(torch.sum(feature_masks.view(batch_size, H*W), dim=1)).item()
@@ -360,19 +364,25 @@ class SampleDecoder(nn.Module):
             pos (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
 
         Returns:
-            slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Slot batch indices (in ascending order) of shape [num_pred_sets, num_slots_total].
-            seg_maps (FloatTensor): Segmentation maps at last decoder layer of shape [num_slots_total, H, W].
+            output_dict (Dict): Dictionary containing following keys:
+                slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
+                batch_idx (IntTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
+                seg_maps (FloatTensor): Segmentation maps at last decoder layer of shape [num_slots_total, H, W].
+                curio_losses (FloatTensor): Losses based on affinity/curiosity discrepancies of shape [num_layers].
         """
 
-        # Initialize slots, segmentation/curiosity maps and other useful stuff
+        # Some initialization
         slots, batch_idx, seg_maps, curio_maps, *args = self.forward_init(feature_masks, pos)
         slots_list = []
+        curio_loss_list = []
 
-        # Compute slots and segmentation maps
+        # Iterate over sample decoder layers
         for layer_id, layer in enumerate(self.layers):
-            slots, seg_maps, curio_maps = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+            outputs = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+            slots, seg_maps, curio_maps, curio_loss = outputs
+
             slots_list.append(slots) if self.return_all else None
+            curio_loss_list.append(curio_loss)
 
         # Add final slots to slots list if not already done
         if not self.return_all:
@@ -385,7 +395,13 @@ class SampleDecoder(nn.Module):
         slots = slots.transpose(1, 2).reshape(num_pred_sets, -1, self.feat_dim)
         batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
 
-        return slots, batch_idx, seg_maps
+        curio_loss_list.reverse()
+        curio_losses = torch.cat(curio_loss_list)
+
+        # Create output dictionary
+        output_dict = {'slots': slots, 'batch_idx': batch_idx, 'seg_maps': seg_maps, 'curio_losses': curio_losses}
+
+        return output_dict
 
 
 class SampleDecoderLayer(nn.Module):
@@ -442,13 +458,17 @@ class SampleDecoderLayer(nn.Module):
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
             seg_maps (FloatTensor): Updated segmentation maps of shape [num_slots_total, H, W].
+            curio_loss (FloatTensor): Loss based on discrepancies between affinities and curiosities of shape [1].
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
+
+        curio_loss_list = []
 
         if self.iteration_type == 'outside':
             for _ in range(self.num_iterations):
                 outputs = self.cross_attention(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
-                slots, seg_maps, curio_maps = outputs
+                slots, seg_maps, curio_loss, curio_maps = outputs
+                curio_loss_list.append(curio_loss)
 
                 slots, seg_maps, curio_maps = self.self_attention(slots, batch_idx, seg_maps, curio_maps)
                 slots = self.ffn(slots)
@@ -456,12 +476,15 @@ class SampleDecoderLayer(nn.Module):
         elif self.iteration_type == 'inside':
             for _ in range(self.num_iterations):
                 outputs = self.cross_attention(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
-                slots, seg_maps, curio_maps = outputs
+                slots, seg_maps, curio_loss, curio_maps = outputs
+                curio_loss_list.append(curio_loss)
 
             slots, seg_maps, curio_maps = self.self_attention(slots, batch_idx, seg_maps, curio_maps)
             slots = self.ffn(slots)
 
-        return slots, seg_maps, curio_maps
+        curio_loss = sum(curio_loss_list)/len(curio_loss_list)
+
+        return slots, seg_maps, curio_loss, curio_maps
 
 
 class SampleCrossAttention(nn.Module):
@@ -542,7 +565,8 @@ class SampleCrossAttention(nn.Module):
         self.mha_dropout = nn.Dropout(mha_dict['dropout'])
         self.mha_layer_norm = nn.LayerNorm(feat_dim)
 
-        # Initializing the curiosity update modules
+        # Initializing curiosity related attributes and modules
+        self.curio_loss_coef = curio_dict['loss_coeff']
         self.curio_kernel = nn.ConvTranspose2d(2, 1, curio_dict['kernel_size'], padding=1)
         self.curio_dropout = nn.Dropout(curio_dict['dropout'])
 
@@ -581,7 +605,7 @@ class SampleCrossAttention(nn.Module):
 
     def update_slots(self, slots, features, pos_encodings, feat_idx, batch_idx):
         """
-        Update object slots.
+        Update object slots through slot-feature attention.
 
         Args:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
@@ -592,7 +616,7 @@ class SampleCrossAttention(nn.Module):
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
-            affinities (FloatTensor): Slot-feature affinities of shape [num_samples, num_slots_total, num_heads].
+            norm_affinities (FloatTensor): Normalized slot-feature affinities of shape [num_samples, num_slots_total].
         """
 
         # Sample features if desired
@@ -650,60 +674,73 @@ class SampleCrossAttention(nn.Module):
         slots = slots + self.delta_dropout(attn_output)
         slots = self.layer_norm(slots)
 
-        # Post-process affinities
-        affinities = affinities.view(num_slots_total, self.num_heads, -1)
-        affinities = affinities.permute(2, 0, 1)
+        # Reshape and average affinities over attention heads
+        affinities = affinities.view(num_slots_total, self.num_heads, -1).permute(2, 0, 1)
+        affinities = torch.mean(affinities, dim=-1)
 
-        return slots, affinities
+        # Normalize affinities and detach
+        num_samples = affinities.shape[0]
+        norm_affinities = F.layer_norm(affinities.t(), [num_samples]).t()
+        norm_affinities = norm_affinities.detach()
 
-    @torch.no_grad()
-    def update_seg_maps(self, seg_maps, feat_idx, affinities, pos_x=0.9, neg_x=0.1):
+        return slots, norm_affinities
+
+    def update_seg_maps(self, seg_maps, feat_idx, norm_affinities):
         """
-        Update segmentation maps.
+        Update segmentation maps based on slot-feature affinities.
 
         Args:
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
             feat_idx (IntTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
-            affinities (FloatTensor): Slot-feature affinities of shape [num_samples, num_slots_total, num_heads].
-            pos_x (float): Segmentation probability given to position with affinity equal to mean positive affinity.
-            neg_x (float): Segmentation probability given to position with affinity equal to mean negative affinity.
+            norm_affinities (FloatTensor): Normalized slot-feature affinities of shape [num_samples, num_slots_total].
 
         Returns:
             seg_maps (FloatTensor): Updated segmentation maps of shape [num_slots_total, H, W].
         """
 
-        # Get positive and negative affinities (averaged over heads)
-        affinities = torch.mean(affinities, dim=-1)
-        pos_affinities = affinities[:self.num_pos_samples]
-        neg_affinities = affinities[self.num_pos_samples:]
-
-        # Compute mean positive and negative affinities
-        mean_pos_affinity = torch.mean(pos_affinities, dim=0)
-        mean_neg_affinity = torch.mean(neg_affinities, dim=0)
-
-        # Rescale affinities
-        slope = (mean_pos_affinity-mean_neg_affinity) / (pos_x-neg_x)
-        bias = mean_pos_affinity - slope*pos_x
-        affinities = (affinities-bias) / slope
-
-        # Compute segmentation probabilities
-        seg_probs = F.sigmoid(affinities)
-
         # Update segmentation maps at sampled positions
         num_slots_total, H, W = seg_maps.shape
         seg_maps = seg_maps.view(num_slots_total, H*W)
-        seg_maps[torch.arange(num_slots_total), feat_idx] = seg_probs
+        seg_maps[torch.arange(num_slots_total), feat_idx] = norm_affinities
         seg_maps = seg_maps.view(num_slots_total, H, W)
 
         return seg_maps
 
-    def update_curio_maps(self, curio_maps, feat_idx, seg_maps):
+    def get_curio_loss(self, feat_idx, norm_affinities, curio_maps):
         """
-        Update curiosity maps.
+        Compute loss based on discrepancies between attention affinities and curiosities.
+
+        Args:
+            feat_idx (IntTensor): Indices of sampled positions of shape [num_samples, num_slots_total].
+            norm_affinities (FloatTensor): Normalized slot-feature affinities of shape [num_samples, num_slots_total].
+            curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
+
+        Returns:
+            curio_loss (FloatTensor): Loss based on discrepancies between affinities and curiosities of shape [1].
+        """
+
+        # Get curiosities at the sampled positions
+        num_slots_total, H, W = curio_maps.shape
+        curio_maps = curio_maps.view(num_slots_total, H*W)
+        curiosities = curio_maps[torch.arange(num_slots_total), feat_idx]
+        curio_maps = curio_maps.view(num_slots_total, H, W)
+
+        # Normalize curiosities
+        num_samples = curiosities.shape[0]
+        norm_curiosities = F.layer_norm(curiosities.t(), [num_samples]).t()
+
+        # Compute weighted curiosity loss
+        curio_loss = F.l1_loss(norm_curiosities, norm_affinities)
+        curio_loss = self.curio_loss_coef * curio_loss
+
+        return curio_loss
+
+    def update_curio_maps(self, curio_maps, seg_maps):
+        """
+        Update curiosity maps based on segmentation maps.
 
         Args:
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
-            feat_idx (IntTensor): Indices of sampled positions of shape [num_samples, num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
 
         Returns:
@@ -741,15 +778,17 @@ class SampleCrossAttention(nn.Module):
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
             seg_maps (FloatTensor): Updated segmentation maps of shape [num_slots_total, H, W].
+            curio_loss (FloatTensor): Loss based on discrepancies between affinities and curiosities of shape [1].
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
         feat_idx = self.sample(features, pos, batch_idx, curio_maps, max_mask_entries)
-        slots, affinities = self.update_slots(slots, features, pos, feat_idx, batch_idx)
-        seg_maps = self.update_seg_maps(seg_maps, slots, affinities)
+        slots, norm_affinities = self.update_slots(slots, features, pos, feat_idx, batch_idx)
+        seg_maps = self.update_seg_maps(seg_maps, slots, norm_affinities)
+        curio_loss = self.get_curio_loss(feat_idx, norm_affinities, curio_maps)
         curio_maps = self.update_curio_maps(curio_maps, feat_idx, seg_maps)
 
-        return slots, seg_maps, curio_maps
+        return slots, seg_maps, curio_loss, curio_maps
 
 
 class SampleSelfAttention(nn.Module):
@@ -757,29 +796,42 @@ class SampleSelfAttention(nn.Module):
     Class implementing the SampleSelfAttention module.
 
     Attributes:
-        mha (nn.MultiheadAttention): Multi-head attention (MHA) module used for self-attention.
-        delta_dropout (nn.Dropout): Dropout module used after self-attention.
-        layer_norm (nn.LayerNorm): Layernorm module used after skip connection.
+        mha (nn.MultiheadAttention): Multi-head attention (MHA) module used for self-attention between slots.
+        delta_dropout (nn.Dropout): Dropout module applied on self-attention outputs.
+        layer_norm (nn.LayerNorm): Layernorm module applied on updated slots after skip connection.
+        seg_weight (FloatTensor): Weight coefficient of shape [1] scaling the magnitude of the segmentation updates.
+        seg_norm (FloatTensor): Coefficient of shape [1] rescaling the segmentation maps after added updates.
+        curio_weight (FloatTensor): Weight coefficient of shape [1] scaling the magnitude of the curiosity updates.
     """
 
-    def __init__(self, feat_dim, num_heads, dropout):
+    def __init__(self, feat_dim, mha_dict):
         """
-        Initializes the SelfAttention module.
+        Initializes the SampleSelfAttention module.
 
         Args:
             feat_dim (int): Feature dimension.
-            num_heads (int): Number of attention heads.
-            dropout (float): Dropout probability used throughout the module.
+            mha_dict (Dict): Dict containing parameters of the MultiheadAttention module:
+                - num_heads (int): number of attention heads;
+                - dropout (float): dropout probability used throughout the MultiheadAttention module.
         """
 
         super().__init__()
+        num_heads = mha_dict['num_heads']
+        dropout = mha_dict['dropout']
+
+        # Initializing slot update modules
         self.mha = nn.MultiheadAttention(feat_dim, num_heads, dropout=dropout)
         self.delta_dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(feat_dim)
 
+        # Initializing segmentation and curiosity update parameters
+        self.seg_weight = Parameter(torch.tensor([1.0]))
+        self.seg_norm = Parameter(torch.tensor([2.0]))
+        self.curio_weight = Parameter(torch.tensor([1.0]))
+
     def update_slots(self, slots, batch_idx):
         """
-        Update slots through self-attention.
+        Update object slots through self-attention.
 
         Args:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
@@ -787,30 +839,70 @@ class SampleSelfAttention(nn.Module):
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
+            attn_weights (FloatTensor): Slot-slot attention weights of shape [num_slots_total, num_slots_total].
         """
 
+        # Perform self-attention
         queries = keys = values = slots.transpose(0, 1)
         attn_mask = (batch_idx[:, None]-batch_idx[None, :]) != 0
-        delta_slots = self.mha(queries, keys, values, need_weights=False, attn_mask=attn_mask)[0]
+        delta_slots, attn_weights = self.mha(queries, keys, values, attn_mask=attn_mask)
 
+        # Update slots with self-attention output
         slots = slots + self.delta_dropout(delta_slots.transpose(0, 1))
         slots = self.layer_norm(slots)
 
-        return slots
+        # Post-process attention weights
+        attn_weights = attn_weights.squeeze(0)
+        attn_weights = attn_weights.detach()
 
-    def update_seg_maps(self, seg_maps, slots, batch_idx):
+        return slots, attn_weights
+
+    def update_seg_maps(self, seg_maps, attn_weights):
         """
-        Update segmentation maps.
+        Update segmentation maps based on slot-slot attention weights.
 
         Args:
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
-            slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
+            attn_weights (FloatTensor): Slot-slot attention weights of shape [num_slots_total, num_slots_total].
 
         Returns:
             seg_maps (FloatTensor): Updated segmentation maps of shape [num_slots_total, H, W].
         """
 
+        # Compute segmentation map changes
+        num_slots_total, H, W = seg_maps.shape
+        seg_maps = seg_maps.view(num_slots_total, H*W)
+        delta_seg = torch.matmul(attn_weights.t(), seg_maps)
+
+        # Update segmentation maps
+        seg_maps = (seg_maps + self.seg_weight*delta_seg) / self.seg_norm
+        seg_maps = seg_maps.view(num_slots_total, H, W)
+
         return seg_maps
+
+    def update_curio_maps(self, curio_maps, attn_weights):
+        """
+        Update curiosity maps based on slot-slots attention weights.
+
+        Args:
+            curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
+            attn_weights (FloatTensor): Slot-slot attention weights of shape [num_slots_total, num_slots_total].
+
+        Returns:
+            curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
+        """
+
+        # Compute curiosity map changes
+        num_slots_total, H, W = curio_maps.shape
+        curio_maps = curio_maps.view(num_slots_total, H*W)
+        delta_curio = torch.matmul(attn_weights.t(), curio_maps)
+
+        # Update curiosity maps
+        curio_maps = curio_maps + self.curio_weight*delta_curio
+        curio_maps = F.layer_norm(curio_maps, [H*W])
+        curio_maps = curio_maps.view(num_slots_total, H, W)
+
+        return curio_maps
 
     def forward(self, slots, batch_idx, seg_maps, curio_maps):
         """
@@ -828,9 +920,9 @@ class SampleSelfAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
-        slots = self.update_slots(slots, batch_idx)
-        # seg_maps = self.update_seg_maps(seg_maps, slots)
-        # curio_maps = self.update_curio_maps()
+        slots, attn_weights = self.update_slots(slots, batch_idx)
+        seg_maps = self.update_seg_maps(seg_maps, attn_weights)
+        curio_maps = self.update_curio_maps(curio_maps, attn_weights)
 
         return slots, seg_maps, curio_maps
 
@@ -847,17 +939,21 @@ class FFN(nn.Module):
         layer_norm (nn.LayerNorm): Layernorm module used after skip connection.
     """
 
-    def __init__(self, feat_dim, hidden_dim, dropout):
+    def __init__(self, feat_dim, ffn_dict):
         """
         Initializes the FFN module.
 
         Args:
             feat_dim (int): Feature dimension.
-            hidden_dim (int): Hidden space dimension.
-            dropout (float): Dropout probability used throughout the module.
+            ffn_dict (Dict): Dict containing following FFN parameters:
+                - hidden_dim (int): number of hidden dimensions in the FFN hidden layers;
+                - dropout (float): dropout probability used throughout the FFN module.
         """
 
         super().__init__()
+        hidden_dim = ffn_dict['hidden_dim']
+        dropout = ffn_dict['dropout']
+
         self.hidden_linear = nn.Linear(feat_dim, hidden_dim)
         self.delta_linear = nn.Linear(hidden_dim, feat_dim)
         self.hidden_dropout = nn.Dropout(dropout)
@@ -897,15 +993,18 @@ def build_decoder(args):
 
     decoder_dict = {'num_layers': args.num_decoder_layers, 'return_all': args.aux_loss, 'train': args.lr_decoder > 0}
     mha_dict = {'num_heads': args.num_heads, 'dropout': args.mha_dropout}
+    ffn_dict = {'hidden_dim': args.ffn_hidden_dim, 'dropout': args.ffn_dropout}
 
     if args.decoder_type == 'sample':
         sample_dict = {'num_pos_samples': args.num_pos_samples, 'num_neg_samples': args.num_neg_samples}
         sample_dict['sample_type'] = args.sample_type
+
         curio_dict = {'kernel_size': args.curio_kernel_size, 'dropout': args.curio_dropout}
+        curio_dict['loss_coef'] = args.curio_loss_coef
 
         cross_attention = SampleCrossAttention(args.feat_dim, sample_dict, mha_dict, curio_dict)
-        self_attention = SampleSelfAttention(args.feat_dim, args.num_heads, args.mha_dropout)
-        ffn = FFN(args.feat_dim, args.ffn_hidden_dim, args.ffn_dropout)
+        self_attention = SampleSelfAttention(args.feat_dim, mha_dict)
+        ffn = FFN(args.feat_dim, ffn_dict)
 
         iter_dict = {'num_iterations': args.num_decoder_iterations, 'type': args.iter_type}
         decoder_layer = SampleDecoderLayer(cross_attention, self_attention, ffn, iter_dict)
@@ -914,7 +1013,6 @@ def build_decoder(args):
         decoder = SampleDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_init_slots)
 
     elif args.decoder_type == 'global':
-        ffn_dict = {'hidden_dim': args.ffn_hidden_dim, 'dropout': args.ffn_dropout}
         decoder_layer = GlobalDecoderLayer(args.feat_dim, mha_dict, ffn_dict)
         decoder = GlobalDecoder(decoder_layer, decoder_dict, args.feat_dim, args.num_slots)
 

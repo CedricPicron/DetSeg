@@ -78,6 +78,7 @@ def get_parser():
     parser.add_argument('--num_pos_samples', default=16, type=int, help='number of positive features sampled per slot')
     parser.add_argument('--num_neg_samples', default=16, type=int, help='number of negative features sampled per slot')
     parser.add_argument('--sample_type', default='after', type=str, choices=['before', 'after'], help='sample type')
+    parser.add_argument('--curio_loss_coef', default=1, type=float, help='coefficient scaling the curiosity loss')
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
     parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
 

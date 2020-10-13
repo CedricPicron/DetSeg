@@ -176,9 +176,10 @@ class DETR(nn.Module):
                                        regions, of shape [num_slots_total, 4];
                 - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
+                - curio_loss (FloatTensor): optional curiosity based losses of shape [1] from a sample decoder.
 
-            The list size is [1] or [num_decoder_layers*num_decoder_iterations] depending on args.aux_loss.
+            The list size is [1] or [num_decoder_layers] depending on args.aux_loss.
         """
 
         masked_conv_features = self.backbone(images)[-1]
@@ -191,15 +192,22 @@ class DETR(nn.Module):
         pos_encodings = pos_encodings.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
 
         encoder_features = self.encoder(proj_features, feature_masks, pos_encodings)
-        slots, batch_idx, seg_maps = self.decoder(encoder_features, feature_masks, pos_encodings)
+        decoder_output_dict = self.decoder(encoder_features, feature_masks, pos_encodings)
+
+        batch_idx = decoder_output_dict['batch_idx']
         sizes = self.get_sizes(batch_idx, batch_size)
 
+        slots = decoder_output_dict['slots']
         class_logits = self.class_head(slots)
         bbox_coord = self.bbox_head(slots).sigmoid()
 
         pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
         [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
         [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
+
+        if 'curio_losses' in decoder_output_dict.keys():
+            curio_losses = decoder_output_dict['curio_losses']
+            [pred_dict.update({'curio_loss': curio_losses[i]}) for i, pred_dict in enumerate(pred_list)]
 
         return pred_list
 

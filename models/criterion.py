@@ -208,7 +208,8 @@ class SetCriterion(nn.Module):
                 - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
                                        regions, of shape [num_slots_total, 4];
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions.
+                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
+                - curio_loss (FloatTensor): optional curiosity based losses of shape [1] from a sample decoder.
 
             tgt_dict (Dict): Dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
@@ -232,6 +233,11 @@ class SetCriterion(nn.Module):
                 loss_dict, analysis_dict = loss_function(pred_dict, tgt_dict, match_idx, num_boxes)
                 full_loss_dict.update(loss_dict)
                 full_analysis_dict.update(analysis_dict)
+
+            if 'curio_loss' in pred_dict.keys():
+                curio_loss = pred_dict['curio_loss']
+                layer_id = pred_dict['layer_id']
+                full_loss_dict.update({f'loss_curio_{layer_id}': curio_loss})
 
         return full_loss_dict, full_analysis_dict
 
