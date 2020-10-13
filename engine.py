@@ -52,6 +52,10 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
         clip_grad_norm_(model.parameters(), max_grad_norm) if max_grad_norm > 0 else None
         optimizer.step()
 
+        for parameter_name, parameter in model.named_parameters():
+            if parameter.grad is None and parameter.requires_grad:
+                print(parameter_name)
+
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
         loss_dict = distributed.reduce_dict(loss_dict)

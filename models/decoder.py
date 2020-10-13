@@ -231,7 +231,8 @@ class SampleDecoder(nn.Module):
         num_layers (int): Number of concatenated decoder layers.
         return_all (bool): Whether to return all decoder predictions.
         trained (bool): Whether the sample decoder is trained or not.
-        layers (nn.ModuleList): List of sample decoder layers being concatenated.
+        curio_init_weight (FloatTensor): Module parameter of shape [1] scaling initial curiosity maps before layernorm.
+        layers (nn.ModuleList): List of sample decoder layers being concatenated with shared modules and parameters.
     """
 
     def __init__(self, decoder_layer, decoder_dict, feat_dim, num_init_slots):
@@ -244,7 +245,7 @@ class SampleDecoder(nn.Module):
                 - num_layers (int): number of concatenated decoder layers;
                 - return_all (bool): whether to return all decoder predictions;
                 - train (bool): whether decoder should be trained or not;
-                - no_curio_sharing: whether curiosity kernels should be shared between layers or not.
+                - no_curio_sharing: whether curiosity parameters should be shared between layers or not.
             feat_dim (int): Feature dimension used in the decoder.
             num_init_slots (int): Number of initial slots per image.
 
@@ -260,11 +261,13 @@ class SampleDecoder(nn.Module):
         self.return_all = decoder_dict['return_all']
         self.trained = decoder_dict['train']
 
+        self.curio_init_weight = Parameter(torch.tensor([1.0]))
         self.layers = self.build_layers(decoder_layer, decoder_dict['no_curio_sharing'])
         self.requires_grad_(self.trained)
 
         if decoder_layer.num_iterations == 1 and decoder_dict['no_curio_sharing']:
             self.layers[-1].cross_attention.curio_kernel.requires_grad_(False)
+            self.layers[-1].self_attention.curio_weight.requires_grad = False
 
         if self.trained and self.num_layers == 1 and decoder_layer.num_iterations == 1:
             raise ValueError("The number of layers and layer iterations cannot both equal one in training mode.")
@@ -273,31 +276,34 @@ class SampleDecoder(nn.Module):
         """
         Build layers of sample decoder module.
 
-        Some modules are shared between layers (segmentation modules), while some are not (MHA modules).
-        Whether or not curiosity kernels are shared, depends on the 'no_curio_sharing' input argument.
+        Some parameters are shared between layers (segmentation parameters), while some are not (MHA parameters).
+        Whether or not curiosity parameters are shared, depends on the 'no_curio_sharing' input argument.
 
         Args:
             decoder_layer (nn.Module): Sample decoder layer module to be concatenated.
-            no_curio_sharing (bool): Whether curiosity kernels should be shared between layers or not.
+            no_curio_sharing (bool): Whether curiosity parameters should be shared between layers or not.
 
         Returns:
-            layers (nn.ModuleList): List of sample decoder layers being concatenated.
+            layers (nn.ModuleList): List of sample decoder layers being concatenated with shared modules and parameters.
         """
 
         # Initialize module list
         layers = nn.ModuleList()
 
+        # Construct list of shared parameters identifiers
+        shared_parameters_identifiers = ['seg_']
+        shared_parameters_identifiers.append('curio_') if not no_curio_sharing else None
+
         # Construct layer per layer
         for layer_id in range(self.num_layers):
-            layer = copy.deepcopy(decoder_layer)
+            layer = copy.copy(decoder_layer)
 
-            # Share segmentation modules between layers
-            layer.cross_attention.slot_proj = decoder_layer.cross_attention.slot_proj
-            layer.cross_attention.feat_proj = decoder_layer.cross_attention.feat_proj
-
-            # Share curiosity modules between layers if desired
-            if not no_curio_sharing:
-                layer.cross_attention.curio_kernel = decoder_layer.cross_attention.curio_kernel
+            for (param_name, param), default_param in zip(layer.named_parameters(), decoder_layer.parameters()):
+                for shared_parameters_identifier in shared_parameters_identifiers:
+                    if shared_parameters_identifier in param_name:
+                        break
+                else:
+                    param = copy.deepcopy(default_param)  # noqa: F841
 
             layers.append(layer)
 
@@ -347,6 +353,7 @@ class SampleDecoder(nn.Module):
         curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+H, pos_idx[1, :]+xy_grid[1]+W] = gauss_kernel
         curio_maps = curio_maps[:, H:2*H, W:2*W].contiguous()
         curio_maps.masked_fill_(feature_masks[batch_idx], mask_fill)
+        curio_maps = self.curio_init_weight * curio_maps
         curio_maps = F.layer_norm(curio_maps, [H, W])
 
         # Compute maximum masked entries of mask from feature_masks
@@ -379,7 +386,7 @@ class SampleDecoder(nn.Module):
         # Iterate over sample decoder layers
         for layer_id, layer in enumerate(self.layers):
             outputs = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
-            slots, seg_maps, curio_maps, curio_loss = outputs
+            slots, seg_maps, curio_loss, curio_maps = outputs
 
             slots_list.append(slots) if self.return_all else None
             curio_loss_list.append(curio_loss)
@@ -505,9 +512,10 @@ class SampleCrossAttention(nn.Module):
         in_proj_bias (Parameter): Module parameter with the input projection bias of shape [3*feat_dim].
         out_proj (nn.Linear): Module performing the output projection during multi-head attention.
 
-        mha_delta_dropout (nn.Dropout): Dropout module used on multi-head attention output.
+        mha_dropout (nn.Dropout): Dropout module used on multi-head attention output.
         mha_layer_norm (nn.LayerNorm): Layernorm module used after multi-head attention skip connection.
 
+        curio_loss_coef (float): loss coefficient weighing the curiosity loss.
         curio_kernel (nn.ConvTranspose2d): Transposed convolution module spreading curiosity information.
         curio_dropout (nn.Dropout): Dropout module used during curiosity map update.
     """
@@ -528,7 +536,8 @@ class SampleCrossAttention(nn.Module):
                 - dropout (float): dropout probality used during the slots update.
             curio_dict (Dict): Dictionary containing parameters for the curiosity updates:
                 - kernel_size (int): size of curiosity kernel of transposed convolution;
-                - dropout (float): dropout probability used during the curiosity map update.
+                - dropout (float): dropout probability used during the curiosity map update;
+                - loss_coef (float): loss coefficient weighing the curiosity loss.
 
         Raises:
             ValueError: Raised when feature dimension is not divisible by the number of requested attention heads.
@@ -549,7 +558,7 @@ class SampleCrossAttention(nn.Module):
         self.dropout = mha_dict['dropout']
 
         # Check divisibility of feature dimension by head dimension
-        if self.head_dim * self.num_heads == feat_dim:
+        if self.head_dim * self.num_heads != feat_dim:
             raise ValueError(f"Feature dimension {feat_dim} must be divisible by number of heads {self.num_heads}.")
 
         # Initializing the attention input and output projections
@@ -566,9 +575,9 @@ class SampleCrossAttention(nn.Module):
         self.mha_layer_norm = nn.LayerNorm(feat_dim)
 
         # Initializing curiosity related attributes and modules
-        self.curio_loss_coef = curio_dict['loss_coeff']
         self.curio_kernel = nn.ConvTranspose2d(2, 1, curio_dict['kernel_size'], padding=1)
         self.curio_dropout = nn.Dropout(curio_dict['dropout'])
+        self.curio_loss_coef = curio_dict['loss_coef']
 
     def sample(self, features, curio_maps, max_mask_entries):
         """
@@ -671,8 +680,8 @@ class SampleCrossAttention(nn.Module):
         attn_output = self.out_proj(attn_output)
 
         # Use attention output to update slots
-        slots = slots + self.delta_dropout(attn_output)
-        slots = self.layer_norm(slots)
+        slots = slots + self.mha_dropout(attn_output)
+        slots = self.mha_layer_norm(slots)
 
         # Reshape and average affinities over attention heads
         affinities = affinities.view(num_slots_total, self.num_heads, -1).permute(2, 0, 1)
@@ -706,7 +715,7 @@ class SampleCrossAttention(nn.Module):
 
         return seg_maps
 
-    def get_curio_loss(self, feat_idx, norm_affinities, curio_maps):
+    def get_curio_loss(self, curio_maps, feat_idx, norm_affinities):
         """
         Compute loss based on discrepancies between attention affinities and curiosities.
 
@@ -732,6 +741,7 @@ class SampleCrossAttention(nn.Module):
         # Compute weighted curiosity loss
         curio_loss = F.l1_loss(norm_curiosities, norm_affinities)
         curio_loss = self.curio_loss_coef * curio_loss
+        curio_loss = curio_loss.unsqueeze(0)
 
         return curio_loss
 
@@ -782,11 +792,11 @@ class SampleCrossAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
-        feat_idx = self.sample(features, pos, batch_idx, curio_maps, max_mask_entries)
+        feat_idx = self.sample(features, curio_maps, max_mask_entries)
         slots, norm_affinities = self.update_slots(slots, features, pos, feat_idx, batch_idx)
-        seg_maps = self.update_seg_maps(seg_maps, slots, norm_affinities)
-        curio_loss = self.get_curio_loss(feat_idx, norm_affinities, curio_maps)
-        curio_maps = self.update_curio_maps(curio_maps, feat_idx, seg_maps)
+        seg_maps = self.update_seg_maps(seg_maps, feat_idx, norm_affinities)
+        curio_loss = self.get_curio_loss(curio_maps, feat_idx, norm_affinities)
+        curio_maps = self.update_curio_maps(curio_maps, seg_maps)
 
         return slots, seg_maps, curio_loss, curio_maps
 
@@ -891,6 +901,10 @@ class SampleSelfAttention(nn.Module):
         Returns:
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
+
+        # Update curiosity maps only if curiosity weight is learned
+        if not self.curio_weight.requires_grad:
+            return curio_maps
 
         # Compute curiosity map changes
         num_slots_total, H, W = curio_maps.shape
