@@ -233,6 +233,7 @@ class SampleDecoder(nn.Module):
         trained (bool): Whether the sample decoder is trained or not.
         curio_init_weight (FloatTensor): Module parameter of shape [1] scaling initial curiosity maps before layernorm.
         layers (nn.ModuleList): List of sample decoder layers being concatenated with shared modules and parameters.
+        shared_items (Dict): Dictionary containing modules and parameters shared across decoder layers.
     """
 
     def __init__(self, decoder_layer, decoder_dict, feat_dim, num_init_slots):
@@ -262,7 +263,8 @@ class SampleDecoder(nn.Module):
         self.trained = decoder_dict['train']
 
         self.curio_init_weight = Parameter(torch.tensor([1.0]))
-        self.layers = self.build_layers(decoder_layer, decoder_dict['no_curio_sharing'])
+        self.shared_items, decoder_layer = self.register_shared_items(decoder_layer, decoder_dict['no_curio_sharing'])
+        self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(self.num_layers)])
         self.requires_grad_(self.trained)
 
         if decoder_layer.num_iterations == 1 and decoder_dict['no_curio_sharing']:
@@ -272,42 +274,75 @@ class SampleDecoder(nn.Module):
         if self.trained and self.num_layers == 1 and decoder_layer.num_iterations == 1:
             raise ValueError("The number of layers and layer iterations cannot both equal one in training mode.")
 
-    def build_layers(self, decoder_layer, no_curio_sharing):
+    def register_shared_items(self, decoder_layer, no_curio_sharing):
         """
-        Build layers of sample decoder module.
+        Register shared modules and parameters between decoder layers of sample decoder module.
 
-        Some parameters are shared between layers (segmentation parameters), while some are not (MHA parameters).
-        Whether or not curiosity parameters are shared, depends on the 'no_curio_sharing' input argument.
+        Some modules/parameters are shared between layers (e.g. for segmentation), while some are not (e.g. for MHA).
+        Whether or not curiosity modules/parameters are shared, depends on the 'no_curio_sharing' input argument.
 
         Args:
-            decoder_layer (nn.Module): Sample decoder layer module to be concatenated.
+            decoder_layer (nn.Module): Original sample decoder layer module.
             no_curio_sharing (bool): Whether curiosity parameters should be shared between layers or not.
 
         Returns:
-            layers (nn.ModuleList): List of sample decoder layers being concatenated with shared modules and parameters.
+            shared_items (Dict): Dictionary containing modules and parameters shared across decoder layers.
+            decoder_layer (nn.Module): Updated sample decoder module without shared modules and parameters.
         """
 
-        # Initialize module list
-        layers = nn.ModuleList()
+        # Initialize shared modules and parameters dictionary
+        shared_items = {}
 
-        # Construct list of shared parameters identifiers
-        shared_parameters_identifiers = ['seg_']
-        shared_parameters_identifiers.append('curio_') if not no_curio_sharing else None
+        # Construct list of shared item identifiers
+        shared_item_identifiers = ['seg_']
+        shared_item_identifiers.append('curio_') if not no_curio_sharing else None
 
-        # Construct layer per layer
-        for layer_id in range(self.num_layers):
-            layer = copy.copy(decoder_layer)
+        # Copy decoder layer such that attributes can be deleted from original
+        decoder_layer_copy = copy.deepcopy(decoder_layer)
 
-            for (param_name, param), default_param in zip(layer.named_parameters(), decoder_layer.parameters()):
-                for shared_parameters_identifier in shared_parameters_identifiers:
-                    if shared_parameters_identifier in param_name:
-                        break
-                else:
-                    param = copy.deepcopy(default_param)  # noqa: F841
+        # Register shared modules and delete these modules from decoder layer
+        shared_module_last_names = []
+        for module_name, module in decoder_layer_copy.named_modules():
+            for shared_item_identifier in shared_item_identifiers:
+                if shared_item_identifier in module_name:
+                    module_first_name = 'cross' if 'cross' in module_name else 'self'
+                    module_last_name = module_name.split('.')[-1]
+                    shared_module_name = f'shared_{module_first_name}_{module_last_name}'
+                    shared_module_last_names.append(module_last_name)
+                    self.add_module(shared_module_name, copy.deepcopy(module))
 
-            layers.append(layer)
+                    shared_items_key = f'{module_first_name}_{module_last_name}'
+                    shared_items[shared_items_key] = getattr(self, shared_module_name)
 
-        return layers
+                    obj = decoder_layer
+                    attributes = module_name.split('.')
+                    for attribute in attributes[:-1]:
+                        obj = getattr(obj, attribute)
+                    delattr(obj, attributes[-1])
+
+        # Register shared parameters and delete these parameters from decoder layer
+        for param_name, param in decoder_layer_copy.named_parameters():
+            for shared_item_identifier in shared_item_identifiers:
+                if shared_item_identifier in param_name:
+                    for shared_module_last_name in shared_module_last_names:
+                        if shared_module_last_name in param_name:
+                            break
+                    else:
+                        param_first_name = 'cross' if 'cross' in param_name else 'self'
+                        param_last_name = param_name.split('.')[-1]
+                        shared_param_name = f'shared_{param_first_name}_{param_last_name}'
+                        self.register_parameter(shared_param_name, copy.deepcopy(param))
+
+                        shared_items_key = f'{param_first_name}_{param_last_name}'
+                        shared_items[shared_items_key] = getattr(self, shared_param_name)
+
+                        obj = decoder_layer
+                        attributes = param_name.split('.')
+                        for attribute in attributes[:-1]:
+                            obj = getattr(obj, attribute)
+                        delattr(obj, attributes[-1])
+
+        return shared_items, decoder_layer
 
     def forward_init(self, feature_masks, pos_encodings, mask_fill=-1):
         """
@@ -379,13 +414,13 @@ class SampleDecoder(nn.Module):
         """
 
         # Some initialization
-        slots, batch_idx, seg_maps, curio_maps, *args = self.forward_init(feature_masks, pos)
+        slots, batch_idx, seg_maps, curio_maps, max_mask_entries = self.forward_init(feature_masks, pos)
         slots_list = []
         curio_loss_list = []
 
         # Iterate over sample decoder layers
         for layer_id, layer in enumerate(self.layers):
-            outputs = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+            outputs = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, self.shared_items)
             slots, seg_maps, curio_loss, curio_maps = outputs
 
             slots_list.append(slots) if self.return_all else None
@@ -448,7 +483,7 @@ class SampleDecoderLayer(nn.Module):
         self.num_iterations = iter_dict['num_iterations']
         self.iteration_type = iter_dict['type']
 
-    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, *args):
+    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, shared_items):
         """
         Forward method of the SampleDecoderLayer module.
 
@@ -459,8 +494,8 @@ class SampleDecoderLayer(nn.Module):
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
-            args (List): List containing additional input arguments:
-                - max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
+            max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
+            shared_items (Dict): Dictionary containing modules and parameters shared across decoder layers.
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -469,26 +504,35 @@ class SampleDecoderLayer(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
+        # Some pre-processing
         curio_loss_list = []
+        cross_shared_items = {key: value for key, value in shared_items.items() if 'cross' in key}
+        self_shared_items = {key: value for key, value in shared_items.items() if 'self' in key}
 
+        # Perform cross-attenion, self-attention and FFN
         if self.iteration_type == 'outside':
             for _ in range(self.num_iterations):
-                outputs = self.cross_attention(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+                inputs = (features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
+                outputs = self.cross_attention(*inputs)
                 slots, seg_maps, curio_loss, curio_maps = outputs
                 curio_loss_list.append(curio_loss)
 
-                slots, seg_maps, curio_maps = self.self_attention(slots, batch_idx, seg_maps, curio_maps)
+                outputs = self.self_attention(slots, batch_idx, seg_maps, curio_maps, self_shared_items)
+                slots, seg_maps, curio_maps = outputs
                 slots = self.ffn(slots)
 
         elif self.iteration_type == 'inside':
             for _ in range(self.num_iterations):
-                outputs = self.cross_attention(features, pos, slots, batch_idx, seg_maps, curio_maps, *args)
+                inputs = (features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
+                outputs = self.cross_attention(*inputs)
                 slots, seg_maps, curio_loss, curio_maps = outputs
                 curio_loss_list.append(curio_loss)
 
-            slots, seg_maps, curio_maps = self.self_attention(slots, batch_idx, seg_maps, curio_maps)
+            outputs = self.self_attention(slots, batch_idx, seg_maps, curio_maps, self_shared_items)
+            slots, seg_maps, curio_maps = outputs
             slots = self.ffn(slots)
 
+        # Some post-processing
         curio_loss = sum(curio_loss_list)/len(curio_loss_list)
 
         return slots, seg_maps, curio_loss, curio_maps
@@ -578,6 +622,17 @@ class SampleCrossAttention(nn.Module):
         self.curio_kernel = nn.ConvTranspose2d(2, 1, curio_dict['kernel_size'], padding=1)
         self.curio_dropout = nn.Dropout(curio_dict['dropout'])
         self.curio_loss_coef = curio_dict['loss_coef']
+
+    def set_shared_items(self, cross_shared_items):
+        """
+        Set shared modules and parameters of module.
+
+        Args:
+            cross_shared_items (Dict): Dictionary containing cross-attention related shared modules and parameters.
+        """
+
+        prefix_length = len('cross_')
+        [setattr(self, key[prefix_length:], value) for key, value in cross_shared_items.items()]
 
     def sample(self, features, curio_maps, max_mask_entries):
         """
@@ -772,7 +827,7 @@ class SampleCrossAttention(nn.Module):
 
         return curio_maps
 
-    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries):
+    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items):
         """
         Forward method of SampleCrossAttention module.
 
@@ -784,6 +839,7 @@ class SampleCrossAttention(nn.Module):
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
+            cross_shared_items (Dict): Dictionary containing cross-attention related shared modules and parameters.
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -792,6 +848,7 @@ class SampleCrossAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
+        self.set_shared_items(cross_shared_items)
         feat_idx = self.sample(features, curio_maps, max_mask_entries)
         slots, norm_affinities = self.update_slots(slots, features, pos, feat_idx, batch_idx)
         seg_maps = self.update_seg_maps(seg_maps, feat_idx, norm_affinities)
@@ -838,6 +895,17 @@ class SampleSelfAttention(nn.Module):
         self.seg_weight = Parameter(torch.tensor([1.0]))
         self.seg_norm = Parameter(torch.tensor([2.0]))
         self.curio_weight = Parameter(torch.tensor([1.0]))
+
+    def set_shared_items(self, self_shared_items):
+        """
+        Set shared modules and parameters of module.
+
+        Args:
+            self_shared_items (Dict): Dictionary containing self-attention related shared modules and parameters.
+        """
+
+        prefix_length = len('self_')
+        [setattr(self, key[prefix_length:], value) for key, value in self_shared_items.items()]
 
     def update_slots(self, slots, batch_idx):
         """
@@ -918,7 +986,7 @@ class SampleSelfAttention(nn.Module):
 
         return curio_maps
 
-    def forward(self, slots, batch_idx, seg_maps, curio_maps):
+    def forward(self, slots, batch_idx, seg_maps, curio_maps, self_shared_items):
         """
         Forward method of SampleSelfAttention module.
 
@@ -927,6 +995,7 @@ class SampleSelfAttention(nn.Module):
             batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, H, W].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, H, W].
+            self_shared_items (Dict): Dictionary containing self-attention related shared modules and parameters.
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -934,6 +1003,7 @@ class SampleSelfAttention(nn.Module):
             curio_maps (FloatTensor): Updated curiosity maps of shape [num_slots_total, H, W].
         """
 
+        self.set_shared_items(self_shared_items)
         slots, attn_weights = self.update_slots(slots, batch_idx)
         seg_maps = self.update_seg_maps(seg_maps, attn_weights)
         curio_maps = self.update_curio_maps(curio_maps, attn_weights)
