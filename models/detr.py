@@ -59,6 +59,32 @@ class DETR(nn.Module):
         self.bbox_head.requires_grad_(train_dict['bbox_head'])
         self.train_dict = train_dict
 
+    def load_state_dict(self, state_dict):
+        """
+        Loads DETR module from state dictionary.
+
+        It removes shared parameter duplicates in the state dictionary if present.
+
+        Args:
+            state_dict (Dict): Dictionary containing the whole state of a DETR module.
+        """
+
+        # Identify shared parameters
+        shared_param_names = [name for key in state_dict.keys() for name in key.split('.') if 'shared' in name]
+
+        # Remove shared parameter duplicates
+        for shared_param_name in shared_param_names:
+            attn_prefix = shared_param_name.split('_')[1]
+            suffix = '_'.join(shared_param_name.split('_')[2:])
+            duplicate_identifier = f'{attn_prefix}_attention.{suffix}'
+
+            for param_name in list(state_dict.keys()).copy():
+                if duplicate_identifier in param_name:
+                    del state_dict[param_name]
+
+        # Load DETR module from resulting state dictionary
+        super().load_state_dict(state_dict)
+
     def load_from_original_detr(self):
         """
         Loads backbone, projector, encoder, global decoder and heads from an original Facebook DETR model if untrained.

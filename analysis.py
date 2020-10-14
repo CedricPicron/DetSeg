@@ -23,16 +23,15 @@ def analysis_hook(module, input, output):
     image_dir = Path(f"./analysis/{sample_id}/{layer_id}")
     image_dir.mkdir(parents=True, exist_ok=True)
 
-    _, seg_maps, curio_maps = output
-    num_slots, H, W = curio_maps.shape
-    seg_maps = seg_maps.view(num_slots, 2, H, W)
+    _, seg_maps, _, curio_maps = output
+    num_slots = seg_maps.shape[0]
 
-    for slot_id in range(1, num_slots):
-        seg_map = seg_maps[slot_id, 1].cpu().numpy()
+    for slot_id in range(num_slots):
+        seg_map = seg_maps[slot_id].cpu().numpy()
         curio_map = curio_maps[slot_id].cpu().numpy()
 
-        plt.imsave(image_dir / f"{slot_id}a.eps", seg_map)
-        plt.imsave(image_dir / f"{slot_id}b.eps", curio_map)
+        plt.imsave(image_dir / f"{slot_id+1}a.eps", seg_map)
+        plt.imsave(image_dir / f"{slot_id+1}b.eps", curio_map)
 
 
 # COCO classes
