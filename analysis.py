@@ -20,18 +20,27 @@ from utils.data import val_collate_fn
 def analysis_hook(module, input, output):
     sample_id = module.sample_id
     layer_id = module.layer_id
-    image_dir = Path(f"./analysis/{sample_id}/{layer_id}")
-    image_dir.mkdir(parents=True, exist_ok=True)
+    module_type = module.type
 
-    _, seg_maps, _, curio_maps = output
+    if module_type == 'cross':
+        _, seg_maps, _, curio_maps = output
+        module_identifier = 'c'
+    elif module_type == 'self':
+        _, seg_maps, curio_maps = output
+        module_identifier = 's'
+    else:
+        raise ValueError(f"Unknown module type '{module_type}' in hook function.")
+
     num_slots = seg_maps.shape[0]
+    image_dir = Path(f"./analysis/{sample_id}")
+    image_dir.mkdir(parents=True, exist_ok=True)
 
     for slot_id in range(num_slots):
         seg_map = seg_maps[slot_id].cpu().numpy()
         curio_map = curio_maps[slot_id].cpu().numpy()
 
-        plt.imsave(image_dir / f"{slot_id+1}a.eps", seg_map)
-        plt.imsave(image_dir / f"{slot_id+1}b.eps", curio_map)
+        plt.imsave(image_dir / f"{slot_id+1}_{layer_id}{module_identifier}a.eps", seg_map)
+        plt.imsave(image_dir / f"{slot_id+1}_{layer_id}{module_identifier}b.eps", curio_map)
 
 
 # COCO classes
@@ -150,17 +159,27 @@ model.load_state_dict(checkpoint['model'])
 # Set model in evaluation mode
 model.eval()
 
-# Register analysis hooks and add layer ids
+# Register analysis hooks and add layer ids and module types
 for layer_id, layer in enumerate(model.decoder.layers, 1):
-    layer.register_forward_hook(analysis_hook)
-    layer.layer_id = layer_id
+    layer.cross_attention.register_forward_hook(analysis_hook)
+    layer.self_attention.register_forward_hook(analysis_hook)
+
+    layer.cross_attention.layer_id = layer_id
+    layer.self_attention.layer_id = layer_id
+
+    layer.cross_attention.type = 'cross'
+    layer.self_attention.type = 'self'
 
 # Perform analysis on random validation samples
 with torch.no_grad():
     for sample_id, (image, tgt_dict, eval_dict) in enumerate(dataloader, 1):
 
+        # Add sample ids to hooked modules
+        for layer in model.decoder.layers:
+            setattr(layer.cross_attention, 'sample_id', sample_id)
+            setattr(layer.self_attention, 'sample_id', sample_id)
+
         # Compute model predictions
-        [setattr(layer, 'sample_id', sample_id) for layer in model.decoder.layers]
         pred_list = model(image.to(device))
 
         # Get probalities and boxes
