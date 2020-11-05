@@ -6,6 +6,7 @@ from torch.utils._benchmark import Timer
 
 from main import get_parser
 from models.backbone import build_backbone
+from models.bicore import build_bicore
 from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
@@ -14,7 +15,8 @@ from utils.data import nested_tensor_from_image_list
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'criterion', 'detr', 'detr_criterion', 'encoder', 'global_decoder', 'sample_decoder']
+model_choices = ['backbone', 'bicore', 'criterion', 'detr', 'detr_criterion', 'encoder', 'global_decoder']
+model_choices = [*model_choices, 'sample_decoder']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -33,12 +35,26 @@ if profiling_args.model == 'backbone':
 
     images = torch.randn(2, 3, 1024, 1024)
     images = nested_tensor_from_image_list(images).to('cuda')
-
     inputs = [images]
-    globals_dict = {'model': model, 'inputs': inputs}
 
+    globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = 'model(*inputs)'
     backward_stmt = 'model(*inputs)[-1].tensor.sum().backward()'
+
+elif profiling_args.model == 'bicore':
+    model = build_bicore(main_args).to('cuda')
+
+    feat_map2 = torch.randn(1, 256, 256, 32).to('cuda')
+    feat_map3 = torch.randn(1, 128, 128, 64).to('cuda')
+    feat_map4 = torch.randn(1, 64, 64, 128).to('cuda')
+    feat_map5 = torch.randn(1, 32, 32, 256).to('cuda')
+    feat_map6 = torch.randn(1, 16, 16, 512).to('cuda')
+    feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
+    inputs = [feat_maps]
+
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = 'model(*inputs)'
+    backward_stmt = 'model(*inputs).sum().backward()'
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 91

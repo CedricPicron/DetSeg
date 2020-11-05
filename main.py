@@ -82,6 +82,17 @@ def get_parser():
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
     parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
 
+    # * BiCore
+    parser.add_argument('--bicore_type', default='bi_attn_conv', type=str, help='type of BiCore module')
+    parser.add_argument('--min_resolution_id', default=2, type=int, help='highest resolution downsampling exponent')
+    parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
+    parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
+    parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
+    parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
+    parser.add_argument('--max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
+    parser.add_argument('--bicore_dropout', default=0.1, type=float, help='dropout value used with BiCore modules')
+    parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
+
     # Criterion
     parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')
 

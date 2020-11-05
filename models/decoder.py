@@ -7,8 +7,8 @@ import random
 
 import torch
 from torch import nn
-from torch.nn.parameter import Parameter
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 
 
 class GlobalDecoder(nn.Module):
