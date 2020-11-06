@@ -22,11 +22,13 @@ sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_
 # Argument parsing
 parser = argparse.ArgumentParser()
 parser.add_argument('--forward', action='store_true', help='whether to profile forward pass only')
+parser.add_argument('--main_args', nargs='*', help='comma-separted string of main arguments')
 parser.add_argument('--memory', action='store_true', help='whether to report memory usage')
 parser.add_argument('--model', default='sample_decoder', choices=model_choices, help='model type to be profiled')
 parser.add_argument('--sort_by', default='cuda_time', choices=sort_choices, help='metric to sort profiler table')
 profiling_args = parser.parse_args()
-main_args = get_parser().parse_args(args=[])
+profiling_args.main_args = profiling_args.main_args[0].split(',')[1:] if profiling_args.main_args is not None else []
+main_args = get_parser().parse_args(args=[*profiling_args.main_args])
 
 # Building the model to be profiled
 if profiling_args.model == 'backbone':
@@ -44,6 +46,8 @@ if profiling_args.model == 'backbone':
 elif profiling_args.model == 'bicore':
     model = build_bicore(main_args).to('cuda')
 
+    feat_map0 = torch.randn(1, 1024, 1024, 8).to('cuda')
+    feat_map1 = torch.randn(1, 512, 512, 16).to('cuda')
     feat_map2 = torch.randn(1, 256, 256, 32).to('cuda')
     feat_map3 = torch.randn(1, 128, 128, 64).to('cuda')
     feat_map4 = torch.randn(1, 64, 64, 128).to('cuda')
@@ -54,7 +58,7 @@ elif profiling_args.model == 'bicore':
 
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs).sum().backward()'
+    backward_stmt = 'model(*inputs)'
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 91
@@ -178,3 +182,6 @@ with profiler.profile(use_cuda=True, profile_memory=profiling_args.memory) as pr
 # Print profiling table and median timeit time
 print(prof.table(sort_by=profiling_args.sort_by, row_limit=100))
 print(f"Recorded timeit time: {t: .4f} ms")
+
+# Print max GPU memory usage
+print(f"Max GPU memory usage: {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
