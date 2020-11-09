@@ -43,7 +43,7 @@ class BiAttnConv(nn.Module):
             ffn_size_multiplier (int): Feature size multiplier used for FFN hidden layer feature sizes.
         """
 
-        # Intialization of default nn.Module
+        # Initialization of default nn.Module
         super().__init__()
 
         # Check inputs
@@ -250,6 +250,9 @@ def build_bicore(args):
 
     Returns:
         bicore (nn.Module): The specified BiCore module.
+
+    Raises:
+        ValueError: Error when unknown BiCore type was provided.
     """
 
     # Check command-line arguments
@@ -262,7 +265,7 @@ def build_bicore(args):
     feat_sizes = [min((args.base_feat_size * 2**i, args.max_feat_size)) for i in map_ids]
     num_heads_list = [min((args.base_num_heads * 2**i, args.max_num_heads)) for i in map_ids]
 
-    # Get BiCore type
+    # Build desired BiCore module
     if args.bicore_type == 'bi_attn_conv':
         bicore = BiAttnConv(feat_sizes, num_heads_list, args.bicore_dropout, args.ffn_size_multiplier)
     else:

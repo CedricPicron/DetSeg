@@ -154,7 +154,7 @@ class GlobalDecoderLayer(nn.Module):
                 - dropout (float): dropout probability used throughout the FFN module.
         """
 
-        # Intialization of default nn.Module
+        # Initialization of default nn.Module
         super().__init__()
 
         # Initialization of multi-head attention module for self-attention
@@ -587,7 +587,7 @@ class SampleCrossAttention(nn.Module):
             ValueError: Raised when feature dimension is not divisible by the number of requested attention heads.
         """
 
-        # Intialization of default nn.Module
+        # Initialization of default nn.Module
         super().__init__()
 
         # Attributes defining the feature sampling procedure
