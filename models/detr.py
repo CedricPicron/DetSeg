@@ -46,7 +46,7 @@ class DETR(nn.Module):
         self.backbone = backbone
         self.position_encoder = position_encoder
 
-        self.projector = nn.Conv2d(backbone.num_channels, encoder.feat_dim, kernel_size=1)
+        self.projector = nn.Conv2d(backbone.feat_sizes[-1], encoder.feat_dim, kernel_size=1)
         self.projector.requires_grad_(train_dict['projector'])
 
         self.encoder = encoder
@@ -208,8 +208,8 @@ class DETR(nn.Module):
             The list size is [1] or [num_decoder_layers] depending on args.aux_loss.
         """
 
-        masked_conv_features = self.backbone(images)[-1]
-        conv_features, feature_masks = masked_conv_features.decompose()
+        conv_features, feature_masks = self.backbone(images)
+        conv_features, feature_masks = (conv_features[-1], feature_masks[-1])
         proj_features = self.projector(conv_features)
         pos_encodings = self.position_encoder(proj_features, feature_masks)
 

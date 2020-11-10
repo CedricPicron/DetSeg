@@ -7,6 +7,7 @@ from torch.utils._benchmark import Timer
 from main import get_parser
 from models.backbone import build_backbone
 from models.bicore import build_bicore
+from models.bivinet import build_bivinet
 from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
@@ -16,8 +17,8 @@ from utils.data import nested_tensor_from_image_list
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'bicore', 'criterion', 'detr', 'detr_criterion', 'encoder', 'global_decoder']
-model_choices = [*model_choices, 'obj_head', 'sample_decoder']
+model_choices = ['backbone', 'bicore', 'bivinet_initial', 'bivinet_update', 'criterion', 'detr', 'detr_criterion', ]
+model_choices = [*model_choices, 'encoder', 'global_decoder', 'obj_head', 'sample_decoder']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -41,25 +42,73 @@ if profiling_args.model == 'backbone':
     inputs = [images]
 
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs)[-1].tensor.sum().backward()'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs)[0][-1].sum().backward()"
 
 elif profiling_args.model == 'bicore':
     model = build_bicore(main_args).to('cuda')
 
-    feat_map0 = torch.randn(1, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(1, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(1, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(1, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(1, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(1, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(1, 16, 16, 512).to('cuda')
+    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
+    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
+    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
+    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
+    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
+    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
     feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
     inputs = [feat_maps]
 
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs)'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
+
+elif profiling_args.model == 'bivinet_initial':
+    model = build_bivinet(main_args).to('cuda')
+
+    images = torch.randn(2, 3, 1024, 1024)
+    images = nested_tensor_from_image_list(images).to('cuda')
+
+    tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map2 = torch.randn(2, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map3 = torch.randn(2, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
+    tgt_dict = {'obj_maps': tgt_maps}
+
+    inputs = {'images': images, 'tgt_dict': tgt_dict}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[1]['obj_loss'].backward()"
+
+elif profiling_args.model == 'bivinet_update':
+    model = build_bivinet(main_args).to('cuda')
+
+    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
+    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
+    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
+    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
+    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
+    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
+
+    tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map2 = torch.randn(2, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map3 = torch.randn(2, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
+    tgt_dict = {'obj_maps': tgt_maps}
+
+    inputs = {'core_feat_maps': feat_maps, 'tgt_dict': tgt_dict}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[1]['obj_loss'].backward()"
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 91
@@ -81,10 +130,11 @@ elif profiling_args.model == 'criterion':
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     globals_dict = {'criterion': criterion, 'generate_pred_list': generate_pred_list, 'tgt_dict': tgt_dict}
-    forward_stmt = 'criterion(generate_pred_list(), tgt_dict)'
-    backward_stmt = 'torch.stack([v for v in criterion(generate_pred_list(), tgt_dict)[0].values()]).sum().backward()'
+    forward_stmt = "criterion(generate_pred_list(), tgt_dict)"
+    backward_stmt = "torch.stack([v for v in criterion(generate_pred_list(), tgt_dict)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'detr':
+    main_args.meta_arch = 'DETR'
     main_args.lr_backbone = 1e-5
     main_args.lr_decoder = 1e-4
     main_args.lr_encoder = 1e-4
@@ -97,10 +147,11 @@ elif profiling_args.model == 'detr':
     keys = ['logits', 'boxes']
     globals_dict = {'detr': detr, 'images': images, 'keys': keys}
 
-    forward_stmt = 'detr(images)'
-    backward_stmt = 'torch.cat([v for k, v in detr(images)[0].items() if k in keys], dim=1).sum().backward()'
+    forward_stmt = "detr(images)"
+    backward_stmt = "torch.cat([v for k, v in detr(images)[0].items() if k in keys], dim=1).sum().backward()"
 
 elif profiling_args.model == 'detr_criterion':
+    main_args.meta_arch = 'DETR'
     main_args.lr_backbone = 1e-5
     main_args.lr_decoder = 1e-4
     main_args.lr_encoder = 1e-4
@@ -119,8 +170,8 @@ elif profiling_args.model == 'detr_criterion':
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     globals_dict = {'criterion': criterion, 'detr': detr, 'images': images, 'tgt_dict': tgt_dict}
-    forward_stmt = 'criterion(detr(images), tgt_dict)'
-    backward_stmt = 'torch.stack([v for v in criterion(detr(images), tgt_dict)[0].values()]).sum().backward()'
+    forward_stmt = "criterion(detr(images), tgt_dict)"
+    backward_stmt = "torch.stack([v for v in criterion(detr(images), tgt_dict)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'encoder':
     main_args.lr_encoder = 1e-4
@@ -134,8 +185,8 @@ elif profiling_args.model == 'encoder':
     inputs = [features, feature_masks, pos_encodings]
     globals_dict = {'model': model, 'inputs': inputs}
 
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs).sum().backward()'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs).sum().backward()"
 
 elif profiling_args.model == 'global_decoder':
     main_args.decoder_type = 'global'
@@ -150,34 +201,35 @@ elif profiling_args.model == 'global_decoder':
     inputs = [features, feature_masks, pos_encodings]
     globals_dict = {'model': model, 'inputs': inputs}
 
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs)[0].sum().backward()'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs)['slots'].sum().backward()"
 
 elif profiling_args.model == 'obj_head':
     model = build_obj_head(main_args).to('cuda')
 
-    feat_map0 = torch.randn(1, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(1, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(1, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(1, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(1, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(1, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(1, 16, 16, 512).to('cuda')
+    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
+    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
+    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
+    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
+    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
+    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
     feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
 
-    tgt_map0 = torch.randn(1, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map1 = torch.randn(1, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map2 = torch.randn(1, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map3 = torch.randn(1, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map4 = torch.randn(1, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map5 = torch.randn(1, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map6 = torch.randn(1, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map2 = torch.randn(2, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map3 = torch.randn(2, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
+    tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
     tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
+    tgt_dict = {'obj_maps': tgt_maps}
 
-    inputs = [feat_maps, tgt_maps]
+    inputs = [feat_maps, tgt_dict]
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs).backward()'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs)[0]['obj_loss'].backward()"
 
 elif profiling_args.model == 'sample_decoder':
     main_args.decoder_type = 'sample'
@@ -192,8 +244,8 @@ elif profiling_args.model == 'sample_decoder':
     inputs = [features, feature_masks, pos_encodings]
     globals_dict = {'model': model, 'inputs': inputs}
 
-    forward_stmt = 'model(*inputs)'
-    backward_stmt = 'model(*inputs)[0].sum().backward()'
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs)['slots'].sum().backward()"
 
 # Select forward or backward statement
 stmt = forward_stmt if profiling_args.forward else backward_stmt

@@ -224,19 +224,23 @@ class BiAttnConv(nn.Module):
         zip_list = [feat_maps, self_attn_maps, top_down_attn_maps, bottom_up_attn_maps]
         zip_list = [*zip_list, self.attn_dropouts, self.attn_layernorms]
 
+        feat_maps = []
         for feat_map, attn_map1, attn_map2, attn_map3, dropout, layernorm in zip(*zip_list):
             delta_feat_map = attn_map1 + attn_map2 + attn_map3
             feat_map = feat_map + dropout(delta_feat_map)
             feat_map = layernorm(feat_map)
+            feat_maps.append(feat_map)
 
         # Update feature maps with feedforward network (FFN)
         zip_list = [feat_maps, self.ffn_in_projs, self.ffn_in_dropouts, self.ffn_out_projs]
         zip_list = [*zip_list, self.ffn_out_dropouts, self.ffn_layernorms]
 
+        feat_maps = []
         for feat_map, in_proj, in_dropout, out_proj, out_dropout, layernorm in zip(*zip_list):
             delta_feat_map = out_proj(in_dropout(F.relu(in_proj(feat_map))))
             feat_map = feat_map + out_dropout(delta_feat_map)
             feat_map = layernorm(feat_map)
+            feat_maps.append(feat_map)
 
         return feat_maps
 
@@ -255,18 +259,13 @@ def build_bicore(args):
         ValueError: Error when unknown BiCore type was provided.
     """
 
-    # Check command-line arguments
-    check = args.max_resolution_id > args.min_resolution_id
-    msg = "'--max_resolution_id' should be larger than '--min_resolution_id'"
-    assert check, msg
-
     # Get feature sizes and number of heads list
     map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
     feat_sizes = [min((args.base_feat_size * 2**i, args.max_feat_size)) for i in map_ids]
     num_heads_list = [min((args.base_num_heads * 2**i, args.max_num_heads)) for i in map_ids]
 
     # Build desired BiCore module
-    if args.bicore_type == 'bi_attn_conv':
+    if args.bicore_type == 'BiAttnConv':
         bicore = BiAttnConv(feat_sizes, num_heads_list, args.bicore_dropout, args.ffn_size_multiplier)
     else:
         raise ValueError(f"Unknown BiCore type '{args.bicore_type}' was provided.")

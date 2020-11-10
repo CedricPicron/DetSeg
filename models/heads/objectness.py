@@ -43,61 +43,68 @@ class ObjectnessHead(nn.Module):
         self.feat_map_size_correction = feat_map_size_correction
         self.beta = beta
 
-    def forward(self, feat_maps, tgt_maps=None):
+    def forward(self, feat_maps, tgt_dict=None):
         """
         Forward method of the ObjectnessHead module.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, H, W, feat_size].
-            tgt_maps (List): List of size [num_maps] with ground-truth objectness maps of shape [batch_size, H, W].
+            tgt_dict (Dict): Dictionary of targets with at least following key during training (None during testing):
+                - obj_maps (List): List of size [num_maps] with gt. objectness maps of shape [batch_size, H, W].
 
         Returns:
-            - Training only:
-                loss (FloatTensor): Tensor of shape [1] containing the weighted objectness loss.
+            * If tgt_dict is not None (i.e. during training and validation):
+                loss_dict (Dictionary): Dictionary with weighted objectness loss under key 'obj_loss'.
+                analysis_dict (Dictionary): Empty dictionary (no analyses corresponding to this head).
 
-            - Inference only:
-                pred_maps (List): List of size [num_maps] with predicted objectness maps of shape [batch_size, H, W].
+            * If tgt_dict is None (i.e. during testing):
+                pred_dict (Dict): Dictionary containing following key:
+                    - obj_maps (List): List with predicted objectness maps of shape [batch_size, H, W].
         """
 
         # Compute logit maps
         logit_maps = [proj(feat_map).squeeze(-1) for feat_map, proj in zip(feat_maps, self.projs)]
 
-        # Compute and return predicted objectness probability maps (inference only)
-        if not self.train:
-            pred_maps = [F.sigmoid(logit_map) for logit_map in logit_maps]
-            return pred_maps
+        # Compute and return dictionary with predicted objectness probability maps (testing only)
+        if tgt_dict is None:
+            pred_dict = {'obj_maps': [F.sigmoid(logit_map) for logit_map in logit_maps]}
+            return pred_dict
 
-        # Flatten logit and target maps and initialize losses tensor (training only)
+        # Flatten logit and target maps and initialize losses tensor (trainval only)
         logits = torch.cat([logit_map.flatten() for logit_map in logit_maps])
-        targets = torch.cat([tgt_map.flatten() for tgt_map in tgt_maps])
+        targets = torch.cat([tgt_map.flatten() for tgt_map in tgt_dict['obj_maps']])
         losses = torch.zeros_like(logits)
 
-        # Compute losses at no-object ground-truth positions (training only)
+        # Compute losses at no-object ground-truth positions (trainval only)
         no_obj_mask = targets == 0
         losses[no_obj_mask] = torch.log(1 + torch.exp(logits[no_obj_mask]))
 
-        # Compute losses at object ground-truth positions (trainin only)
+        # Compute losses at object ground-truth positions (trainval only)
         obj_mask = targets == 1
         losses[obj_mask] = torch.log(1 + torch.exp(-logits[obj_mask]))
 
-        # Compute losses at disputed ground-truth positions if desired (training only)
+        # Compute losses at disputed ground-truth positions if desired (trainval only)
         if self.with_disputed_loss:
             disputed = torch.bitwise_and(targets > 0 and targets < 1)
             losses[disputed] = F.smooth_l1_loss(logits[disputed]/4, targets[disputed]-0.5, beta=self.beta)
 
-        # Apply feature map size corrections to losses if desired (training only)
+        # Apply feature map size corrections to losses if desired (trainval only)
         if self.feat_map_size_correction:
-            map_sizes = [0, *[logit_map.shape[1] * logit_map.shape[2] for logit_map in logit_maps]]
-            indices = torch.cumsum(torch.tensor(map_sizes, device=logits.device), dim=0)
-            scales = [4**i for i in range(-len(logit_maps)+1, 1)]
-            losses = torch.cat([scale*losses[i0:i1] for i0, i1, scale in zip(indices[:-1], indices[1:], scales)])
+            map_sizes = [logit_map.shape[1] * logit_map.shape[2] for logit_map in logit_maps]
+            scales = [map_sizes[-1]/map_size for map_size in map_sizes]
+            indices = torch.cumsum(torch.tensor([0, *map_sizes], device=logits.device), dim=0)
+            losses = torch.cat([scale*losses[i0:i1] for scale, i0, i1 in zip(scales, indices[:-1], indices[1:])])
 
-        # Average and scale loss (training only)
+        # Average and scale loss (trainval only)
         batch_size = logit_maps[0].shape[0]
         loss = torch.sum(losses) / batch_size
         loss = self.loss_weight * loss
 
-        return loss
+        # Get loss and analysis dictionaries (trainval only)
+        loss_dict = {'obj_loss': loss}
+        analysis_dict = {}
+
+        return loss_dict, analysis_dict
 
 
 def build_obj_head(args):
@@ -113,11 +120,6 @@ def build_obj_head(args):
     Raises:
         ValueError: Error when unknown objectness head type was provided.
     """
-
-    # Check command-line arguments
-    check = args.max_resolution_id > args.min_resolution_id
-    msg = "'--max_resolution_id' should be larger than '--min_resolution_id'"
-    assert check, msg
 
     # Get feature sizes and number of heads list
     map_ids = range(args.min_resolution_id, args.max_resolution_id+1)

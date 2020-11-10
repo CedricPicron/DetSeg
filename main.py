@@ -39,11 +39,7 @@ def get_parser():
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
     parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
 
-    # Model
-    # * Backbone
-    parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
-    parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
-
+    # DETR
     # * Position encoding
     parser.add_argument('--position_encoding', default='sine', type=str, help='type of position encoding')
 
@@ -82,10 +78,19 @@ def get_parser():
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
     parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
 
-    # * BiCore
-    parser.add_argument('--bicore_type', default='bi_attn_conv', type=str, help='type of BiCore module')
+    # Meta-architecture
+    parser.add_argument('--meta_arch', default='BiViNet', choices=['BiViNet', 'DETR'], help='meta-architecture type')
+
+    # * Backbone
+    parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
+    parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
+
+    # BiViNet
     parser.add_argument('--min_resolution_id', default=2, type=int, help='highest resolution downsampling exponent')
     parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
+
+    # * BiCore
+    parser.add_argument('--bicore_type', default='BiAttnConv', type=str, help='type of BiCore module')
     parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
     parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
     parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')

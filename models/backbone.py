@@ -2,7 +2,6 @@
 Backbone modules and build function.
 """
 from collections import OrderedDict
-from typing import List
 
 import torch
 from torch import nn
@@ -10,9 +9,6 @@ import torch.nn.functional as F
 import torchvision
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
-
-from utils.data import NestedTensor
-from utils.distributed import is_main_process
 
 
 class FrozenBatchNorm2d (FrozenBatchNorm2d):
@@ -36,32 +32,41 @@ class Backbone(nn.Module):
 
     Attributes:
         body (IntermediateLayerGetter): Module computing the feature maps.
-        num_channels (int): Number of channels of last feature map.
-        trained (bool): Whether backbone is trained or not.
+        feat_sizes (List): List of size [num_maps] containing the feature size of each returned backbone feature map.
+        trained (bool): Bool indicating whether backbone is trained or not.
     """
 
-    def __init__(self, name: str, train_backbone: bool, dilation: bool):
+    def __init__(self, name, dilation, return_layers, train_backbone):
         """
         Initializes the Backbone module.
 
         Args:
             name (str): Name of backbone model to build (resnet only).
-            train_backbone (bool): Whether backbone should be trained or not.
-            dilation (bool): Whehter to use dilation in last layer or not.
+            dilation (bool): Bool indicating whether to use dilation in last layer or not.
+            return_layers (Dict): Dictionary mapping names of backbone layers that will be returned to new names.
+            train_backbone (bool): Bool indicating whether backbone should be trained or not.
         """
 
+        # Initialization of default nn.Module
         super().__init__()
-        backbone = getattr(torchvision.models, name)(replace_stride_with_dilation=[False, False, dilation],
-                                                     pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d)
 
+        # Load ImageNet pretrained backbone from torchvision
+        backbone_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'pretrained': True}
+        backbone_kwargs = {**backbone_kwargs, 'norm_layer': FrozenBatchNorm2d}
+        backbone = getattr(torchvision.models, name)(**backbone_kwargs)
+
+        # Determine which backbone parameters should be trained
+        self.trained = train_backbone
         for name, parameter in backbone.named_parameters():
             if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
                 parameter.requires_grad_(False)
 
-        return_layers = {'layer4': '0'}
+        # Get module performing backbone computations and returning intermediate layers
         self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
-        self.num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
-        self.trained = train_backbone
+
+        # Get feature sizes of different feature maps
+        default_feat_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
+        self.feat_sizes = default_feat_sizes[-len(return_layers):]
 
     def load_from_original_detr(self, state_dict):
         """
@@ -81,7 +86,7 @@ class Backbone(nn.Module):
 
         self.load_state_dict(backbone_state_dict)
 
-    def forward(self, images: NestedTensor) -> List[NestedTensor]:
+    def forward(self, images):
         """
         Forward method of Backbone module.
 
@@ -91,22 +96,18 @@ class Backbone(nn.Module):
                - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
         Returns:
-            out (List[NestedTensor]): List of feature maps, with each feature map a NestedTensor.
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, H, W].
+            masks (List): List of size [num_maps] with boolean masks of inactive pixels of shape [batch_size, H, W].
         """
 
-        conv_feature_maps = self.body(images.tensor)
+        # Compute backbone feature maps
+        feat_maps = list(self.body(images.tensor).values())
 
-        original_mask = images.mask
-        assert original_mask is not None, "No mask specified in NestedTensor images."
-        original_mask = original_mask[None].float()
+        # Compute masks of inactive pixels
+        mask = images.mask[None].float()
+        masks = [F.interpolate(mask, size=feat_map.shape[-2:]).to(torch.bool)[0] for feat_map in feat_maps]
 
-        out: List[NestedTensor] = []
-        for conv_feature_map in conv_feature_maps.values():
-            map_size = conv_feature_map.shape[-2:]
-            mask = F.interpolate(original_mask, size=map_size).to(torch.bool)[0]
-            out.append(NestedTensor(conv_feature_map, mask))
-
-        return out
+        return feat_maps, masks
 
 
 def build_backbone(args):
@@ -120,7 +121,26 @@ def build_backbone(args):
         backbone (Backbone): The specified Backbone module.
     """
 
+    # Find out whether backbone should be trained or not
     train_backbone = args.lr_backbone > 0
-    backbone = Backbone(args.backbone, train_backbone, args.dilation)
+
+    # Build desired backbone module
+    if args.meta_arch == 'BiViNet':
+        assert_msg = f"only '--min_resolution >= 2' ({args.min_resolution_id} given) is currently supported"
+        assert args.min_resolution_id >= 2, assert_msg
+        assert_msg = f"only '--max_resolution <= 6' ({args.max_resolution_id} given) is currently supported"
+        assert args.max_resolution_id <= 6, assert_msg
+        assert not args.dilation, "'--dilation' is not allowed for meta-architecture BiViNet"
+
+        map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
+        return_layers = {f'layer{i-1}': str(i) for i in map_ids if i >= 2 and i <= 5}
+        backbone = Backbone(args.backbone, args.dilation, return_layers, train_backbone)
+
+    elif args.meta_arch == 'DETR':
+        return_layers = {'layer4': '0'}
+        backbone = Backbone(args.backbone, args.dilation, return_layers, train_backbone)
+
+    else:
+        raise ValueError(f"Unknown meta-architecture type '{args.meta_arch}' was provided.")
 
     return backbone
