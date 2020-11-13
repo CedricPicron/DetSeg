@@ -45,6 +45,17 @@ class BiViNet(nn.Module):
         self.projs = nn.ModuleList(nn.Conv2d(f0, f1, kernel_size=1) for f0, f1 in zip(f0s, f1s))
         self.projs.append(nn.Conv2d(f0s[-1], core_feat_sizes[-1], kernel_size=3, stride=2, padding=1))
 
+    @staticmethod
+    def get_parameter_families():
+        """
+        Method returning the BiViNet parameter families.
+
+        Returns:
+            List of strings containing the BiViNet parameter families.
+        """
+
+        return ['backbone', 'projs', 'core', 'heads']
+
     def forward(self, images=None, core_feat_maps=None, tgt_dict=None):
         """
         Forward method of the BiViNet module.

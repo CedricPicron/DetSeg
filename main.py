@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, Sequ
 
 from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train
+from models.bivinet import build_bivinet
 from models.criterion import build_criterion
 from models.detr import build_detr
 from utils.data import train_collate_fn, val_collate_fn
@@ -121,14 +122,23 @@ def get_parser():
     parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
 
     # Optimizer
-    parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
-    parser.add_argument('--lr_projector', default=1e-4, type=float, help='projector learning rate')
-    parser.add_argument('--lr_encoder', default=1e-4, type=float, help='encoder learning rate')
-    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='decoder learning rate')
-    parser.add_argument('--lr_class_head', default=1e-4, type=float, help='classification head learning rate')
-    parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='bounding box head learning rate')
     parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
+
+    # * Learning rates (general)
+    parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
+
+    # * Learning rates (BiViNet)
+    parser.add_argument('--lr_projs', default=1e-4, type=float, help='BiViNet projectors learning rate')
+    parser.add_argument('--lr_core', default=1e-4, type=float, help='BiVeNet core learning rate')
+    parser.add_argument('--lr_heads', default=1e-4, type=float, help='BiViNet heads learning rate')
+
+    # * Learning rates (DETR)
+    parser.add_argument('--lr_projector', default=1e-4, type=float, help='DETR projector learning rate')
+    parser.add_argument('--lr_encoder', default=1e-4, type=float, help='DETR encoder learning rate')
+    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='DETR decoder learning rate')
+    parser.add_argument('--lr_class_head', default=1e-4, type=float, help='DETR classification head learning rate')
+    parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
 
     # Scheduler
     parser.add_argument('--lr_drop', default=200, type=int, help='scheduler period of learning rate decay')
@@ -160,20 +170,21 @@ def main(args):
         val_sampler = SequentialSampler(val_dataset)
 
     # Get training and validation dataloaders
-    train_dataloader_kwargs = {'collate_fn': train_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+    train_dataloader_kwargs = {'collate_fn': train_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
     train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **train_dataloader_kwargs)
 
     val_dataloader_kwargs = {'collate_fn': val_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
     val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **val_dataloader_kwargs)
 
-    # Get model/criterion and put them on correct device
+    # Build model and place it on correct device
     device = torch.device(args.device)
-    model = build_detr(args).to(device)
+    model = build_bivinet(args) if args.meta_arch == 'BiViNet' else build_detr(args)
+    model = model.to(device)
     criterion = build_criterion(args).to(device)
 
-    # Load untrained model parts from original detr if required
-    if args.load_orig_detr:
+    # Load untrained model parts from original DETR if required
+    if args.load_orig_detr and args.meta_arch == 'DETR':
         model.load_from_original_detr()
 
     # Load model from checkpoint if required
@@ -197,8 +208,8 @@ def main(args):
 
         return
 
-    # Get training optimizer, scheduler and start epoch
-    param_families = ['backbone', 'projector', 'encoder', 'decoder', 'class_head', 'bbox_head']
+    # Get optimizer, scheduler and start epoch
+    param_families = model.get_parameter_families()
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():

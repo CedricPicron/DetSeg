@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
+from pycocotools import mask as coco_mask
 import torch
 import torch.nn.functional as F
 from torchvision.datasets.vision import VisionDataset
@@ -26,9 +27,10 @@ class CocoDataset(VisionDataset):
     Attributes:
         coco (COCO): Object containing the COCO dataset annotations.
         image_ids (List): List of image indices, sorted in ascending order.
+        requires_mask (bool): Bool indicating whether target dictionaries require segmentation masks.
     """
 
-    def __init__(self, image_folder, annotation_file, transforms):
+    def __init__(self, image_folder, annotation_file, transforms, requires_mask):
         """
         Initializes the CocoDataset dataset.
 
@@ -36,6 +38,7 @@ class CocoDataset(VisionDataset):
             image_folder (Path): Path to image folder containing COCO images.
             annotation_file (Path): Path to annotation file with COCO annotations.
             transforms (object): The transforms to be applied on both image and its bounding boxes.
+            requires_mask (bool): Bool indicating whether target dictionaries require segmentation masks.
         """
 
         with open(os.devnull, 'w') as devnull:
@@ -43,6 +46,35 @@ class CocoDataset(VisionDataset):
                 super().__init__(image_folder, transforms=transforms)
                 self.coco = COCO(annotation_file)
                 self.image_ids = list(sorted(self.coco.imgs.keys()))
+                self.requires_mask = requires_mask
+
+    @staticmethod
+    def get_masks(annotations, height, width):
+        """
+        Get segmentation masks from COCO annotations.
+
+        Args:
+            annotations (List): List of size [num_targets] with COCO annotation dictionaries with key:
+                - segmentation (List): list of polygons delineating the segmentation mask related to the annotation.
+            height (int): Height of image corresponding to the input annotations.
+            width (int): Width of image corresponding to the input annotations.
+
+        Returns:
+            masks (ByteTensor): Tensor of shape [num_targets, height, width] containing the segmentation masks.
+        """
+
+        # Get segmentations, with each segmentation represented as a list of polygons
+        segmentations = [annotation['segmentation'] for annotation in annotations]
+
+        # Get segmentation masks corresponding to each segmentation
+        masks = torch.zeros(len(segmentations), height, width, dtype=torch.uint8)
+        for i, polygons in enumerate(segmentations):
+            rle_objs = coco_mask.frPyObjects(polygons, height, width)
+            mask = coco_mask.decode(rle_objs)
+            mask = mask[..., None] if len(mask.shape) < 3 else mask
+            masks[i] = torch.as_tensor(mask, dtype=torch.uint8).any(dim=2)
+
+        return masks
 
     def __getitem__(self, index):
         """
@@ -52,11 +84,11 @@ class CocoDataset(VisionDataset):
             index (int): Index selecting one of the dataset images.
 
         Returns:
-            image (FloatTensor): Tensor containing the transformed image tensor of shape [3, H, W].
-            target (Dict): Dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
-                - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
-                                       coordinates in the (center_x, center_y, width, height) format;
+            image (FloatTensor): Tensor containing the image of shape [3, height, width].
+            tgt_dict (Dict): Target dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width];
                 - image_id (IntTensor): tensor of shape [1] containing the image id;
                 - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
         """
@@ -69,23 +101,25 @@ class CocoDataset(VisionDataset):
         # Load annotations
         annotation_ids = self.coco.getAnnIds(imgIds=image_id)
         annotations = self.coco.loadAnns(annotation_ids)
-        annotations = [obj for obj in annotations if 'iscrowd' not in obj or obj['iscrowd'] == 0]
+
+        # Remove crowd annotations
+        annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
         # Get object class labels
-        labels = [obj["category_id"] for obj in annotations]
+        labels = [annotation["category_id"] for annotation in annotations]
         labels = torch.tensor(labels, dtype=torch.int64)
 
         # Get object boxes in (left, top, width, height) format
-        boxes = [obj["bbox"] for obj in annotations]
+        boxes = [annotation["bbox"] for annotation in annotations]
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
 
         # Transform boxes to (left, top, right, bottom) format
         boxes[:, 2:] += boxes[:, :2]
 
         # Crop boxes such that they fit within the image
-        w, h = image.size
-        boxes[:, 0::2].clamp_(min=0, max=w)
-        boxes[:, 1::2].clamp_(min=0, max=h)
+        width, height = image.size
+        boxes[:, 0::2].clamp_(min=0, max=width)
+        boxes[:, 1::2].clamp_(min=0, max=height)
 
         # Only keep objects with well-defined boxes
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
@@ -93,16 +127,21 @@ class CocoDataset(VisionDataset):
         boxes = boxes[keep]
 
         # Place target properties into target dictionary
-        target = {'labels': labels, 'boxes': boxes}
+        tgt_dict = {'labels': labels, 'boxes': boxes}
 
-        # Add some additional properties, useful during evaluation
-        target['image_id'] = torch.tensor([image_id])
-        target['image_size'] = torch.tensor([int(h), int(w)])
+        # Get segmentation masks if required and add to target dictionary
+        if self.requires_masks:
+            masks = self.get_masks(annotations, height, width)
+            tgt_dict['masks'] = masks[keep]
 
         # Perform image and bounding box transformations
-        image, target = self.transforms(image, target)
+        image, tgt_dict = self.transforms(image, tgt_dict)
 
-        return image, target
+        # Add additional properties to target dictionary, useful during evaluation
+        tgt_dict['image_id'] = torch.tensor([image_id])
+        tgt_dict['image_size'] = torch.tensor([int(height), int(width)])
+
+        return image, tgt_dict
 
     def __len__(self):
         """
@@ -399,8 +438,10 @@ def build_coco(args):
     val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 
     train_transforms, val_transforms = get_coco_transforms()
-    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms)
-    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms)
+    requires_mask = True if args.meta_arch in ['BiViNet'] else False
+
+    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, requires_mask)
+    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, requires_mask)
     evaluator = CocoEvaluator(val_dataset.coco)
 
     return train_dataset, val_dataset, evaluator

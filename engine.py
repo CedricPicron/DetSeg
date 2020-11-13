@@ -21,7 +21,7 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
         model (nn.Module): Module computing predictions from images.
         criterion (nn.Module): Module comparing predictions with targets.
         dataloader (torch.utils.data.Dataloader): Training dataloader.
-        optimizer (torch.optim.Optimizer): Optimizer used for optimizing the model from gradients.
+        optimizer (torch.optim.Optimizer): Optimizer optimizing the model parameters from gradients.
         max_grad_norm (float): Maximum gradient norm (clipped if larger).
         epoch (int): Current training epoch.
         print_freq (int): Logger print frequency (defaults to 10).
@@ -70,12 +70,9 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
     metric_logger.synchronize_between_processes()
     train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    train_stats['lr_backbone'] = optimizer.param_groups[0]['lr']
-    train_stats['lr_projector'] = optimizer.param_groups[1]['lr']
-    train_stats['lr_encoder'] = optimizer.param_groups[2]['lr']
-    train_stats['lr_decoder'] = optimizer.param_groups[3]['lr']
-    train_stats['lr_class_head'] = optimizer.param_groups[4]['lr']
-    train_stats['lr_bbox_head'] = optimizer.param_groups[5]['lr']
+    # Add epoch learning rates of different parameter families to training statistics
+    for i, param_family in enumerate(model.get_parameter_families()):
+        train_stats[f'lr_{param_family}'] = optimizer.param_groups[i]['lr']
 
     return train_stats
 

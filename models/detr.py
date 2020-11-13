@@ -159,6 +159,17 @@ class DETR(nn.Module):
         self.bbox_head.load_state_dict(bbox_head_state_dict)
 
     @staticmethod
+    def get_parameter_families():
+        """
+        Method returning the DETR parameter families.
+
+        Returns:
+            List of strings containing the DETR parameter families.
+        """
+
+        return ['backbone', 'projector', 'encoder', 'decoder', 'class_head', 'bbox_head']
+
+    @staticmethod
     def get_sizes(batch_idx, batch_size):
         """
         Computes the cumulative number of predictions across batch entries.

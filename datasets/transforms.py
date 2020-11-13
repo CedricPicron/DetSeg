@@ -1,9 +1,8 @@
 """
-Transforms for both image and bounding box.
+Transforms on both image and corresponding target dictionaries.
 """
 import random
 
-import PIL
 import torch
 from torchvision.ops.misc import interpolate
 import torchvision.transforms as T
@@ -12,62 +11,239 @@ import torchvision.transforms.functional as F
 from utils.box_ops import box_xyxy_to_cxcywh
 
 
-def crop(image, target, region):
-    cropped_image = F.crop(image, *region)
+# 1. Transforms based on cropping
+def crop(image, tgt_dict, crop_region):
+    """
+    Function cropping the input image w.r.t. the given crop region. The input target dictionary is updated accordingly.
 
-    target = target.copy()
-    i, j, h, w = region
+    Args:
+        image (PIL.Image.Image): Image in PIL format to be cropped.
+        tgt_dict (Dict): Target dictionary corresponding to the image, with following required and optional keys:
+            - labels (IntTensor, required): tensor of shape [num_targets] containing the class indices;
+            - boxes (FloatTensor, optional): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
+            - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
+        crop_region (Tuple): Tuple delineating the cropped region in (top, left, height, width) format.
 
-    # should we do something wrt the original size?
-    target["size"] = torch.tensor([h, w])
+    Returns:
+        cropped_image (PIL.Image.Image): Image cropped by the given crop region.
+        tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
+    """
 
-    fields = ["labels"]
+    # Crop the image w.r.t. the given crop region
+    top, left, height, width = crop_region
+    cropped_image = F.crop(image, top, left, height, width)
 
-    if "boxes" in target:
-        boxes = target["boxes"]
-        max_size = torch.as_tensor([w, h], dtype=torch.float32)
-        cropped_boxes = boxes - torch.as_tensor([j, i, j, i])
-        cropped_boxes = torch.min(cropped_boxes.reshape(-1, 2, 2), max_size)
+    # Update bounding boxes and identify targets no longer in the image
+    if 'boxes' in tgt_dict:
+        cropped_boxes = tgt_dict['boxes'] - torch.as_tensor([left, top, left, top])
         cropped_boxes = cropped_boxes.clamp(min=0)
-        target["boxes"] = cropped_boxes.reshape(-1, 4)
-        fields.append("boxes")
+        max_size = torch.as_tensor([width, height], dtype=torch.float32)
+        cropped_boxes = torch.min(cropped_boxes.reshape(-1, 2, 2), max_size)
+        keep = torch.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], dim=1)
+        tgt_dict['boxes'] = cropped_boxes.reshape(-1, 4)
 
-    if "masks" in target:
-        # FIXME should we update the area here if there are no boxes?
-        target['masks'] = target['masks'][:, i:i + h, j:j + w]
-        fields.append("masks")
+    # Update segmentation masks and identify targets no longer in the image (if not already done)
+    if 'masks' in tgt_dict:
+        tgt_dict['masks'] = tgt_dict['masks'][:, top:top+height, left:left+width]
+        keep = tgt_dict['masks'].flatten(1).any(1) if 'boxes' not in tgt_dict else keep
 
-    # remove elements for which the boxes or masks that have zero area
-    if "boxes" in target or "masks" in target:
-        # favor boxes selection when defining which elements to keep
-        # this is compatible with previous implementation
-        if "boxes" in target:
-            cropped_boxes = target['boxes'].reshape(-1, 2, 2)
-            keep = torch.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], dim=1)
-        else:
-            keep = target['masks'].flatten(1).any(1)
+    # Remove targets that no longer appear in the cropped image
+    if 'boxes' in tgt_dict or 'masks' in tgt_dict:
+        for key in tgt_dict.keys():
+            if key in ['labels', 'boxes', 'masks']:
+                tgt_dict[key] = tgt_dict[key][keep]
 
-        for field in fields:
-            target[field] = target[field][keep]
-
-    return cropped_image, target
+    return cropped_image, tgt_dict
 
 
-def hflip(image, target):
+class CenterCrop(object):
+    """
+    Class implementing the CenterCrop transform.
+
+    Attributes:
+        crop_size (Tuple): Tuple of size [2] containing the crop height and crop width respectively.
+    """
+
+    def __init__(self, crop_size):
+        """
+        Initializes the CenterCrop transform.
+
+        Args:
+            crop_size (Tuple): Tuple of size [2] containing the crop height and crop width respectively.
+        """
+
+        self.crop_size = crop_size
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method corresponding to the CenterCrop transform.
+
+        Args:
+            image (PIL.Image.Image): Image in PIL format to be cropped.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            cropped_image (PIL.Image.Image): Image cropped in the center and of size 'crop_size'.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
+        """
+
+        crop_height, crop_width = self.size
+        crop_top = int(round((image.height - crop_height) / 2.))
+        crop_left = int(round((image.width - crop_width) / 2.))
+
+        crop_region = (crop_top, crop_left, crop_height, crop_width)
+        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+
+        return cropped_image, tgt_dict
+
+
+class RandomCrop(object):
+    """
+    Class implementing the RandomCrop transform.
+
+    Attributes:
+        crop_size (Tuple): Tuple of size [2] containing the crop height and crop width respectively.
+    """
+
+    def __init__(self, crop_size):
+        """
+        Initializes the RandomCrop transform.
+
+        Args:
+            crop_size (Tuple): Tuple of size [2] containing the crop height and crop width respectively.
+        """
+
+        self.crop_size = crop_size
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method corresponding to the RandomCrop transform.
+
+        Args:
+            image (PIL.Image.Image): Image in PIL format to be cropped.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            cropped_image (PIL.Image.Image): Image cropped at a random position and of size 'crop_size'.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
+        """
+
+        crop_region = T.RandomCrop.get_params(image, self.crop_size)
+        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+
+        return cropped_image, tgt_dict
+
+
+class RandomSizeCrop(object):
+    """
+    Class implementing the RandomSizeCrop transform.
+
+    Attributes:
+        min_crop_size (int): Integer containing the minimum crop height and crop width.
+        max_crop_size (int): Integer containing the maximum crop height and crop width.
+    """
+
+    def __init__(self, min_crop_size, max_crop_size):
+        """
+        Initializes the RandomSizeCrop transform.
+
+        Args:
+            min_crop_size (int): Integer containing the minimum crop height and crop width.
+            max_crop_size (int): Integer containing the maximum crop height and crop width.
+        """
+
+        self.min_crop_size = min_crop_size
+        self.max_crop_size = max_crop_size
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method corresponding to the RandomSizeCrop transform.
+
+        Args:
+            image (PIL.Image.Image): Image in PIL format to be cropped.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            cropped_image (PIL.Image.Image): Image cropped at a random position and of allowed random size.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
+        """
+
+        crop_width = random.randint(self.min_crop_size, min(image.width, self.max_crop_size))
+        crop_height = random.randint(self.min_crop_size, min(image.height, self.max_crop_size))
+
+        crop_region = T.RandomCrop.get_params(image, [crop_height, crop_width])
+        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+
+        return cropped_image, tgt_dict
+
+
+# 2. Transforms based on horizontal flipping
+def hflip(image, tgt_dict):
+    """
+    Function flipping the input image horizontally and updating the target dictionary accordingly.
+
+    Args:
+        image (PIL.Image.Image): Image in PIL format to be flipped horizontally.
+        tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
+            - boxes (FloatTensor, optional): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
+            - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
+
+    Returns:
+        flipped_image (PIL.Image.Image): The horizontally flipped input image.
+        tgt_dict (Dict): Updated target dictionary corresponding to the new flipped image.
+    """
+
+    # Flip the image horizontally
     flipped_image = F.hflip(image)
 
-    w, h = image.size
+    # Update the bounding boxes
+    if 'boxes' in tgt_dict:
+        boxes = tgt_dict['boxes']
+        mirrored_boxes = boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1])
+        tgt_dict['boxes'] = mirrored_boxes + torch.as_tensor([image.width, 0, image.width, 0])
 
-    target = target.copy()
-    if "boxes" in target:
-        boxes = target["boxes"]
-        boxes = boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1]) + torch.as_tensor([w, 0, w, 0])
-        target["boxes"] = boxes
+    # Update the segmentation masks
+    if 'masks' in tgt_dict:
+        tgt_dict['masks'] = tgt_dict['masks'].fliplr()
 
-    if "masks" in target:
-        target['masks'] = target['masks'].flip(-1)
+    return flipped_image, tgt_dict
 
-    return flipped_image, target
+
+class RandomHorizontalFlip(object):
+    """
+    Class implementing the RandomHorizontalFlip transform.
+
+    Attributes:
+        flip_prob (float): Value between 0 and 1 determining the flip probability.
+    """
+
+    def __init__(self, flip_prob=0.5):
+        """
+        Initializes the RandomHorizontalFlip transform.
+
+        Args:
+            flip_prob (float): Value between 0 and 1 determining the flip probability.
+        """
+
+        self.flip_prob = flip_prob
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomHorizontalFlip transform.
+
+        Args:
+            image (PIL.Image.Image): Image in PIL format, potentially to be flipped horizontally.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (PIL.Image.Image): The input image, horizontally flipped or not.
+            tgt_dict (Dict): The (potentially updated) target dictionary corresponding to the returned image.
+        """
+
+        if random.random() < self.flip_prob:
+            image, tgt_dict = hflip(image, tgt_dict)
+
+        return image, tgt_dict
 
 
 def resize(image, target, size, max_size=None):
@@ -135,53 +311,6 @@ def pad(image, target, padding):
     if "masks" in target:
         target['masks'] = torch.nn.functional.pad(target['masks'], (0, padding[0], 0, padding[1]))
     return padded_image, target
-
-
-class RandomCrop(object):
-    def __init__(self, size):
-        self.size = size
-
-    def __call__(self, img, target):
-        region = T.RandomCrop.get_params(img, self.size)
-
-        return crop(img, target, region)
-
-
-class RandomSizeCrop(object):
-    def __init__(self, min_size: int, max_size: int):
-        self.min_size = min_size
-        self.max_size = max_size
-
-    def __call__(self, img: PIL.Image.Image, target: dict):
-        w = random.randint(self.min_size, min(img.width, self.max_size))
-        h = random.randint(self.min_size, min(img.height, self.max_size))
-        region = T.RandomCrop.get_params(img, [h, w])
-
-        return crop(img, target, region)
-
-
-class CenterCrop(object):
-    def __init__(self, size):
-        self.size = size
-
-    def __call__(self, img, target):
-        image_width, image_height = img.size
-        crop_height, crop_width = self.size
-        crop_top = int(round((image_height - crop_height) / 2.))
-        crop_left = int(round((image_width - crop_width) / 2.))
-
-        return crop(img, target, (crop_top, crop_left, crop_height, crop_width))
-
-
-class RandomHorizontalFlip(object):
-    def __init__(self, p=0.5):
-        self.p = p
-
-    def __call__(self, img, target):
-        if random.random() < self.p:
-            return hflip(img, target)
-
-        return img, target
 
 
 class RandomResize(object):

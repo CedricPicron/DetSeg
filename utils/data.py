@@ -3,6 +3,7 @@ Data loading and data structure utilities.
 """
 
 import torch
+import torch.nn.functional as F
 
 
 def train_collate_fn(batch):
@@ -11,41 +12,48 @@ def train_collate_fn(batch):
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
-            - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
-            - target (Dict): dictionary containing at least following keys:
-                - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
-                - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
-                                       coordinates in the (center_x, center_y, width, height) format.
+            - image (FloatTensor): tensor containing the image of shape [3, height, width].
+            - tgt_dict (Dict): target dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
-            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, height, width];
+            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, height, width].
 
-        tgt_dict (Dict): Dictionary containing following keys:
-            - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                  number of objects across batch entries) containing the target class indices;
-            - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-            - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+        tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
+            - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
+            - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, height, width].
     """
 
     # Get batch images and target dictionaries
-    images, targets = list(zip(*batch))
+    images, tgt_dicts = list(zip(*batch))
 
-    # Compute images nested tensor
+    # Compute nested tensor of batched images
     images = nested_tensor_from_image_list(images)
 
-    # Concatenating the target labels and boxes across batch entries
-    tgt_labels = torch.cat([target['labels'] for target in targets], dim=0)
-    tgt_boxes = torch.cat([target['boxes'] for target in targets], dim=0)
+    # Concatenate target labels and target boxes across batch entries
+    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts], dim=0)
+    tgt_boxes = torch.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts], dim=0)
 
-    # Computing the cumulative sizes of batch entries
-    tgt_sizes = [0] + [len(target['labels']) for target in targets]
+    # Compute cumulative target sizes of batch entries
+    tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
     tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
     tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
 
-    # Place labels, boxes and size in new target dictionary
+    # Place target labels, boxes and sizes in new target dictionary
     tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
+
+    # Concatenate masks if provided and add to target dictionary
+    if 'masks' in tgt_dicts[0]:
+        height, width = images.tensor.shape[-2:]
+        masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
+        padded_masks = [F.pad(mask, (0, width-mask.shape[-1], 0, height-mask.shape[-2])) for mask in masks]
+        tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
 
     return images, tgt_dict
 
@@ -56,24 +64,24 @@ def val_collate_fn(batch):
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
-            - image (FloatTensor): tensor containing the transformed image tensor of shape [3, H, W].
-            - target (Dict): dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_target_boxes] containing the class indices;
-                - boxes (FloatTensor): tensor of shape [num_target_boxes, 4] containing the transformed target box
-                                       coordinates in the (center_x, center_y, width, height) format;
+            - image (FloatTensor): tensor containing the image of shape [3, height, width].
+            - tgt_dict (Dict): target dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width];
                 - image_id (IntTensor): tensor of shape [1] containing the image id;
                 - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
-            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, height, width];
+            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, height, width].
 
-        tgt_dict (Dict): Dictionary containing following keys:
-            - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                  number of objects across batch entries) containing the target class indices;
-            - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-            - sizes (IntTensor): tensor of shape [batch_size+1] containing the cumulative sizes of batch entries.
+         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
+            - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
+            - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, height, width].
 
         eval_dict (Dict): Dictionary containing following keys:
             - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
@@ -81,26 +89,33 @@ def val_collate_fn(batch):
     """
 
     # Get batch images and target dictionaries
-    images, targets = list(zip(*batch))
+    images, tgt_dicts = list(zip(*batch))
 
-    # Compute images nested tensor
+    # Compute nested tensor of batched images
     images = nested_tensor_from_image_list(images)
 
-    # Concatenating the target labels and boxes across batch entries
-    tgt_labels = torch.cat([target['labels'] for target in targets], dim=0)
-    tgt_boxes = torch.cat([target['boxes'] for target in targets], dim=0)
+    # Concatenate target labels and target boxes across batch entries
+    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts], dim=0)
+    tgt_boxes = torch.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts], dim=0)
 
-    # Computing the cumulative sizes of batch entries
-    tgt_sizes = [0] + [len(target['labels']) for target in targets]
+    # Compute cumulative target sizes of batch entries
+    tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
     tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
     tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
 
-    # Place labels, boxes and size in new target dictionary
+    # Place target labels, boxes and sizes in new target dictionary
     tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
 
+    # Concatenate masks if provided and add to target dictionary
+    if 'masks' in tgt_dicts[0]:
+        height, width = images.tensor.shape[-2:]
+        masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
+        padded_masks = [F.pad(mask, (0, width-mask.shape[-1], 0, height-mask.shape[-2])) for mask in masks]
+        tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
+
     # Place image ids and image sizes in evaluation dictionary
-    image_ids = torch.cat([target['image_id'] for target in targets], dim=0)
-    image_sizes = torch.stack([target['image_size'] for target in targets], dim=0)
+    image_ids = torch.cat([old_tgt_dict['image_id'] for old_tgt_dict in tgt_dicts], dim=0)
+    image_sizes = torch.stack([old_tgt_dict['image_size'] for old_tgt_dict in tgt_dicts], dim=0)
     eval_dict = {'image_ids': image_ids, 'image_sizes': image_sizes}
 
     return images, tgt_dict, eval_dict
