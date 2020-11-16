@@ -27,10 +27,10 @@ class CocoDataset(VisionDataset):
     Attributes:
         coco (COCO): Object containing the COCO dataset annotations.
         image_ids (List): List of image indices, sorted in ascending order.
-        requires_mask (bool): Bool indicating whether target dictionaries require segmentation masks.
+        requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
     """
 
-    def __init__(self, image_folder, annotation_file, transforms, requires_mask):
+    def __init__(self, image_folder, annotation_file, transforms, requires_masks):
         """
         Initializes the CocoDataset dataset.
 
@@ -38,7 +38,7 @@ class CocoDataset(VisionDataset):
             image_folder (Path): Path to image folder containing COCO images.
             annotation_file (Path): Path to annotation file with COCO annotations.
             transforms (object): The transforms to be applied on both image and its bounding boxes.
-            requires_mask (bool): Bool indicating whether target dictionaries require segmentation masks.
+            requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
         """
 
         with open(os.devnull, 'w') as devnull:
@@ -46,7 +46,7 @@ class CocoDataset(VisionDataset):
                 super().__init__(image_folder, transforms=transforms)
                 self.coco = COCO(annotation_file)
                 self.image_ids = list(sorted(self.coco.imgs.keys()))
-                self.requires_mask = requires_mask
+                self.requires_masks = requires_masks
 
     @staticmethod
     def get_masks(annotations, height, width):
@@ -438,10 +438,10 @@ def build_coco(args):
     val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 
     train_transforms, val_transforms = get_coco_transforms()
-    requires_mask = True if args.meta_arch in ['BiViNet'] else False
+    requires_masks = True if args.meta_arch in ['BiViNet'] else False
 
-    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, requires_mask)
-    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, requires_mask)
+    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, requires_masks)
+    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, requires_masks)
     evaluator = CocoEvaluator(val_dataset.coco)
 
     return train_dataset, val_dataset, evaluator

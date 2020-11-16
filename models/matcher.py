@@ -51,14 +51,13 @@ class HungarianMatcher(nn.Module):
         Args:
             pred_dict (Dict): Dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
                 - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
 
-            tgt_dict (Dict): Dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_target_boxes_total] (with num_target_boxes_total the total
-                                      number of objects across batch entries) containing the target class indices;
-                - boxes (FloatTensor): tensor of shape [num_target_boxes_total, 4] with the target box coordinates;
-                - sizes (IntTensor): cumulative number of targets across batch entries of shape [batch_size+1].
+            tgt_dict (Dict): Target dictionary containing following keys:
+                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
             pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))].

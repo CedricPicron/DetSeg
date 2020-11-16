@@ -5,11 +5,13 @@ from collections import OrderedDict
 
 import torch
 from torch import nn
+from torch.nn.utils import clip_grad_norm_
 
 from .backbone import build_backbone
-from .position import build_position_encoder
-from .encoder import build_encoder
+from .criterion import build_criterion
 from .decoder import build_decoder, GlobalDecoder
+from .encoder import build_encoder
+from .position import build_position_encoder
 from .utils import MLP
 
 
@@ -23,12 +25,13 @@ class DETR(nn.Module):
         projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
         encoder (nn.Module): Module implementing the DETR encoder.
         decoder (nn.Module): Module implementing the DETR decoder.
+        criterion (nn.Module): Module comparing predictions with targets.
         class_head (nn.Linear): Module projecting decoder features to class logits.
         bbox_head (MLP): Module projecting decoder features to bounding box logits (i.e. values before sigmoid).
         train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
     """
 
-    def __init__(self, backbone, position_encoder, encoder, decoder, num_classes, train_dict):
+    def __init__(self, backbone, position_encoder, encoder, decoder, criterion, num_classes, train_dict):
         """
         Initializes the DETR module.
 
@@ -38,6 +41,7 @@ class DETR(nn.Module):
             projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
             encoder (nn.Module): Module implementing the DETR encoder.
             decoder (nn.Module): Module implementing the DETR decoder.
+            criterion (nn.Module): Module comparing predictions with targets.
             num_classes (int): Number of object classes (without background class).
             train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
         """
@@ -51,6 +55,7 @@ class DETR(nn.Module):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.criterion = criterion
 
         self.class_head = nn.Linear(decoder.feat_dim, num_classes+1)
         self.class_head.requires_grad_(train_dict['class_head'])
@@ -197,56 +202,101 @@ class DETR(nn.Module):
 
         return sizes
 
-    def forward(self, images):
+    def forward(self, images, tgt_dict=None, optimizer=None, **kwargs):
         """
-        Forward method of DETR module.
+        Forward method of the DETR module.
 
         Args:
             images (NestedTensor): NestedTensor consisting of:
                 - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
                 - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
 
-        Returns:
-            pred_list (List): List of predictions, where each entry is a dict containing following keys:
-                - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes + 1)];
-                - boxes (FloatTensor): normalized box coordinates (center_x, center_y, height, width) within non-padded
-                                       regions, of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                - layer_id (int): integer corresponding to the decoder layer producing the predictions;
-                - curio_loss (FloatTensor): optional curiosity based losses of shape [1] from a sample decoder.
+            tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
+                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
-            The list size is [1] or [num_decoder_layers] depending on args.aux_loss.
+            optimizer (torch.optim.Optimizer): Optional optimizer updating the DETR model parameters during training.
+            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
+
+        Returns:
+            * If tgt_dict is not None and optimizer is not None (i.e. during training):
+                loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
+                analysis_dict (Dict): Dict of different analyses, at different layers, used for logging purposes only.
+
+            * If tgt_dict is not None and optimizer is None (i.e. during validation):
+                pred_dict (Dict): Prediction dictionary from the last decoder layer containing following keys:
+                    - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
+                    - boxes (FloatTensor): normalized box coordinates within non-padded regions of shape
+                                           [num_slots_total, 4] in (center_x, center_y, width, height) format;
+                    - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                    - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
+                    - layer_id (int): integer corresponding to the decoder layer producing the predictions;
+                    - curio_loss (FloatTensor): optional curiosity based loss value of shape [1] from a sample decoder.
+
+                loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
+                analysis_dict (Dict): Dict of different analyses, at different layers, used for logging purposes only.
+
+            * If tgt_dict is None (i.e. during testing):
+                pred_dict (Dict): Prediction dictionary from the last decoder layer (see above for more information).
         """
 
+        # Get projected backbone features and position encodings
         conv_features, feature_masks = self.backbone(images)
         conv_features, feature_masks = (conv_features[-1], feature_masks[-1])
         proj_features = self.projector(conv_features)
         pos_encodings = self.position_encoder(proj_features, feature_masks)
 
+        # Reshape features and position encodings for encoder and decoder modules
         batch_size, feat_dim, H, W = proj_features.shape
         proj_features = proj_features.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
         pos_encodings = pos_encodings.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
 
+        # Compute slots through feature encoding and decoding
         encoder_features = self.encoder(proj_features, feature_masks, pos_encodings)
         decoder_output_dict = self.decoder(encoder_features, feature_masks, pos_encodings)
 
+        # Compute the number of predictions (i.e. slots) per batch entry
         batch_idx = decoder_output_dict['batch_idx']
         sizes = self.get_sizes(batch_idx, batch_size)
 
+        # Predict classification logits and bounding box coordinates
         slots = decoder_output_dict['slots']
         class_logits = self.class_head(slots)
         bbox_coord = self.bbox_head(slots).sigmoid()
 
+        # Build list of prediction dictionaries
         pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
         [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
         [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
 
+        # Add curiosity losses to the prediction dictionaries if available
         if 'curio_losses' in decoder_output_dict.keys():
             curio_losses = decoder_output_dict['curio_losses']
             [pred_dict.update({'curio_loss': curio_losses[i]}) for i, pred_dict in enumerate(pred_list)]
 
-        return pred_list
+        # Return prediction dictionary (testing only)
+        if tgt_dict is None:
+            pred_dict = pred_list[0]
+            return pred_dict
+
+        # Get loss and analysis dictionaries (training/validation only)
+        loss_dict, analysis_dict = self.criterion(pred_list, tgt_dict)
+
+        # Return prediction, loss and analysis dictionaries (validation only)
+        if optimizer is None:
+            pred_dict = pred_list[0]
+            return pred_dict, loss_dict, analysis_dict
+
+        # Update model parameters (training only)
+        optimizer.zero_grad()
+        loss = sum(loss_dict.values())
+        loss.backward()
+        clip_grad_norm_(self.parameters(), kwargs['max_grad_norm']) if 'max_grad_norm' in kwargs else None
+        optimizer.step()
+
+        return loss_dict, analysis_dict
 
 
 def build_detr(args):
@@ -264,12 +314,13 @@ def build_detr(args):
     position_encoder = build_position_encoder(args)
     encoder = build_encoder(args)
     decoder = build_decoder(args)
+    criterion = build_criterion(args)
 
     train_projector = args.lr_projector > 0
     train_class_head = args.lr_class_head > 0
     train_bbox_head = args.lr_bbox_head > 0
 
     train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
-    detr = DETR(backbone, position_encoder, encoder, decoder, args.num_classes, train_dict)
+    detr = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict)
 
     return detr

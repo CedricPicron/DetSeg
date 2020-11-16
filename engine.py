@@ -7,22 +7,20 @@ from pathlib import Path
 import sys
 
 import torch
-from torch.nn.utils import clip_grad_norm_
 
 from utils.logging import MetricLogger
 import utils.distributed as distributed
 
 
-def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
+def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
     """
     Train model for one epoch.
 
     Args:
         model (nn.Module): Module computing predictions from images.
-        criterion (nn.Module): Module comparing predictions with targets.
         dataloader (torch.utils.data.Dataloader): Training dataloader.
-        optimizer (torch.optim.Optimizer): Optimizer optimizing the model parameters from gradients.
-        max_grad_norm (float): Maximum gradient norm (clipped if larger).
+        optimizer (torch.optim.Optimizer): Optimizer updating the model parameters during training.
+        max_grad_norm (float): Maximum norm of optimizer update (clipped if larger).
         epoch (int): Current training epoch.
         print_freq (int): Logger print frequency (defaults to 10).
 
@@ -32,7 +30,6 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
 
     device = next(model.parameters()).device
     model.train()
-    criterion.train()
 
     metric_logger = MetricLogger(delimiter="  ")
     header = f"Train epoch {epoch}:"
@@ -41,23 +38,15 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
-        # Get loss and analysis dictionaries
-        pred_list = model(images)
-        loss_dict, analysis_dict = criterion(pred_list, tgt_dict)
-        loss = sum(loss_dict.values())
-
-        # Update model parameters
-        optimizer.zero_grad()
-        loss.backward()
-        clip_grad_norm_(model.parameters(), max_grad_norm) if max_grad_norm > 0 else None
-        optimizer.step()
+        # Train model with optimizer and report loss and analysis dictionaries
+        loss_dict, analysis_dict = model(images, tgt_dict, optimizer, max_grad_norm=max_grad_norm)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
         loss_dict = distributed.reduce_dict(loss_dict)
-        loss = loss.item()
+        loss = sum(loss_dict.values()).item()
 
-        # Check whether loss if finite
+        # Check whether loss is finite
         if not math.isfinite(loss):
             print(f"Loss dictionary: {loss_dict}")
             print(f"Loss is {loss}, stopping training.")
@@ -78,13 +67,12 @@ def train(model, criterion, dataloader, optimizer, max_grad_norm, epoch, print_f
 
 
 @torch.no_grad()
-def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10):
+def evaluate(model, dataloader, evaluator, epoch=None, print_freq=10):
     """
     Evaluate model.
 
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
-        criterion (nn.Module): Module comparing predictions with targets.
         dataloader (torch.utils.data.Dataloader): Validation dataloader.
         evaluator (object): Object capable of computing evaluations from predictions and storing them.
         epoch (int): Training epochs completed (defaults to None).
@@ -97,7 +85,6 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
 
     device = next(model.parameters()).device
     model.eval()
-    criterion.eval()
     evaluator.reset()
 
     metric_logger = MetricLogger(delimiter="  ")
@@ -108,16 +95,15 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
         eval_dict = {k: v.to(device) for k, v in eval_dict.items()}
 
-        # Get loss and analysis dictionaries
-        pred_list = model(images)
-        loss_dict, analysis_dict = criterion(pred_list, tgt_dict)
+        # Get prediction, loss and analysis dictionaries
+        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
         loss_dict = distributed.reduce_dict(loss_dict)
         loss = sum(loss_dict.values()).item()
 
-        # Check whether loss if finite
+        # Check whether loss is finite
         if not math.isfinite(loss):
             print(f"Loss dictionary: {loss_dict}")
             print(f"Loss is {loss}, stopping training.")
@@ -127,7 +113,6 @@ def evaluate(model, criterion, dataloader, evaluator, epoch=None, print_freq=10)
         metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
         # Update evaluator
-        pred_dict = pred_list[0]
         evaluator.update(pred_dict, eval_dict)
 
     # Accumulate predictions from all images and summarize

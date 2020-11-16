@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, Sequ
 from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train
 from models.bivinet import build_bivinet
-from models.criterion import build_criterion
 from models.detr import build_detr
 from utils.data import train_collate_fn, val_collate_fn
 import utils.distributed as distributed
@@ -181,7 +180,6 @@ def main(args):
     device = torch.device(args.device)
     model = build_bivinet(args) if args.meta_arch == 'BiViNet' else build_detr(args)
     model = model.to(device)
-    criterion = build_criterion(args).to(device)
 
     # Load untrained model parts from original DETR if required
     if args.load_orig_detr and args.meta_arch == 'DETR':
@@ -198,7 +196,7 @@ def main(args):
 
     # Evaluate loaded model if required and return
     if args.eval:
-        _, evaluator = evaluate(model, criterion, val_dataloader, evaluator)
+        _, evaluator = evaluate(model, val_dataloader, evaluator)
         output_dir = Path(args.output_dir)
 
         if args.output_dir and distributed.is_main_process():
@@ -209,7 +207,7 @@ def main(args):
         return
 
     # Get optimizer, scheduler and start epoch
-    param_families = model.get_parameter_families()
+    param_families = model.module.get_parameter_families() if args.distributed else model.get_parameter_families()
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():
@@ -235,13 +233,13 @@ def main(args):
     # Main training loop
     for epoch in range(start_epoch, args.epochs+1):
         train_sampler.set_epoch(epoch) if args.distributed else None
-        train_stats = train(model, criterion, train_dataloader, optimizer, args.max_grad_norm, epoch)
+        train_stats = train(model, train_dataloader, optimizer, args.max_grad_norm, epoch)
         scheduler.step()
 
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        val_stats, _ = evaluate(model, criterion, val_dataloader, evaluator, epoch=epoch)
+        val_stats, _ = evaluate(model, val_dataloader, evaluator, epoch=epoch)
         save_log(args.output_dir, epoch, train_stats, val_stats)
 
     # End training timer and report total training time
