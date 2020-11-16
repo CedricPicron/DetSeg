@@ -90,6 +90,7 @@ def get_parser():
     parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
 
     # * BiCore
+    parser.add_argument('--num_core_layers', default=4, type=int, help='number of core layers of BiViNet module')
     parser.add_argument('--bicore_type', default='BiAttnConv', type=str, help='type of BiCore module')
     parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
     parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
@@ -207,7 +208,7 @@ def main(args):
         return
 
     # Get optimizer, scheduler and start epoch
-    param_families = model.module.get_parameter_families() if args.distributed else model.get_parameter_families()
+    param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():

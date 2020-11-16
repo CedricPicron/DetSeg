@@ -227,9 +227,9 @@ class SetCriterion(nn.Module):
             num_boxes = self.get_num_boxes(tgt_dict)
 
             for loss_function in self.loss_functions:
-                local_loss_dict, local_analysis_dict = loss_function(pred_dict, tgt_dict, match_idx, num_boxes)
-                loss_dict.update(local_loss_dict)
-                analysis_dict.update(local_analysis_dict)
+                layer_loss_dict, layer_analysis_dict = loss_function(pred_dict, tgt_dict, match_idx, num_boxes)
+                loss_dict.update(layer_loss_dict)
+                analysis_dict.update(layer_analysis_dict)
 
             if 'curio_loss' in pred_dict.keys():
                 curio_loss = pred_dict['curio_loss']

@@ -164,7 +164,7 @@ class DETR(nn.Module):
         self.bbox_head.load_state_dict(bbox_head_state_dict)
 
     @staticmethod
-    def get_parameter_families():
+    def get_param_families():
         """
         Method returning the DETR parameter families.
 
@@ -222,8 +222,8 @@ class DETR(nn.Module):
 
         Returns:
             * If tgt_dict is not None and optimizer is not None (i.e. during training):
-                loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
-                analysis_dict (Dict): Dict of different analyses, at different layers, used for logging purposes only.
+                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
+                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
                 pred_dict (Dict): Prediction dictionary from the last decoder layer containing following keys:
@@ -235,8 +235,8 @@ class DETR(nn.Module):
                     - layer_id (int): integer corresponding to the decoder layer producing the predictions;
                     - curio_loss (FloatTensor): optional curiosity based loss value of shape [1] from a sample decoder.
 
-                loss_dict (Dict): Dict of different weighted losses, at different layers, used for backpropagation.
-                analysis_dict (Dict): Dict of different analyses, at different layers, used for logging purposes only.
+                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
+                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is None (i.e. during testing):
                 pred_dict (Dict): Prediction dictionary from the last decoder layer (see above for more information).
