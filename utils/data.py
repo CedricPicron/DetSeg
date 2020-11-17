@@ -12,22 +12,22 @@ def train_collate_fn(batch):
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
-            - image (FloatTensor): tensor containing the image of shape [3, height, width].
+            - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, height, width];
-            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, height, width].
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
 
         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
             - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, height, width].
+            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
     """
 
     # Get batch images and target dictionaries
@@ -50,9 +50,9 @@ def train_collate_fn(batch):
 
     # Concatenate masks if provided and add to target dictionary
     if 'masks' in tgt_dicts[0]:
-        height, width = images.tensor.shape[-2:]
+        max_iH, max_iW = images.tensor.shape[-2:]
         masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
-        padded_masks = [F.pad(mask, (0, width-mask.shape[-1], 0, height-mask.shape[-2])) for mask in masks]
+        padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
         tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
 
     return images, tgt_dict
@@ -64,24 +64,24 @@ def val_collate_fn(batch):
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
-            - image (FloatTensor): tensor containing the image of shape [3, height, width].
+            - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width];
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
                 - image_id (IntTensor): tensor of shape [1] containing the image id;
                 - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, height, width];
-            - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, height, width].
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
 
          tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
             - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, height, width].
+            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         eval_dict (Dict): Dictionary containing following keys:
             - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
@@ -108,9 +108,9 @@ def val_collate_fn(batch):
 
     # Concatenate masks if provided and add to target dictionary
     if 'masks' in tgt_dicts[0]:
-        height, width = images.tensor.shape[-2:]
+        max_iH, max_iW = images.tensor.shape[-2:]
         masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
-        padded_masks = [F.pad(mask, (0, width-mask.shape[-1], 0, height-mask.shape[-2])) for mask in masks]
+        padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
         tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
 
     # Place image ids and image sizes in evaluation dictionary
@@ -126,13 +126,13 @@ def nested_tensor_from_image_list(image_list):
     Create nested tensor from list of image tensors.
 
     Args:
-        image_list (List): List of size [batch_size] with image tensors of shape [3, height, width]. Each image tensor
-                           is allowed to have a different height and width.
+        image_list (List): List of size [batch_size] with image tensors of shape [3, iH, iW]. Each image tensor
+                           is allowed to have a different image height (iH) and image width (iW).
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_height, max_width];
-            - images.mask (BoolTensor): boolean masks of inactive pixels of shape [batch_size, max_height, max_width].
+            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
     """
 
     # Compute different sizes

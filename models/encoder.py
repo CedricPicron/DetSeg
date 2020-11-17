@@ -70,17 +70,17 @@ class Encoder(nn.Module):
         Forward method of the Encoder module.
 
         Args:
-            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H, W].
-            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
-            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
         """
 
         # Reshape feature_masks as src_masks
-        batch_size, H, W = feature_masks.shape
-        src_masks = feature_masks.view(batch_size, H*W)
+        batch_size, fH, fW = feature_masks.shape
+        src_masks = feature_masks.view(batch_size, fH*fW)
 
         # Loop over different encoder layers
         for layer in self.layers:
@@ -146,12 +146,12 @@ class SelfAttentionEncoderLayer(nn.Module):
         Forward method of the SelfAttentionEncoderLayer module.
 
         Args:
-            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, H*W].
-            pos_encodings (FloatTensor): Position encodings of shape [H*W, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
+            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH*fW].
+            pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
-            features (FloatTensor): Features of shape [H*W, batch_size, feat_dim].
+            features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
         """
 
         # Global multi-head self-attention with position encoding

@@ -100,12 +100,14 @@ def get_parser():
     parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
 
     # * Heads
-    # ** Objectness head
-    parser.add_argument('--obj_head_type', default='default', type=str, help='type of objectness head module')
-    parser.add_argument('--obj_head_weight', default=1.0, type=float, help='weight factor scaling the objectness loss')
+    # ** Segmentation heads
+    parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
+
+    # *** Binary segmentation head
     parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
+    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
     parser.add_argument('--no_map_size_correction', action='store_true', help='whether to disable map size correction')
-    parser.add_argument('--obj_head_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
+    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
 
     # Criterion
     parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')

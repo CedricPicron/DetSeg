@@ -13,8 +13,8 @@ class BiAttnConv(nn.Module):
     Class implementing the bidirectional attention-based convolution module.
 
     Attributes:
-        feat_sizes (List): List of size [num_maps] containing the feature size in each map.
-        num_heads_list (List): List of size [num_maps] containing the number of heads in each map.
+        feat_sizes (List): List of size [num_maps] containing the feature size of each map.
+        num_heads_list (List): List of size [num_maps] containing the number of heads for each map.
         attn_scalings (List): List of size [num_maps] containing attention scale factors.
 
         in_proj_weights (nn.ParameterList): List of size [num_maps] with input projection matrices.
@@ -37,8 +37,8 @@ class BiAttnConv(nn.Module):
         Initializes the BiAttnConv module.
 
         Args:
-            feat_sizes (List): List of size [num_maps] containing the feature size in each map.
-            num_heads_list (List): List of size [num_maps] containing the number of heads in each map.
+            feat_sizes (List): List of size [num_maps] containing the feature size of each map.
+            num_heads_list (List): List of size [num_maps] containing the number of heads for each map.
             dropout (float): Dropout probability used throughout the module.
             ffn_size_multiplier (int): Feature size multiplier used for FFN hidden layer feature sizes.
         """
@@ -107,10 +107,10 @@ class BiAttnConv(nn.Module):
         Forward method of the BiAttnConv module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, H, W, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
-            feat_maps (List): List of size [num_maps] with updated feature maps of shape [batch_size, H, W, feat_size].
+            feat_maps (List): List of size [num_maps] of updated feature maps of shape [batch_size, fH, fW, feat_size].
         """
 
         # Project feature maps

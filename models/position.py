@@ -45,11 +45,11 @@ class SinePositionEncoder(nn.Module):
         Forward method of the SinePositionEncoder module.
 
         Args:
-             features (FloatTensor): Features of shape [batch_size, feat_dim, H, W].
-             feature_masks (BoolTensor): Boolean masks encoding inactive pixels of shape [batch_size, H, W].
+             features (FloatTensor): Features of shape [batch_size, feat_dim, fH, fW].
+             feature_masks (BoolTensor): Boolean masks encoding inactive pixels of shape [batch_size, fH, fW].
 
         Returns:
-            pos (Tensor): Position encodings of shape [batch_size, feat_dim, H, W].
+            pos (Tensor): Position encodings of shape [batch_size, feat_dim, fH, fW].
         """
 
         not_mask = ~feature_masks

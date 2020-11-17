@@ -92,12 +92,12 @@ class Backbone(nn.Module):
 
         Args:
             images (NestedTensor): NestedTensor consisting of:
-               - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
-               - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+               - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+               - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
 
         Returns:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, H, W].
-            masks (List): List of size [num_maps] with boolean masks of inactive pixels of shape [batch_size, H, W].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+            masks (List): List of size [num_maps] with boolean masks of inactive pixels of shape [batch_size, fH, fW].
         """
 
         # Compute backbone feature maps

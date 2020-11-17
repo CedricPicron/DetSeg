@@ -208,8 +208,8 @@ class DETR(nn.Module):
 
         Args:
             images (NestedTensor): NestedTensor consisting of:
-                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, H, W];
-                - images.mask (BoolTensor): boolean masks encoding inactive pixels of shape [batch_size, H, W].
+                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+                - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -249,9 +249,9 @@ class DETR(nn.Module):
         pos_encodings = self.position_encoder(proj_features, feature_masks)
 
         # Reshape features and position encodings for encoder and decoder modules
-        batch_size, feat_dim, H, W = proj_features.shape
-        proj_features = proj_features.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
-        pos_encodings = pos_encodings.view(batch_size, feat_dim, H*W).permute(2, 0, 1)
+        batch_size, feat_dim, fH, fW = proj_features.shape
+        proj_features = proj_features.view(batch_size, feat_dim, fH*fW).permute(2, 0, 1)
+        pos_encodings = pos_encodings.view(batch_size, feat_dim, fH*fW).permute(2, 0, 1)
 
         # Compute slots through feature encoding and decoding
         encoder_features = self.encoder(proj_features, feature_masks, pos_encodings)
