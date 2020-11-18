@@ -104,7 +104,7 @@ class SetCriterion(nn.Module):
             # Perform accuracy analysis if requested
             if 'accuracy' in self.analysis_names:
                 correct_predictions = torch.eq(pred_classes[pred_idx], tgt_classes[pred_idx])
-                accuracy = correct_predictions.sum() * (1/len(correct_predictions))
+                accuracy = correct_predictions.sum() / float(len(correct_predictions))
                 analysis_dict[f'accuracy_{layer_id}'] = 100*accuracy
 
             # Perform cardinality analysis if requested

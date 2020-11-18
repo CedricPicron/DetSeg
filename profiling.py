@@ -2,7 +2,7 @@ import argparse
 
 import torch
 import torch.autograd.profiler as profiler
-from torch.utils._benchmark import Timer
+from torch.utils.benchmark import Timer
 
 from main import get_parser
 from models.backbone import build_backbone
@@ -12,13 +12,13 @@ from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
 from models.encoder import build_encoder
-from models.heads.objectness import build_obj_head
+from models.heads.segmentation import build_seg_heads
 from utils.data import nested_tensor_from_image_list
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'bicore', 'bivinet_initial', 'bivinet_update', 'criterion', 'detr', 'detr_criterion', ]
-model_choices = [*model_choices, 'encoder', 'global_decoder', 'obj_head', 'sample_decoder']
+model_choices = ['backbone', 'bicore', 'binary_seg_head', 'bivinet', 'criterion', 'detr', 'encoder', 'global_decoder']
+model_choices = [*model_choices, 'sample_decoder']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -46,6 +46,7 @@ if profiling_args.model == 'backbone':
     backward_stmt = "model(*inputs)[0][-1].sum().backward()"
 
 elif profiling_args.model == 'bicore':
+    main_args.min_resolution_id = 3
     model = build_bicore(main_args).to('cuda')
 
     feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
@@ -55,36 +56,18 @@ elif profiling_args.model == 'bicore':
     feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
     feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
     feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
-    feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
     inputs = [feat_maps]
 
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(*inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
 
-elif profiling_args.model == 'bivinet_initial':
-    model = build_bivinet(main_args).to('cuda')
-
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
-
-    tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map2 = torch.randn(2, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map3 = torch.randn(2, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
-    tgt_dict = {'obj_maps': tgt_maps}
-
-    inputs = {'images': images, 'tgt_dict': tgt_dict}
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)[1]['obj_loss'].backward()"
-
-elif profiling_args.model == 'bivinet_update':
-    model = build_bivinet(main_args).to('cuda')
+elif profiling_args.model == 'binary_seg_head':
+    main_args.min_resolution_id = 3
+    main_args.seg_heads = ['binary']
+    main_args.disputed_loss = True
+    model = build_seg_heads(main_args)[0].to('cuda')
 
     feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
     feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
@@ -93,7 +76,7 @@ elif profiling_args.model == 'bivinet_update':
     feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
     feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
     feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
-    feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
 
     tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
     tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
@@ -102,13 +85,34 @@ elif profiling_args.model == 'bivinet_update':
     tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
     tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
     tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
-    tgt_dict = {'obj_maps': tgt_maps}
+    tgt_maps = [tgt_map3, tgt_map4, tgt_map5, tgt_map6]
+    tgt_dict = {'binary_maps': tgt_maps}
 
-    inputs = {'core_feat_maps': feat_maps, 'tgt_dict': tgt_dict}
+    inputs = [feat_maps, tgt_dict]
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)[1]['obj_loss'].backward()"
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "model(*inputs)[0]['binary_seg_loss'].backward()"
+
+elif profiling_args.model == 'bivinet':
+    main_args.meta_arch = 'BiViNet'
+    main_args.min_resolution_id = 3
+    main_args.num_core_layers = 4
+    main_args.seg_heads = ['binary']
+    main_args.disputed_loss = True
+    model = build_bivinet(main_args).to('cuda')
+
+    images = torch.randn(2, 3, 1024, 1024)
+    images = nested_tensor_from_image_list(images).to('cuda')
+
+    num_targets_total = 20
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    masks = (torch.randn(num_targets_total, 1024, 1024) > 1.0).to('cuda')
+    tgt_dict = {'sizes': sizes, 'masks': masks}
+
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    forward_stmt = "model(*[images, tgt_dict.copy()])"
+    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 91
@@ -118,15 +122,15 @@ elif profiling_args.model == 'criterion':
         num_slots_total = main_args.batch_size * main_args.num_init_slots
         logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-        batch_idx, _ = torch.randint(main_args.batch_size, (num_slots_total,), device='cuda').sort()
-        pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 6, 'iter_id': 1}]
+        sizes = torch.tensor([i*main_args.num_init_slots for i in range(main_args.batch_size+1)], device='cuda')
+        pred_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
 
         return pred_list
 
-    num_target_boxes_total = 20
-    labels = torch.randint(main_args.num_classes, (num_target_boxes_total,), device='cuda')
-    boxes = torch.abs(torch.randn(num_target_boxes_total, 4, device='cuda'))
-    sizes, _ = torch.randint(num_target_boxes_total, (main_args.batch_size+1,), device='cuda').sort()
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     globals_dict = {'criterion': criterion, 'generate_pred_list': generate_pred_list, 'tgt_dict': tgt_dict}
@@ -136,42 +140,24 @@ elif profiling_args.model == 'criterion':
 elif profiling_args.model == 'detr':
     main_args.meta_arch = 'DETR'
     main_args.lr_backbone = 1e-5
-    main_args.lr_decoder = 1e-4
     main_args.lr_encoder = 1e-4
+    main_args.lr_decoder = 1e-4
     main_args.num_classes = 91
+    model = build_detr(main_args).to('cuda')
 
-    detr = build_detr(main_args).to('cuda')
-    images = torch.randn(2, 3, 1024, 1024)
+    images = torch.randn(2, 3, 800, 800)
     images = nested_tensor_from_image_list(images).to('cuda')
 
-    keys = ['logits', 'boxes']
-    globals_dict = {'detr': detr, 'images': images, 'keys': keys}
-
-    forward_stmt = "detr(images)"
-    backward_stmt = "torch.cat([v for k, v in detr(images)[0].items() if k in keys], dim=1).sum().backward()"
-
-elif profiling_args.model == 'detr_criterion':
-    main_args.meta_arch = 'DETR'
-    main_args.lr_backbone = 1e-5
-    main_args.lr_decoder = 1e-4
-    main_args.lr_encoder = 1e-4
-    main_args.num_classes = 91
-
-    detr = build_detr(main_args).to('cuda')
-    criterion = build_criterion(main_args).to('cuda')
-
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
-
-    num_target_boxes_total = 20
-    labels = torch.randint(main_args.num_classes, (num_target_boxes_total,), device='cuda')
-    boxes = torch.abs(torch.randn(num_target_boxes_total, 4, device='cuda'))
-    sizes, _ = torch.randint(num_target_boxes_total, (main_args.batch_size+1,), device='cuda').sort()
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    globals_dict = {'criterion': criterion, 'detr': detr, 'images': images, 'tgt_dict': tgt_dict}
-    forward_stmt = "criterion(detr(images), tgt_dict)"
-    backward_stmt = "torch.stack([v for v in criterion(detr(images), tgt_dict)[0].values()]).sum().backward()"
+    optimizer = torch.optim.AdamW(model.parameters())
+    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    forward_stmt = "model(*[images])"
+    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
 
 elif profiling_args.model == 'encoder':
     main_args.lr_encoder = 1e-4
@@ -204,33 +190,6 @@ elif profiling_args.model == 'global_decoder':
     forward_stmt = "model(*inputs)"
     backward_stmt = "model(*inputs)['slots'].sum().backward()"
 
-elif profiling_args.model == 'obj_head':
-    model = build_obj_head(main_args).to('cuda')
-
-    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
-    feat_maps = [feat_map2, feat_map3, feat_map4, feat_map5, feat_map6]
-
-    tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map1 = torch.randn(2, 512, 512).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map2 = torch.randn(2, 256, 256).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map3 = torch.randn(2, 128, 128).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map4 = torch.randn(2, 64, 64).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map5 = torch.randn(2, 32, 32).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_map6 = torch.randn(2, 16, 16).to('cuda').clamp(-0.5, 0.5) + 0.5
-    tgt_maps = [tgt_map2, tgt_map3, tgt_map4, tgt_map5, tgt_map6]
-    tgt_dict = {'obj_maps': tgt_maps}
-
-    inputs = [feat_maps, tgt_dict]
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs)[0]['obj_loss'].backward()"
-
 elif profiling_args.model == 'sample_decoder':
     main_args.decoder_type = 'sample'
     main_args.lr_decoder = 1e-4
@@ -250,9 +209,14 @@ elif profiling_args.model == 'sample_decoder':
 # Select forward or backward statement
 stmt = forward_stmt if profiling_args.forward else backward_stmt
 
-# Warm-up and timing with torch.utils._benchmark.Timer
+# Do not build computation graph with forward statement
+if profiling_args.forward:
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+
+# Warm-up and timing with torch.utils.benchmark.Timer
 timer = Timer(stmt=stmt, globals=globals_dict)
-t = timer.timeit(number=10)._median*1e3
+t = timer.timeit(number=10).median*1e3
 
 # Profiling with torch.autograd.profiler.profile(use_cuda=True)
 with profiler.profile(use_cuda=True, profile_memory=profiling_args.memory) as prof:

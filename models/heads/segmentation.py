@@ -44,15 +44,15 @@ class BinarySegHead(nn.Module):
         self.loss_weight = loss_weight
 
     @staticmethod
-    def required_mask_types():
+    def required_map_types():
         """
-        Method returning the required mask types of the BinarySegHead module.
+        Method returning the required map types of the BinarySegHead module.
 
         Returns:
-            List of strings containing the names of the module's required mask types.
+            List of strings containing the names of the module's required map types.
         """
 
-        return ['binary_masks']
+        return ['binary_maps']
 
     def forward(self, feat_maps, tgt_dict=None):
         """
@@ -61,7 +61,7 @@ class BinarySegHead(nn.Module):
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
-                - binary_masks (List): binary (object + background) segmentation masks of shape [batch_size, fH, fW].
+                - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
@@ -69,7 +69,8 @@ class BinarySegHead(nn.Module):
                     - binary_seg_loss (FloatTensor): weighted binary segmentation loss of shape [1].
 
                 analysis_dict (Dictionary): Analysis dictionary containing following key:
-                    - binary_seg_accuracy (FloatTensor): accuracy of the binary segmentation of shape [1].
+                    - binary_seg_accuracy (FloatTensor): accuracy of the binary segmentation of shape [1];
+                    - binary_seg_error (FloatTensor): average error of the binary segmentation of shape [1].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following key:
@@ -81,12 +82,12 @@ class BinarySegHead(nn.Module):
 
         # Compute and return dictionary with predicted binary segmentation maps (validation/testing only)
         if tgt_dict is None:
-            pred_dict = {'binary_maps': [F.sigmoid(logit_map) for logit_map in logit_maps]}
+            pred_dict = {'binary_maps': [torch.clamp(logit_map/4 + 0.5, 0.0, 1.0) for logit_map in logit_maps]}
             return pred_dict
 
         # Flatten logit and target maps and initialize losses tensor (trainval only)
         logits = torch.cat([logit_map.flatten() for logit_map in logit_maps])
-        targets = torch.cat([tgt_mask.flatten() for tgt_mask in tgt_dict['binary_masks']])
+        targets = torch.cat([tgt_map.flatten() for tgt_map in tgt_dict['binary_maps']])
         losses = torch.zeros_like(logits)
 
         # Compute losses at background ground-truth positions (trainval only)
@@ -99,8 +100,9 @@ class BinarySegHead(nn.Module):
 
         # Compute losses at disputed ground-truth positions if desired (trainval only)
         if self.disputed_loss:
-            disputed = torch.bitwise_and(targets > 0 and targets < 1)
-            losses[disputed] = F.smooth_l1_loss(logits[disputed]/4, targets[disputed]-0.5, beta=self.disputed_beta)
+            disputed = torch.bitwise_and(targets > 0, targets < 1)
+            smooth_l1_kwargs = {'reduction': 'none', 'beta': self.disputed_beta}
+            losses[disputed] = F.smooth_l1_loss(logits[disputed]/4 + 0.5, targets[disputed], **smooth_l1_kwargs)
 
         # Apply map size corrections to losses if desired (trainval only)
         if self.map_size_correction:
@@ -114,9 +116,14 @@ class BinarySegHead(nn.Module):
         avg_loss = torch.sum(losses) / batch_size
         loss_dict = {'binary_seg_loss': self.loss_weight * avg_loss}
 
-        # Perform analyses and place them in analysis dictionary (trainval only)
+        # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():
-            analysis_dict = {}
+            predictions = torch.clamp(logits/4 + 0.5, 0.0, 1.0)
+            correct_predictions = torch.cat([predictions[background_mask] < 0.5, predictions[object_mask] > 0.5])
+
+            accuracy = correct_predictions.sum() / float(len(correct_predictions))
+            avg_error = torch.abs(predictions - targets).mean()
+            analysis_dict = {'binary_seg_accuracy': 100*accuracy, 'binary_seg_error': avg_error}
 
         return loss_dict, analysis_dict
 
@@ -144,7 +151,7 @@ def build_seg_heads(args):
 
     # Build desired segmentation head modules
     for seg_head_type in args.seg_heads:
-        if seg_head_type == 'binary_seg':
+        if seg_head_type == 'binary':
             head_args = [args.disputed_loss, args.disputed_beta, not args.no_map_size_correction, args.bin_seg_weight]
             binary_seg_head = BinarySegHead(feat_sizes, *head_args)
             seg_heads.append(binary_seg_head)

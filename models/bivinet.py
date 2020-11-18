@@ -22,7 +22,7 @@ class BiViNet(nn.Module):
         projs (nn.ModuleList): List of size [num_core_maps] implementing backbone to core projection modules.
         cores (nn.ModuleList): List of size [num_core_layers] with concatenated core modules.
         heads (nn.ModuleList): List of size [num_heads] with BiViNet head modules.
-        mask_types (Set): Set of strings containing the names of the required mask types.
+        map_types (Set): Set of strings containing the names of the required map types.
     """
 
     def __init__(self, backbone, core_feat_sizes, core, num_core_layers, heads):
@@ -51,8 +51,8 @@ class BiViNet(nn.Module):
         self.projs = nn.ModuleList(nn.Conv2d(f0, f1, kernel_size=1) for f0, f1 in zip(f0s, f1s))
         self.projs.append(nn.Conv2d(f0s[-1], core_feat_sizes[-1], kernel_size=3, stride=2, padding=1))
 
-        # Get mask types required by the heads
-        self.mask_types = {mask_type for head in heads for mask_type in head.required_mask_types()}
+        # Get map types required by the heads
+        self.map_types = {map_type for head in heads for map_type in head.required_map_types()}
 
     @staticmethod
     def get_param_families():
@@ -78,73 +78,73 @@ class BiViNet(nn.Module):
             binary_masks (ByteTensor): Binary (object + background) segmentation masks of shape [batch_size, iH, iW].
         """
 
-        binary_masks = torch.cat([tgt_masks[i0:i1].any(dim=0) for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])], dim=0)
+        binary_masks = torch.stack([tgt_masks[i0:i1].any(dim=0) for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])])
 
         return binary_masks
 
     @staticmethod
     def downsample_masks(in_masks, feat_maps):
         """
-        Method downsampling the full-resolution 'in_masks' to the same resolutions as found in 'feat_maps'.
+        Method downsampling the full-resolution 'in_masks' to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
             in_masks (ByteTensor): Padded full-resolution segmentation masks of shape [*, max_iH, max_iW].
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
-            out_masks (List): List of size [num_maps] with downsampled FloatTensor masks of shape [*, fH, fW].
+            out_maps (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
         """
 
-        # Initialize list of downsampled output masks
+        # Initialize list of downsampled output maps
         device = in_masks.device
         num_targets_total = in_masks.shape[0]
         map_sizes = [feat_map.shape[1:-1] for feat_map in feat_maps]
-        out_masks = [torch.zeros(num_targets_total, *map_size, device=device) for map_size in map_sizes]
+        out_maps = [torch.zeros(num_targets_total, *map_size, device=device) for map_size in map_sizes]
 
-        # Prepare masks for convolution and get convolution kernel
-        masks = in_masks[None, None].float()
+        # Get initial maps and convolution kernel
+        maps = in_masks[:, None].float()
         average_kernel = torch.ones(1, 1, 3, 3, device=device)/9
 
-        # Compue list of downsampled output masks
-        for i in range(len(out_masks)):
-            while masks.shape[-2:] != map_sizes[i]:
-                masks = F.conv2d(masks, average_kernel, stride=2, padding=1)
+        # Compue list of downsampled output maps
+        for i in range(len(out_maps)):
+            while maps.shape[-2:] != map_sizes[i]:
+                maps = F.conv2d(maps, average_kernel, stride=2, padding=1)
 
-            out_masks[i] = masks
+            out_maps[i] = maps
 
-        return out_masks
+        return out_maps
 
-    def prepare_masks(self, tgt_dict, feat_maps):
+    def prepare_maps(self, tgt_dict, feat_maps):
         """
-        Method preparing the segmentation masks.
+        Method preparing the segmentation maps.
 
-        For each mask type, the preparation consists of 2 steps:
+        For each map type, the preparation consists of 2 steps:
             1) Get the desired full-resolution masks.
-            2) Downsample the full-resolution masks to the same resolutions as found in 'feat_maps'.
+            2) Downsample the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
             tgt_dict (List): Updated target dictionary with 'masks' key removed and potential additional keys:
-                - binary_masks (List): binary (object + background) segmentation masks of shape [batch_size, fH, fW].
+                - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
         Raises:
-            ValueError: Raised when an unknown mask type is found in the 'self.mask_types' set.
+            ValueError: Raised when an unknown map type is found in the 'self.map_types' set.
         """
 
-        # Get the required masks
-        for mask_type in self.mask_types:
-            if mask_type == 'binary_masks':
+        # Get the required maps
+        for map_type in self.map_types:
+            if map_type == 'binary_maps':
                 binary_masks = self.get_binary_masks(tgt_dict['sizes'], tgt_dict['masks'])
-                tgt_dict['binary_masks'] = self.downsample_masks(binary_masks, feat_maps)
+                tgt_dict[map_type] = self.downsample_masks(binary_masks, feat_maps)
 
             else:
-                raise ValueError(f"Unknown mask type '{mask_type}' in 'self.mask_types'.")
+                raise ValueError(f"Unknown map type '{map_type}' in 'self.map_types'.")
 
         # Remove 'masks' key from target dictionary
         del tgt_dict['masks']
@@ -159,12 +159,12 @@ class BiViNet(nn.Module):
         The model parameters are updated during training by backpropagating the loss terms from the loss dictionary.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (List): List of size [num_maps] with target masks of shape [num_targets_total, fH, fW].
+                - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
@@ -238,24 +238,30 @@ class BiViNet(nn.Module):
         map_ids = [min(i, len(feat_maps)-1) for i in range(len(self.projs))]
         feat_maps = [proj(feat_maps[i]).permute(0, 2, 3, 1) for i, proj in zip(map_ids, self.projs)]
 
-        # Prepare masks and evaluate initial core feature maps (training/validation only)
+        # Prepare maps and evaluate initial core feature maps (training/validation only)
         if tgt_dict is not None:
-            tgt_dict = self.prepare_masks(tgt_dict, feat_maps)
+            tgt_dict = self.prepare_maps(tgt_dict, feat_maps)
             loss_dict, analysis_dict = self.evaluate_feat_maps(feat_maps, tgt_dict, optimizer, **kwargs)
+            loss_dict = {f'{k}_0': v for k, v in loss_dict.items()}
+            loss_dict['loss_0'] = sum(loss_dict.values())
+            analysis_dict = {f'{k}_0': v for k, v in analysis_dict.items()}
 
-        # Iteratively update and evaluate core feature maps
+        # Iteratively detach, update and evaluate core feature maps
         for i, core in enumerate(self.cores, 1):
+
+            # Detach core feature maps (training only)
+            if optimizer is not None:
+                feat_maps = [feat_map.detach() for feat_map in feat_maps]
+
+            # Update core feature maps (training/validation only)
             feat_maps = core(feat_maps)
 
             # Evaluate updated core feature maps (training/validation only)
             if tgt_dict is not None:
                 layer_loss_dict, layer_analysis_dict = self.evaluate_feat_maps(feat_maps, tgt_dict, optimizer, **kwargs)
                 loss_dict.update({f'{k}_{i}': v for k, v in layer_loss_dict.items()})
+                loss_dict[f'loss_{i}'] = sum(layer_loss_dict.values())
                 analysis_dict.update({f'{k}_{i}': v for k, v in layer_analysis_dict.items()})
-
-            # Detach feature maps (training only)
-            if optimizer is not None:
-                feat_maps = [feat_map.detach() for feat_map in feat_maps]
 
         # Get prediction dictionary (validation/testing only)
         if tgt_dict is None or optimizer is None:
