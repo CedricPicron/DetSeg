@@ -68,25 +68,27 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, evaluator, epoch=None, print_freq=10):
+def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     """
     Evaluate model.
 
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
         dataloader (torch.utils.data.Dataloader): Validation dataloader.
-        evaluator (object): Object capable of computing evaluations from predictions and storing them.
+        evaluator (object): Object computing evaluations from predictions and storing them (defaults to None).
         epoch (int): Training epochs completed (defaults to None).
         print_freq (int): Logger print frequency (defaults to 10).
 
     Returns:
         val_stats (Dict): Dictionary containing the validation statistics.
-        evaluator (object): Updated evaluator object containing the evaluations.
+        evaluator (object): Updated evaluator object containing the evaluations (or None if None evaluator was given).
     """
 
     device = next(model.parameters()).device
     model.eval()
-    evaluator.reset()
+
+    if evaluator is not None:
+        evaluator.reset()
 
     metric_logger = MetricLogger(delimiter="  ")
     header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
@@ -114,19 +116,22 @@ def evaluate(model, dataloader, evaluator, epoch=None, print_freq=10):
         metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
         # Update evaluator
-        evaluator.update(pred_dict, eval_dict)
+        if evaluator is not None:
+            evaluator.update(pred_dict, eval_dict)
 
     # Accumulate predictions from all images and summarize
-    evaluator.synchronize_between_processes()
-    evaluator.accumulate()
-    evaluator.summarize()
+    if evaluator is not None:
+        evaluator.synchronize_between_processes()
+        evaluator.accumulate()
+        evaluator.summarize()
 
     # Get epoch validation statistics
     metric_logger.synchronize_between_processes()
     val_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    for metric in evaluator.metrics:
-        val_stats[f'eval_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
+    if evaluator is not None:
+        for metric in evaluator.metrics:
+            val_stats[f'eval_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
 
     return val_stats, evaluator
 

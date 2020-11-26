@@ -27,6 +27,6 @@ def build_dataset(args):
         args.num_classes = 91
         train_dataset, val_dataset, evaluator = build_coco(args)
     else:
-        raise ValueError(f"Unknown dataset name {args.dataset} was provided.")
+        raise ValueError(f"Unknown dataset name '{args.dataset}' was provided.")
 
     return train_dataset, val_dataset, evaluator

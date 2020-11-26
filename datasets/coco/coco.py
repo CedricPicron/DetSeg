@@ -430,6 +430,9 @@ def build_coco(args):
         train_dataset (CocoDataset): The specified COCO training dataset.
         val_dataset (CocoDataset): The specified COCO validation dataset.
         evaluator (CocoEvaluator): COCO evaluator capable of computing evaluations from predictions and storing them.
+
+     Raises:
+        ValueError: Raised when unknown evaluator type is provided in args.evaluator.
     """
 
     coco_root = Path() / 'datasets' / 'coco'
@@ -443,6 +446,12 @@ def build_coco(args):
 
     train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, requires_masks)
     val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, requires_masks)
-    evaluator = CocoEvaluator(val_dataset.coco)
+
+    if args.evaluator == 'detection':
+        evaluator = CocoEvaluator(val_dataset.coco)
+    elif args.evaluator == 'none':
+        evaluator = None
+    else:
+        raise ValueError(f"Unknown evaluator type '{args.evaluator}' was provided.")
 
     return train_dataset, val_dataset, evaluator

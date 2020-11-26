@@ -205,13 +205,13 @@ class BiAttnConv(nn.Module):
             query_map = query_map.view(batch_size, H1, W1, num_heads, 1, -1)
 
             key_map = proj_map0[:, :, :, -2*f:-f] if first_map else proj_map0[:, :, :, -e-2*f:-e-f]
-            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, W0%2, 1, H0%2)).permute(0, 2, 3, 1)
+            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
             key_map = torch.stack([key_map[:, i:H0+i:2, j:W0+j:2, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
             key_map = key_map + pos_feat[-f:, :]
             key_map = key_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
             value_map = proj_map0[:, :, :, -f:] if first_map else proj_map0[:, :, :, -e-f:-e]
-            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, W0%2, 1, H0%2)).permute(0, 2, 3, 1)
+            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
             value_map = torch.stack([value_map[:, i:H0+i:2, j:W0+j:2, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
             value_map = value_map.view(batch_size, H1, W1, num_heads, -1, 9)
 

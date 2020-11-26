@@ -106,7 +106,7 @@ class BinarySegHead(nn.Module):
 
         # Apply map size corrections to losses if desired (trainval only)
         if self.map_size_correction:
-            map_sizes = [logit_map.shape[1] * logit_map.shape[2] for logit_map in logit_maps]
+            map_sizes = [logit_map.numel() for logit_map in logit_maps]
             scales = [map_sizes[-1]/map_size for map_size in map_sizes]
             indices = torch.cumsum(torch.tensor([0, *map_sizes], device=logits.device), dim=0)
             losses = torch.cat([scale*losses[i0:i1] for scale, i0, i1 in zip(scales, indices[:-1], indices[1:])])
@@ -119,9 +119,9 @@ class BinarySegHead(nn.Module):
         # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():
             predictions = torch.clamp(logits/4 + 0.5, 0.0, 1.0)
-            correct_predictions = torch.cat([predictions[background_mask] < 0.5, predictions[object_mask] > 0.5])
+            correct_preds = torch.cat([predictions[background_mask] < 0.5, predictions[object_mask] > 0.5])
 
-            accuracy = correct_predictions.sum() / float(len(correct_predictions))
+            accuracy = correct_preds.sum() / float(len(correct_preds)) if len(correct_preds) > 0 else 1.0
             avg_error = torch.abs(predictions - targets).mean()
             analysis_dict = {'binary_seg_accuracy': 100*accuracy, 'binary_seg_error': avg_error}
 

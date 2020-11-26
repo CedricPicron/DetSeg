@@ -21,7 +21,7 @@ class BiViNet(nn.Module):
         backbone (nn.Module): Module implementing the BiViNet backbone.
         projs (nn.ModuleList): List of size [num_core_maps] implementing backbone to core projection modules.
         cores (nn.ModuleList): List of size [num_core_layers] with concatenated core modules.
-        heads (nn.ModuleList): List of size [num_heads] with BiViNet head modules.
+        heads (nn.ModuleList): List of size [num_core_layers+1] with copies of BiViNet head modules for each layer.
         map_types (Set): Set of strings containing the names of the required map types.
     """
 
@@ -43,7 +43,7 @@ class BiViNet(nn.Module):
         # Set backbone, core and heads attributes
         self.backbone = backbone
         self.cores = nn.ModuleList([copy.deepcopy(core) for _ in range(num_core_layers)])
-        self.heads = nn.ModuleList(heads)
+        self.heads = nn.ModuleList([copy.deepcopy(nn.ModuleList(heads)) for _ in range(num_core_layers+1)])
 
         # Build backbone to core projection modules
         f0s = backbone.feat_sizes
@@ -151,9 +151,9 @@ class BiViNet(nn.Module):
 
         return tgt_dict
 
-    def evaluate_feat_maps(self, feat_maps, tgt_dict, optimizer, **kwargs):
+    def train_evaluate(self, feat_maps, tgt_dict, optimizer, layer_id, **kwargs):
         """
-        Method evaluating core feature maps.
+        Method performing the training/evaluation step for the given feature maps.
 
         Loss and analysis dictionaries are computed from the input feature maps using the module's heads.
         The model parameters are updated during training by backpropagating the loss terms from the loss dictionary.
@@ -167,6 +167,7 @@ class BiViNet(nn.Module):
                 - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
+            layer_id (int): Layer index, with 0 for the backbone layer and higher integers for the core layers.
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
 
@@ -180,21 +181,22 @@ class BiViNet(nn.Module):
         analysis_dict = {}
 
         # Populate loss and analysis dictionaries from head outputs
-        for head in self.heads:
+        for head in self.heads[layer_id]:
             head_loss_dict, head_analysis_dict = head(feat_maps, tgt_dict)
-            loss_dict.update(head_loss_dict)
-            analysis_dict.update(head_analysis_dict)
+            loss_dict.update({f'{k}_{layer_id}': v for k, v in head_loss_dict.items()})
+            analysis_dict.update({f'{k}_{layer_id}': v for k, v in head_analysis_dict.items()})
+
+        # Add total layer loss to analysis dictionary
+        with torch.no_grad():
+            analysis_dict[f'loss_{layer_id}'] = sum(loss_dict.values())
 
         # Return loss and analysis dictionaries (validation only)
         if optimizer is None:
             return loss_dict, analysis_dict
 
-        # Update model parameters (training only)
-        optimizer.zero_grad()
+        # Backpropagate loss (training only)
         loss = sum(loss_dict.values())
         loss.backward()
-        clip_grad_norm_(self.parameters(), kwargs['max_grad_norm']) if 'max_grad_norm' in kwargs else None
-        optimizer.step()
 
         return loss_dict, analysis_dict
 
@@ -231,6 +233,10 @@ class BiViNet(nn.Module):
                 pred_dict (Dict): Dictionary containing different predictions from the last core layer.
         """
 
+        # Reset gradients of model parameters (training only)
+        if optimizer is not None:
+            optimizer.zero_grad()
+
         # Get backbone feature maps
         feat_maps, _ = self.backbone(images)
 
@@ -238,34 +244,31 @@ class BiViNet(nn.Module):
         map_ids = [min(i, len(feat_maps)-1) for i in range(len(self.projs))]
         feat_maps = [proj(feat_maps[i]).permute(0, 2, 3, 1) for i, proj in zip(map_ids, self.projs)]
 
-        # Prepare maps and evaluate initial core feature maps (training/validation only)
+        # Prepare maps and train from and/or evaluate initial core feature maps (training/validation only)
         if tgt_dict is not None:
             tgt_dict = self.prepare_maps(tgt_dict, feat_maps)
-            loss_dict, analysis_dict = self.evaluate_feat_maps(feat_maps, tgt_dict, optimizer, **kwargs)
-            loss_dict = {f'{k}_0': v for k, v in loss_dict.items()}
-            loss_dict['loss_0'] = sum(loss_dict.values())
-            analysis_dict = {f'{k}_0': v for k, v in analysis_dict.items()}
+            loss_dict, analysis_dict = self.train_evaluate(feat_maps, tgt_dict, optimizer, layer_id=0, **kwargs)
 
-        # Iteratively detach, update and evaluate core feature maps
+        # Iteratively detach, update and train from and/or evaluate core feature maps
         for i, core in enumerate(self.cores, 1):
 
-            # Detach core feature maps (training only)
+            # Set correct requires_grad attributes and detach core feature maps (training only)
             if optimizer is not None:
+                # self.set_requires_grads(layer_id=i)
                 feat_maps = [feat_map.detach() for feat_map in feat_maps]
 
             # Update core feature maps (training/validation only)
             feat_maps = core(feat_maps)
 
-            # Evaluate updated core feature maps (training/validation only)
+            # Train from and/or evaluate the updated core feature maps (training/validation only)
             if tgt_dict is not None:
-                layer_loss_dict, layer_analysis_dict = self.evaluate_feat_maps(feat_maps, tgt_dict, optimizer, **kwargs)
-                loss_dict.update({f'{k}_{i}': v for k, v in layer_loss_dict.items()})
-                loss_dict[f'loss_{i}'] = sum(layer_loss_dict.values())
-                analysis_dict.update({f'{k}_{i}': v for k, v in layer_analysis_dict.items()})
+                layer_loss_dict, layer_analysis_dict = self.train_evaluate(feat_maps, tgt_dict, optimizer, i, **kwargs)
+                loss_dict.update(layer_loss_dict)
+                analysis_dict.update(layer_analysis_dict)
 
         # Get prediction dictionary (validation/testing only)
         if tgt_dict is None or optimizer is None:
-            pred_dict = {k: v for head in self.heads for k, v in head(feat_maps).items()}
+            pred_dict = {k: v for head in self.heads[0] for k, v in head(feat_maps).items()}
 
         # Return prediction dictionary (testing only)
         if tgt_dict is None:
@@ -274,6 +277,23 @@ class BiViNet(nn.Module):
         # Return prediction, loss and analysis dictionaries (validation only)
         if optimizer is None:
             return pred_dict, loss_dict, analysis_dict
+
+        # Clip gradient when positive maximum norm is provided (training only)
+        if 'max_grad_norm' in kwargs:
+            if kwargs['max_grad_norm'] > 0:
+                clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
+
+        # Update model parameters (training only)
+        optimizer.step()
+
+        # Compute average heads state dictionary (training only)
+        avg_state_dict = {}
+        for key_values in zip(*[heads.state_dict().items() for heads in self.heads]):
+            keys, values = list(zip(*key_values))
+            avg_state_dict[keys[0]] = sum(values) / len(values)
+
+        # Load average heads state dictionary into different heads (training only)
+        [heads.load_state_dict(avg_state_dict) for heads in self.heads]
 
         return loss_dict, analysis_dict
 

@@ -289,11 +289,19 @@ class DETR(nn.Module):
             pred_dict = pred_list[0]
             return pred_dict, loss_dict, analysis_dict
 
-        # Update model parameters (training only)
+        # Reset gradients of model parameters (training only)
         optimizer.zero_grad()
+
+        # Backpropagate loss (training only)
         loss = sum(loss_dict.values())
         loss.backward()
-        clip_grad_norm_(self.parameters(), kwargs['max_grad_norm']) if 'max_grad_norm' in kwargs else None
+
+        # Clip gradient when positive maximum norm is provided (training only)
+        if 'max_grad_norm' in kwargs:
+            if kwargs['max_grad_norm'] > 0:
+                clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
+
+        # Update model parameters (training only)
         optimizer.step()
 
         return loss_dict, analysis_dict

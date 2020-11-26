@@ -3,6 +3,7 @@ Main program script.
 """
 import argparse
 import datetime
+import json
 from pathlib import Path
 import time
 
@@ -34,6 +35,7 @@ def get_parser():
 
     # Dataset
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset used for training and validation')
+    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during validation')
 
     # Data loading
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
@@ -193,16 +195,22 @@ def main(args):
         checkpoint = torch.load(args.checkpoint, map_location='cpu')
         model.load_state_dict(checkpoint['model'])
 
-    # Wrap model into DDP if needed
+    # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = distributed.DistributedDataParallel(model, device_id=args.gpu)
 
     # Evaluate loaded model if required and return
     if args.eval:
-        _, evaluator = evaluate(model, val_dataloader, evaluator)
-        output_dir = Path(args.output_dir)
+        val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
 
         if args.output_dir and distributed.is_main_process():
+            output_dir = Path(args.output_dir)
+
+            if evaluator is None:
+                with (output_dir / 'eval.txt').open('w') as eval_file:
+                    eval_file.write(json.dumps(val_stats) + "\n")
+                    return
+
             for metric in evaluator.metrics:
                 evaluations = evaluator.sub_evaluators[metric].eval
                 torch.save(evaluations, output_dir / f'eval_{metric}.pth')
@@ -242,7 +250,7 @@ def main(args):
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        val_stats, _ = evaluate(model, val_dataloader, evaluator, epoch=epoch)
+        val_stats, _ = evaluate(model, val_dataloader, evaluator=evaluator, epoch=epoch)
         save_log(args.output_dir, epoch, train_stats, val_stats)
 
     # End training timer and report total training time
