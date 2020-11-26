@@ -119,11 +119,8 @@ class BiAttnConv(nn.Module):
             proj_map = F.linear(feat_map, in_proj_weight, in_proj_bias)
             proj_maps.append(proj_map)
 
-        # Get batch size and kernel indices
+        # Get batch size
         batch_size = feat_maps[0].shape[0]
-        device = feat_maps[0].device
-        x_kernel = torch.arange(3, device=device).repeat_interleave(3)
-        y_kernel = torch.arange(3, device=device).repeat(3)
 
         # Perform self-attention
         zip_list = [proj_maps, self.feat_sizes, self.attn_scalings, self.pos_feats]
@@ -138,13 +135,15 @@ class BiAttnConv(nn.Module):
 
             key_map = proj_map[:, :, :, f:2*f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
-            key_map = torch.stack([key_map[:, i:H+i, j:W+j, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
-            key_map = key_map + pos_feat[:f, :]
-            key_map = key_map.view(batch_size, H, W, num_heads, -1, 9)
+
+            sizes = [batch_size, H, W, f, 3, 3]
+            strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
+            key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H, W, f, 9)
+            key_map = (key_map + pos_feat[:f, :]).view(batch_size, H, W, num_heads, -1, 9)
 
             value_map = proj_map[:, :, :, 2*f:3*f]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
-            value_map = torch.stack([value_map[:, i:H+i, j:W+j, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
+            value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H, W, f, 9)
             value_map = value_map.view(batch_size, H, W, num_heads, -1, 9)
 
             attn_weights = F.softmax(torch.matmul(query_map, key_map), dim=-1)
@@ -168,14 +167,15 @@ class BiAttnConv(nn.Module):
 
             key_map = proj_map2[:, :, :, 3*g:3*g+f] if last_map else proj_map2[:, :, :, 4*g:4*g+f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
-            key_map = torch.stack([key_map[:, i:H2+i, j:W2+j, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
 
-            key_map = key_map + pos_feat[f:2*f, :]
-            key_map = key_map.view(batch_size, H2, W2, num_heads, -1, 9)
+            sizes = [batch_size, H2, W2, f, 3, 3]
+            strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
+            key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H2, W2, f, 9)
+            key_map = (key_map + pos_feat[f:2*f, :]).view(batch_size, H2, W2, num_heads, -1, 9)
 
             value_map = proj_map2[:, :, :, 3*g+f:3*g+2*f] if last_map else proj_map2[:, :, :, 4*g+f:4*g+2*f]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
-            value_map = torch.stack([value_map[:, i:H2+i, j:W2+j, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
+            value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H2, W2, f, 9)
             value_map = value_map.view(batch_size, H2, W2, num_heads, -1, 9)
 
             attn_weights = F.softmax(torch.matmul(query_map, key_map), dim=-1)
@@ -206,13 +206,16 @@ class BiAttnConv(nn.Module):
 
             key_map = proj_map0[:, :, :, -2*f:-f] if first_map else proj_map0[:, :, :, -e-2*f:-e-f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
-            key_map = torch.stack([key_map[:, i:H0+i:2, j:W0+j:2, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
-            key_map = key_map + pos_feat[-f:, :]
-            key_map = key_map.view(batch_size, H1, W1, num_heads, -1, 9)
+
+            sizes = [batch_size, H1, W1, f, 3, 3]
+            s0, s1, s2, s3 = key_map.stride()
+            strides = [s0, 2*s1, 2*s2, s3, s1, s2]
+            key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H1, W1, f, 9)
+            key_map = (key_map + pos_feat[-f:, :]).view(batch_size, H1, W1, num_heads, -1, 9)
 
             value_map = proj_map0[:, :, :, -f:] if first_map else proj_map0[:, :, :, -e-f:-e]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
-            value_map = torch.stack([value_map[:, i:H0+i:2, j:W0+j:2, :] for i, j in zip(x_kernel, y_kernel)], dim=-1)
+            value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H1, W1, f, 9)
             value_map = value_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
             attn_weights = F.softmax(torch.matmul(query_map, key_map), dim=-1)
