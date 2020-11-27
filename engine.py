@@ -99,7 +99,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
         eval_dict = {k: v.to(device) for k, v in eval_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict)
+        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict, extended_analysis=True)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)

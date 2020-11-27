@@ -182,7 +182,7 @@ class BiViNet(nn.Module):
 
         # Populate loss and analysis dictionaries from head outputs
         for head in self.heads[layer_id]:
-            head_loss_dict, head_analysis_dict = head(feat_maps, tgt_dict)
+            head_loss_dict, head_analysis_dict = head(feat_maps, tgt_dict, **kwargs)
             loss_dict.update({f'{k}_{layer_id}': v for k, v in head_loss_dict.items()})
             analysis_dict.update({f'{k}_{layer_id}': v for k, v in head_analysis_dict.items()})
 

@@ -19,9 +19,9 @@ class BiAttnConv(nn.Module):
 
         in_proj_weights (nn.ParameterList): List of size [num_maps] with input projection matrices.
         in_proj_biases (nn.ParameterList): List of size [num_maps] with input projection biases.
+        pos_feats (nn.ParameterList): List of size [num_maps] with local position features.
         out_proj_weights (nn.ParameterList): List of size [num_maps] with output projection matrices.
         out_proj_biases (nn.ParameterList): List of size [num_maps] with output projection biases.
-        pos_feats (nn.ParameterList): List of size [num_maps] with local position features.
         attn_dropouts (nn.ModuleList): List of size [num_maps] with attention dropout modules.
         attn_layernorms (nn.ModuleList): List of size [num_maps] with attention layernorm modules.
 
@@ -60,7 +60,7 @@ class BiAttnConv(nn.Module):
         self.num_heads_list = num_heads_list
         self.attn_scalings = [float(f//num_heads)**-0.5 for f, num_heads in zip(feat_sizes, num_heads_list)]
 
-        # Initializing input and output projection parameters
+        # Initializing input projection parameters
         bot_proj_size = 4*feat_sizes[0] + 2*feat_sizes[1]
         mid_proj_sizes = [2*i + 5*j + 2*k for i, j, k in zip(feat_sizes[:-2], feat_sizes[1:-1], feat_sizes[2:])]
         top_proj_size = 2*feat_sizes[-2] + 4*feat_sizes[-1]
@@ -69,9 +69,6 @@ class BiAttnConv(nn.Module):
         self.in_proj_weights = nn.ParameterList([Parameter(torch.empty(p, f)) for p, f in zip(proj_sizes, feat_sizes)])
         self.in_proj_biases = nn.ParameterList([Parameter(torch.empty(p)) for p in proj_sizes])
 
-        self.out_proj_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in feat_sizes])
-        self.out_proj_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in feat_sizes])
-
         # Initializing position features
         bot_pos_size = 2*feat_sizes[0]
         mid_pos_size = [3*f for f in feat_sizes[1:-1]]
@@ -79,7 +76,11 @@ class BiAttnConv(nn.Module):
         pos_sizes = [bot_pos_size, *mid_pos_size, top_pos_size]
         self.pos_feats = nn.ParameterList([Parameter(torch.empty(pos_size, 9)) for pos_size in pos_sizes])
 
-        # Initializing attention dropout and layernorm
+        # Initializing output projection parameters
+        self.out_proj_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in feat_sizes])
+        self.out_proj_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in feat_sizes])
+
+        # Initializing attention dropout and layernorm modules
         self.attn_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in feat_sizes])
         self.attn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in feat_sizes])
 

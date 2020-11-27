@@ -54,7 +54,51 @@ class BinarySegHead(nn.Module):
 
         return ['binary_maps']
 
-    def forward(self, feat_maps, tgt_dict=None):
+    @staticmethod
+    def get_accuracy(pred_correctness):
+        """
+        Method returning the accuracy corresponding to the given BoolTensor 'pred_correctness'.
+
+        Args:
+            pred_correctness (BoolTensor): Tensor of shape [num_predictions] containing the correctness of predictions.
+
+        Returns:
+            accuracy (FloatTensor): Tensor of shape [1] containing the accuracy (between 0 and 1) of the given tensor.
+        """
+
+        # Compute accuracy
+        accuracy = pred_correctness.sum() / float(len(pred_correctness)) if len(pred_correctness) > 0 else 1.0
+
+        return accuracy
+
+    @staticmethod
+    def perform_accuracy_analyses(pred_correctness, num_bg_targets):
+        """
+        Method performing accuracy-related analyses.
+
+        Args:
+            pred_correctness (BoolTensor): Tensor of shape [num_predictions] containing the correctness of predictions.
+            num_bg_targets (int): Integer containing the number of targets labeled as background.
+
+        Returns:
+            analysis_dict (Dict): Dictionary of accuracy-related analyses containing following keys:
+                - binary_seg_acc (FloatTensor): accuracy of the binary segmentation of shape [1];
+                - binary_seg_acc_bg (FloatTensor): background accuracy of the binary segmentation of shape [1];
+                - binary_seg_acc_obj (FloatTensor): object accuracy of the binary segmentation of shape [1].
+        """
+
+        # Compute (global) accuracy and place it into analysis dictionary
+        accuracy = BinarySegHead.get_accuracy(pred_correctness)
+        analysis_dict = {'binary_seg_acc': 100*accuracy}
+
+        # Compute background and object accuracy and place them into analysis dictionary
+        bg_accuracy = BinarySegHead.get_accuracy(pred_correctness[:num_bg_targets])
+        obj_accuracy = BinarySegHead.get_accuracy(pred_correctness[num_bg_targets:])
+        analysis_dict.update({'binary_seg_acc_bg': 100*bg_accuracy, 'binary_seg_acc_obj': 100*obj_accuracy})
+
+        return analysis_dict
+
+    def forward(self, feat_maps, tgt_dict=None, **kwargs):
         """
         Forward method of the BinarySegHead module.
 
@@ -63,12 +107,15 @@ class BinarySegHead(nn.Module):
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
+            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+                - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
+
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
                 loss_dict (Dictionary): Loss dictionary containing following key:
                     - binary_seg_loss (FloatTensor): weighted binary segmentation loss of shape [1].
 
-                analysis_dict (Dictionary): Analysis dictionary containing following key:
+                analysis_dict (Dictionary): Analysis dictionary containing at least following keys:
                     - binary_seg_accuracy (FloatTensor): accuracy of the binary segmentation of shape [1];
                     - binary_seg_error (FloatTensor): average error of the binary segmentation of shape [1].
 
@@ -91,12 +138,12 @@ class BinarySegHead(nn.Module):
         losses = torch.zeros_like(logits)
 
         # Compute losses at background ground-truth positions (trainval only)
-        background_mask = targets == 0
-        losses[background_mask] = torch.log(1 + torch.exp(logits[background_mask]))
+        bg_mask = targets == 0
+        losses[bg_mask] = torch.log(1 + torch.exp(logits[bg_mask]))
 
         # Compute losses at object ground-truth positions (trainval only)
-        object_mask = targets == 1
-        losses[object_mask] = torch.log(1 + torch.exp(-logits[object_mask]))
+        obj_mask = targets == 1
+        losses[obj_mask] = torch.log(1 + torch.exp(-logits[obj_mask]))
 
         # Compute losses at disputed ground-truth positions if desired (trainval only)
         if self.disputed_loss:
@@ -118,12 +165,32 @@ class BinarySegHead(nn.Module):
 
         # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():
-            predictions = torch.clamp(logits/4 + 0.5, 0.0, 1.0)
-            correct_preds = torch.cat([predictions[background_mask] < 0.5, predictions[object_mask] > 0.5])
+            preds = torch.clamp(logits/4 + 0.5, 0.0, 1.0)
 
-            accuracy = correct_preds.sum() / float(len(correct_preds)) if len(correct_preds) > 0 else 1.0
-            avg_error = torch.abs(predictions - targets).mean()
-            analysis_dict = {'binary_seg_accuracy': 100*accuracy, 'binary_seg_error': avg_error}
+            # Perform accuracy-related analyses and place them in analysis dictionary (trainval only)
+            pred_correctness = torch.cat([preds[bg_mask] < 0.5, preds[obj_mask] > 0.5], dim=0)
+            analysis_dict = BinarySegHead.perform_accuracy_analyses(pred_correctness, bg_mask.sum())
+
+            # Perform error analysis and place it in analysis dictionary (trainval only)
+            avg_error = torch.abs(preds - targets).mean()
+            analysis_dict['binary_seg_error'] = avg_error
+
+            # If desired, perform extended analyses (trainval only)
+            if 'extended_analysis' in kwargs:
+                if kwargs['extended_analysis']:
+
+                    # Perform map-specific accuracy analyses and them to analysis dictionary (trainval only)
+                    map_sizes = [logit_map.numel() for logit_map in logit_maps]
+                    indices = torch.cumsum(torch.tensor([0, *map_sizes], device=logits.device), dim=0)
+
+                    for i, i0, i1 in zip(range(len(logit_maps)), indices[:-1], indices[1:]):
+                        map_preds = preds[i0:i1]
+                        pred_correctness = [map_preds[bg_mask[i0:i1]] < 0.5, map_preds[obj_mask[i0:i1]] > 0.5]
+                        pred_correctness = torch.cat(pred_correctness, dim=0)
+
+                        num_bg_targets = bg_mask[i0:i1].sum()
+                        map_analysis_dict = BinarySegHead.perform_accuracy_analyses(pred_correctness, num_bg_targets)
+                        analysis_dict.update({f'{k}_f{i}': v for k, v in map_analysis_dict.items()})
 
         return loss_dict, analysis_dict
 
