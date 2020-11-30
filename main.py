@@ -98,6 +98,7 @@ def get_parser():
     parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
     parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
     parser.add_argument('--max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
+    parser.add_argument('--no_pos_feats', action='store_true', help='whether to disable local position features')
     parser.add_argument('--bicore_dropout', default=0.1, type=float, help='dropout value used with BiCore modules')
     parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
 

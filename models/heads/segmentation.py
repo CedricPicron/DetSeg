@@ -63,11 +63,14 @@ class BinarySegHead(nn.Module):
             pred_correctness (BoolTensor): Tensor of shape [num_predictions] containing the correctness of predictions.
 
         Returns:
-            accuracy (FloatTensor): Tensor of shape [1] containing the accuracy (between 0 and 1) of the given tensor.
+            accuracy (FloatTensor): Tensor of shape [] containing the accuracy (between 0 and 1) of the given tensor.
         """
 
         # Compute accuracy
-        accuracy = pred_correctness.sum() / float(len(pred_correctness)) if len(pred_correctness) > 0 else 1.0
+        if len(pred_correctness) > 0:
+            accuracy = pred_correctness.sum() / float(len(pred_correctness))
+        else:
+            accuracy = torch.tensor(1.0, dtype=pred_correctness.dtype, device=pred_correctness.device)
 
         return accuracy
 

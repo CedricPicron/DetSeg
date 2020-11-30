@@ -19,7 +19,8 @@ class BiAttnConv(nn.Module):
 
         in_proj_weights (nn.ParameterList): List of size [num_maps] with input projection matrices.
         in_proj_biases (nn.ParameterList): List of size [num_maps] with input projection biases.
-        pos_feats (nn.ParameterList): List of size [num_maps] with local position features.
+        with_pos_feats (bool): Boolean indicating whether local position features are used and learned.
+        pos_feats (nn.ParameterList, optional): List of size [num_maps] with local position features.
         out_proj_weights (nn.ParameterList): List of size [num_maps] with output projection matrices.
         out_proj_biases (nn.ParameterList): List of size [num_maps] with output projection biases.
         attn_dropouts (nn.ModuleList): List of size [num_maps] with attention dropout modules.
@@ -32,13 +33,14 @@ class BiAttnConv(nn.Module):
         ffn_layernorms (nn.ModuleList): List of size [num_maps] with FFN layernorm modules.
     """
 
-    def __init__(self, feat_sizes, num_heads_list, dropout, ffn_size_multiplier):
+    def __init__(self, feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier):
         """
         Initializes the BiAttnConv module.
 
         Args:
             feat_sizes (List): List of size [num_maps] containing the feature size of each map.
             num_heads_list (List): List of size [num_maps] containing the number of heads for each map.
+            with_pos_feats (bool): Boolean indicating whether local position features are used and learned.
             dropout (float): Dropout probability used throughout the module.
             ffn_size_multiplier (int): Feature size multiplier used for FFN hidden layer feature sizes.
         """
@@ -58,7 +60,7 @@ class BiAttnConv(nn.Module):
         # Set feature sizes, number of heads and attention scalings attributes
         self.feat_sizes = feat_sizes
         self.num_heads_list = num_heads_list
-        self.attn_scalings = [float(f//num_heads)**-0.5 for f, num_heads in zip(feat_sizes, num_heads_list)]
+        self.attn_scalings = [float(f//num_heads)**-0.25 for f, num_heads in zip(feat_sizes, num_heads_list)]
 
         # Initializing input projection parameters
         bot_proj_size = 4*feat_sizes[0] + 2*feat_sizes[1]
@@ -69,12 +71,16 @@ class BiAttnConv(nn.Module):
         self.in_proj_weights = nn.ParameterList([Parameter(torch.empty(p, f)) for p, f in zip(proj_sizes, feat_sizes)])
         self.in_proj_biases = nn.ParameterList([Parameter(torch.empty(p)) for p in proj_sizes])
 
-        # Initializing position features
-        bot_pos_size = 2*feat_sizes[0]
-        mid_pos_size = [3*f for f in feat_sizes[1:-1]]
-        top_pos_size = 2*feat_sizes[-1]
-        pos_sizes = [bot_pos_size, *mid_pos_size, top_pos_size]
-        self.pos_feats = nn.ParameterList([Parameter(torch.empty(pos_size, 9)) for pos_size in pos_sizes])
+        # Set attribute determining whether position features are used and learned
+        self.with_pos_feats = with_pos_feats
+
+        # Initializing position features, if desired
+        if with_pos_feats:
+            bot_pos_size = 2*feat_sizes[0]
+            mid_pos_size = [3*f for f in feat_sizes[1:-1]]
+            top_pos_size = 2*feat_sizes[-1]
+            pos_sizes = [bot_pos_size, *mid_pos_size, top_pos_size]
+            self.pos_feats = nn.ParameterList([Parameter(torch.empty(pos_size, 9)) for pos_size in pos_sizes])
 
         # Initializing output projection parameters
         self.out_proj_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in feat_sizes])
@@ -124,23 +130,24 @@ class BiAttnConv(nn.Module):
         batch_size = feat_maps[0].shape[0]
 
         # Perform self-attention
-        zip_list = [proj_maps, self.feat_sizes, self.attn_scalings, self.pos_feats]
+        zip_list = [range(len(feat_maps)), proj_maps, self.feat_sizes, self.attn_scalings]
         zip_list = [*zip_list, self.num_heads_list, self.out_proj_weights, self.out_proj_biases]
 
         self_attn_maps = []
-        for proj_map, f, scale, pos_feat, num_heads, out_weight, out_bias in zip(*zip_list):
+        for i, proj_map, f, scale, num_heads, out_weight, out_bias in zip(*zip_list):
             H, W = proj_map.shape[1:-1]
 
             query_map = scale*proj_map[:, :, :, :f]
             query_map = query_map.view(batch_size, H, W, num_heads, 1, -1)
 
-            key_map = proj_map[:, :, :, f:2*f]
+            key_map = scale*proj_map[:, :, :, f:2*f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
 
             sizes = [batch_size, H, W, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H, W, f, 9)
-            key_map = (key_map + pos_feat[:f, :]).view(batch_size, H, W, num_heads, -1, 9)
+            key_map = key_map + self.pos_feats[i][:f, :] if self.with_pos_feats else key_map
+            key_map = key_map.view(batch_size, H, W, num_heads, -1, 9)
 
             value_map = proj_map[:, :, :, 2*f:3*f]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
@@ -154,25 +161,26 @@ class BiAttnConv(nn.Module):
 
         # Perform top-down cross-attention
         last_map_bools = [i == len(feat_maps)-1 for i in range(len(feat_maps))]
-        zip_list = [proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:], self.attn_scalings[:-1]]
-        zip_list = [*zip_list, last_map_bools[1:], self.pos_feats[:-1], self.num_heads_list[:-1]]
+        zip_list = [range(len(feat_maps)-1), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
+        zip_list = [*zip_list, self.attn_scalings[:-1], last_map_bools[1:], self.num_heads_list[:-1]]
         zip_list = [*zip_list, self.out_proj_weights[:-1], self.out_proj_biases[:-1]]
 
         top_down_attn_maps = []
-        for proj_map1, proj_map2, f, g, scale, last_map, pos_feat, num_heads, out_weight, out_bias in zip(*zip_list):
+        for i, proj_map1, proj_map2, f, g, scale, last_map, num_heads, out_weight, out_bias in zip(*zip_list):
             H1, W1 = proj_map1.shape[1:-1]
             H2, W2 = proj_map2.shape[1:-1]
 
             query_map = scale*proj_map1[:, ::2, ::2, 3*f:4*f]
             query_map = query_map.view(batch_size, H2, W2, num_heads, 1, -1)
 
-            key_map = proj_map2[:, :, :, 3*g:3*g+f] if last_map else proj_map2[:, :, :, 4*g:4*g+f]
+            key_map = scale*proj_map2[:, :, :, 3*g:3*g+f] if last_map else scale*proj_map2[:, :, :, 4*g:4*g+f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
 
             sizes = [batch_size, H2, W2, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H2, W2, f, 9)
-            key_map = (key_map + pos_feat[f:2*f, :]).view(batch_size, H2, W2, num_heads, -1, 9)
+            key_map = key_map + self.pos_feats[i][f:2*f, :] if self.with_pos_feats else key_map
+            key_map = key_map.view(batch_size, H2, W2, num_heads, -1, 9)
 
             value_map = proj_map2[:, :, :, 3*g+f:3*g+2*f] if last_map else proj_map2[:, :, :, 4*g+f:4*g+2*f]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
@@ -193,26 +201,27 @@ class BiAttnConv(nn.Module):
 
         # Perform bottom-up cross-attention
         first_map_bools = [i == 0 for i in range(len(feat_maps))]
-        zip_list = [proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:], self.attn_scalings[1:]]
-        zip_list = [*zip_list, first_map_bools[:-1], self.pos_feats[1:], self.num_heads_list[1:]]
+        zip_list = [range(1, len(feat_maps)), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
+        zip_list = [*zip_list, self.attn_scalings[1:], first_map_bools[:-1], self.num_heads_list[1:]]
         zip_list = [*zip_list, self.out_proj_weights[1:], self.out_proj_biases[1:]]
 
         bottom_up_attn_maps = [torch.zeros_like(feat_maps[0])]
-        for proj_map0, proj_map1, e, f, scale, first_map, pos_feat, num_heads, out_weight, out_bias in zip(*zip_list):
+        for i, proj_map0, proj_map1, e, f, scale, first_map, num_heads, out_weight, out_bias in zip(*zip_list):
             H0, W0 = proj_map0.shape[1:-1]
             H1, W1 = proj_map1.shape[1:-1]
 
             query_map = scale*proj_map1[:, :, :, -f:]
             query_map = query_map.view(batch_size, H1, W1, num_heads, 1, -1)
 
-            key_map = proj_map0[:, :, :, -2*f:-f] if first_map else proj_map0[:, :, :, -e-2*f:-e-f]
+            key_map = scale*proj_map0[:, :, :, -2*f:-f] if first_map else scale*proj_map0[:, :, :, -e-2*f:-e-f]
             key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
 
             sizes = [batch_size, H1, W1, f, 3, 3]
             s0, s1, s2, s3 = key_map.stride()
             strides = [s0, 2*s1, 2*s2, s3, s1, s2]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H1, W1, f, 9)
-            key_map = (key_map + pos_feat[-f:, :]).view(batch_size, H1, W1, num_heads, -1, 9)
+            key_map = key_map + self.pos_feats[i][-f:, :] if self.with_pos_feats else key_map
+            key_map = key_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
             value_map = proj_map0[:, :, :, -f:] if first_map else proj_map0[:, :, :, -e-f:-e]
             value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
@@ -270,7 +279,8 @@ def build_bicore(args):
 
     # Build desired BiCore module
     if args.bicore_type == 'BiAttnConv':
-        bicore = BiAttnConv(feat_sizes, num_heads_list, args.bicore_dropout, args.ffn_size_multiplier)
+        with_pos_feats = not args.no_pos_feats
+        bicore = BiAttnConv(feat_sizes, num_heads_list, with_pos_feats, args.bicore_dropout, args.ffn_size_multiplier)
     else:
         raise ValueError(f"Unknown BiCore type '{args.bicore_type}' was provided.")
 
