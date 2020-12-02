@@ -53,8 +53,8 @@ class Backbone(nn.Module):
         super().__init__()
 
         # Register input normalization buffers with values expected by torchvision pretrained backbones
-        self.register_buffer('in_norm_mean', torch.tensor([0.485, 0.456, 0.406]), persistent=False)
-        self.register_buffer('in_norm_std', torch.tensor([0.229, 0.224, 0.225]), persistent=False)
+        self.register_buffer('in_norm_mean', torch.tensor([0.485, 0.456, 0.406]))
+        self.register_buffer('in_norm_std', torch.tensor([0.229, 0.224, 0.225]))
 
         # Load ImageNet pretrained backbone from torchvision
         backbone_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'pretrained': True}
@@ -74,23 +74,39 @@ class Backbone(nn.Module):
         default_feat_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
         self.feat_sizes = default_feat_sizes[-len(return_layers):]
 
-    def load_from_original_detr(self, state_dict):
+    def load_from_original_detr(self, fb_detr_state_dict):
         """
-        Loads backbone from state_dict of an original Facebook DETR model.
+        Loads backbone from state dictionary of an original Facebook DETR model.
 
-        state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
+        fb_detr_state_dict (Dict): Dictionary containing Facebook DETR model parameters and persistent buffers.
         """
 
         backbone_identifier = 'backbone.0.'
         identifier_length = len(backbone_identifier)
         backbone_state_dict = OrderedDict()
 
-        for original_name, state in state_dict.items():
+        for original_name, state in fb_detr_state_dict.items():
             if backbone_identifier in original_name:
                 new_name = original_name[identifier_length:]
                 backbone_state_dict[new_name] = state
 
         self.load_state_dict(backbone_state_dict)
+
+    def _load_from_state_dict(self, state_dict, prefix, *args):
+        """
+        Copies parameters and buffers from given state dictionary into only this module, but not its descendants.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        prefix (str): String containing this module's prefix in the given state dictionary.
+        args (Tuple): Tuple containing additional arguments used by the default loading method.
+        """
+
+        # Set default input normalization buffers if missing
+        state_dict.setdefault(f'{prefix}in_norm_mean', torch.tensor([0.485, 0.456, 0.406]))
+        state_dict.setdefault(f'{prefix}in_norm_std', torch.tensor([0.229, 0.224, 0.225]))
+
+        # Continue with default loading
+        super()._load_from_state_dict(state_dict, prefix, *args)
 
     def forward(self, images):
         """

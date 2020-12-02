@@ -106,19 +106,19 @@ class DETR(nn.Module):
         self.load_class_head_from_original_detr(state_dict) if not self.train_dict['class_head'] else None
         self.load_bbox_head_from_original_detr(state_dict) if not self.train_dict['bbox_head'] else None
 
-    def load_projector_from_original_detr(self, state_dict):
+    def load_projector_from_original_detr(self, fb_detr_state_dict):
         """
-        Loads projector from state_dict of an original Facebook DETR model.
+        Loads projector from state dictionary of an original Facebook DETR model.
 
         Args:
-            state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
+            fb_detr_state_dict (Dict): Dictionary containing Facebook DETR model parameters and persistent buffers.
         """
 
         projector_identifier = 'input_proj.'
         identifier_length = len(projector_identifier)
         projector_state_dict = OrderedDict()
 
-        for original_name, state in state_dict.items():
+        for original_name, state in fb_detr_state_dict.items():
             if projector_identifier in original_name:
                 new_name = original_name[identifier_length:]
                 projector_state_dict[new_name] = state

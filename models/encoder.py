@@ -38,18 +38,18 @@ class Encoder(nn.Module):
         self.requires_grad_(train_encoder)
         self.trained = train_encoder
 
-    def load_from_original_detr(self, state_dict):
+    def load_from_original_detr(self, fb_detr_state_dict):
         """
-        Loads encoder from state_dict of an original Facebook DETR model.
+        Loads encoder from state dictionary of an original Facebook DETR model.
 
-        state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
+        fb_detr_state_dict (Dict): Dictionary containing Facebook DETR model parameters and persistent buffers.
         """
 
         encoder_identifier = 'transformer.encoder.'
         identifier_length = len(encoder_identifier)
         encoder_state_dict = OrderedDict()
 
-        for original_name, state in state_dict.items():
+        for original_name, state in fb_detr_state_dict.items():
             if encoder_identifier in original_name:
                 new_name = original_name[identifier_length:]
                 encoder_state_dict[new_name] = state

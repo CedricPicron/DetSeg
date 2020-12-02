@@ -52,23 +52,23 @@ class GlobalDecoder(nn.Module):
         self.slot_embeds = nn.Embedding(num_slots, feat_dim)
         self.trained = decoder_dict['train']
 
-    def load_from_original_detr(self, state_dict):
+    def load_from_original_detr(self, fb_detr_state_dict):
         """
-        Loads decoder from state_dict of an original Facebook DETR model.
+        Loads decoder from state dictionary of an original Facebook DETR model.
 
-        state_dict (Dict): Dictionary containing Facebook's model parameters and persistent buffers.
+        fb_detr_state_dict (Dict): Dictionary containing Facebook DETR model parameters and persistent buffers.
         """
 
         decoder_identifier = 'transformer.decoder.'
         identifier_length = len(decoder_identifier)
         decoder_state_dict = OrderedDict()
 
-        for original_name, state in state_dict.items():
+        for original_name, state in fb_detr_state_dict.items():
             if decoder_identifier in original_name:
                 new_name = original_name[identifier_length:]
                 decoder_state_dict[new_name] = state
 
-        decoder_state_dict['slot_embeds.weight'] = state_dict['query_embed.weight']
+        decoder_state_dict['slot_embeds.weight'] = fb_detr_state_dict['query_embed.weight']
         self.load_state_dict(decoder_state_dict)
 
     def reset_parameters(self):
