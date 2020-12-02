@@ -66,6 +66,24 @@ class BiViNet(nn.Module):
         return ['backbone', 'projs', 'core', 'heads']
 
     @staticmethod
+    def get_feat_masks(img_masks, feat_maps):
+        """
+        Method obtaining feature masks corresponding to each feature map encoding features from padded image regions.
+
+        Args:
+            img_masks (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
+            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+
+        Returns:
+            feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
+        """
+
+        padding_maps = BiViNet.downsample_masks(img_masks, feat_maps)
+        feat_masks = [padding_map > 0.5 for padding_map in padding_maps]
+
+        return feat_masks
+
+    @staticmethod
     def get_binary_masks(tgt_sizes, tgt_masks):
         """
         Method obtaining the binary mask (object + background) corresponding to each batch entry.
@@ -83,43 +101,43 @@ class BiViNet(nn.Module):
         return binary_masks
 
     @staticmethod
-    def downsample_masks(in_masks, feat_maps):
+    def downsample_masks(masks, feat_maps):
         """
-        Method downsampling the full-resolution 'in_masks' to maps with the same resolutions as found in 'feat_maps'.
+        Method downsampling the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
-            in_masks (ByteTensor): Padded full-resolution masks of shape [*, max_iH, max_iW].
+            masks (ByteTensor): Padded full-resolution masks of shape [*, max_iH, max_iW].
             feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
-            out_maps (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
+            maps_list (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
         """
 
-        # Get initial maps
-        original_size = in_masks.shape
-        maps = in_masks.float().view(-1, 1, *original_size[-2:])
+        # Get initial full-resolution maps
+        original_size = masks.shape
+        maps = masks.float().view(-1, 1, *original_size[-2:])
 
         # Get averaging convolutional kernel
-        device = in_masks.device
+        device = masks.device
         average_kernel = torch.ones(1, 1, 3, 3, device=device)/9
 
         # Initialize list of downsampled output maps
         map_sizes = [feat_map.shape[1:-1] for feat_map in feat_maps]
-        out_maps = [torch.zeros(*original_size[:-2], *map_size, device=device) for map_size in map_sizes]
+        maps_list = [torch.zeros(*original_size[:-2], *map_size, device=device) for map_size in map_sizes]
 
         # Compue list of downsampled output maps
-        for i in range(len(out_maps)):
+        for i in range(len(maps_list)):
             while maps.shape[-2:] != map_sizes[i]:
                 maps = F.pad(maps, (1, 1, 1, 1), mode='replicate')
                 maps = F.conv2d(maps, average_kernel, stride=2, padding=0)
 
-            out_maps[i] = maps.view(*original_size[:-2], *maps.shape[-2:])
+            maps_list[i] = maps.view(*original_size[:-2], *maps.shape[-2:])
 
-        return out_maps
+        return maps_list
 
-    def prepare_maps(self, tgt_dict, feat_maps):
+    def prepare_tgt_maps(self, tgt_dict, feat_maps):
         """
-        Method preparing the segmentation maps.
+        Method preparing the target segmentation maps and adding them to the target dictionary.
 
         For each map type, the preparation consists of 2 steps:
             1) Get the desired full-resolution masks.
@@ -143,8 +161,8 @@ class BiViNet(nn.Module):
         # Get the required maps
         for map_type in self.map_types:
             if map_type == 'binary_maps':
-                binary_masks = self.get_binary_masks(tgt_dict['sizes'], tgt_dict['masks'])
-                tgt_dict[map_type] = self.downsample_masks(binary_masks, feat_maps)
+                binary_masks = BiViNet.get_binary_masks(tgt_dict['sizes'], tgt_dict['masks'])
+                tgt_dict[map_type] = BiViNet.downsample_masks(binary_masks, feat_maps)
 
             else:
                 raise ValueError(f"Unknown map type '{map_type}' in 'self.map_types'.")
@@ -154,7 +172,7 @@ class BiViNet(nn.Module):
 
         return tgt_dict
 
-    def train_evaluate(self, feat_maps, tgt_dict, optimizer, layer_id, **kwargs):
+    def train_evaluate(self, feat_maps, feat_masks, tgt_dict, optimizer, layer_id, **kwargs):
         """
         Method performing the training/evaluation step for the given feature maps.
 
@@ -163,6 +181,7 @@ class BiViNet(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
@@ -185,7 +204,7 @@ class BiViNet(nn.Module):
 
         # Populate loss and analysis dictionaries from head outputs
         for head in self.heads[layer_id]:
-            head_loss_dict, head_analysis_dict = head(feat_maps, tgt_dict, **kwargs)
+            head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks, tgt_dict, **kwargs)
             loss_dict.update({f'{k}_{layer_id}': v for k, v in head_loss_dict.items()})
             analysis_dict.update({f'{k}_{layer_id}': v for k, v in head_analysis_dict.items()})
 
@@ -210,7 +229,7 @@ class BiViNet(nn.Module):
         Args:
             images (NestedTensor): NestedTensor consisting of:
                 - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -253,10 +272,13 @@ class BiViNet(nn.Module):
         map_ids = [min(i, len(feat_maps)-1) for i in range(len(self.projs))]
         feat_maps = [proj(feat_maps[i]).permute(0, 2, 3, 1) for i, proj in zip(map_ids, self.projs)]
 
-        # Prepare maps and train from and/or evaluate initial core feature maps (training/validation only)
+        # Do some preparation and train/evaluate initial core feature maps (training/validation only)
         if tgt_dict is not None:
-            tgt_dict = self.prepare_maps(tgt_dict, feat_maps)
-            loss_dict, analysis_dict = self.train_evaluate(feat_maps, tgt_dict, optimizer, layer_id=0, **kwargs)
+            feat_masks = BiViNet.get_feat_masks(images.mask, feat_maps)
+            tgt_dict = self.prepare_tgt_maps(tgt_dict, feat_maps)
+
+            train_eval_args = (feat_masks, tgt_dict, optimizer)
+            loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, layer_id=0, **kwargs)
 
         # Iteratively detach, update and train from and/or evaluate core feature maps
         for i, core in enumerate(self.cores, 1):
@@ -268,9 +290,9 @@ class BiViNet(nn.Module):
             # Update core feature maps (training/validation only)
             feat_maps = core(feat_maps)
 
-            # Train from and/or evaluate the updated core feature maps (training/validation only)
+            # Train/evaluate updated core feature maps (training/validation only)
             if tgt_dict is not None:
-                layer_loss_dict, layer_analysis_dict = self.train_evaluate(feat_maps, tgt_dict, optimizer, i, **kwargs)
+                layer_loss_dict, layer_analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, i, **kwargs)
                 loss_dict.update(layer_loss_dict)
                 analysis_dict.update(layer_analysis_dict)
 

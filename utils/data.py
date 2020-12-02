@@ -71,7 +71,7 @@ def train_collate_fn(batch):
     Returns:
         images (NestedTensor): NestedTensor consisting of:
             - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+            - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -125,7 +125,7 @@ def val_collate_fn(batch):
     Returns:
         images (NestedTensor): NestedTensor consisting of:
             - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+            - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
          tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -182,26 +182,26 @@ def nested_tensor_from_image_list(image_list):
     Returns:
         images (NestedTensor): NestedTensor consisting of:
             - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-            - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+            - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
     """
 
     # Compute different sizes
     batch_size = len(image_list)
-    max_h, max_w = torch.tensor([list(img.shape[1:]) for img in image_list]).max(dim=0)[0].tolist()
+    max_iH, max_iW = torch.tensor([list(img.shape[1:]) for img in image_list]).max(dim=0)[0].tolist()
 
     # Some renaming for code readability
     dtype = image_list[0].dtype
     device = image_list[0].device
 
     # Initialize the padded images and masks
-    padded_images = torch.zeros(batch_size, 3, max_h, max_w, dtype=dtype, device=device)
-    masks = torch.ones(batch_size, max_h, max_w, dtype=torch.bool, device=device)
+    padded_images = torch.zeros(batch_size, 3, max_iH, max_iW, dtype=dtype, device=device)
+    masks = torch.ones(batch_size, max_iH, max_iW, dtype=torch.bool, device=device)
 
     # Fill the padded images and masks
     for image, padded_image, mask in zip(image_list, padded_images, masks):
-        h, w = image.shape[1:]
-        padded_image[:, :h, :w].copy_(image)
-        mask[:h, :w] = False
+        iH, iW = image.shape[1:]
+        padded_image[:, :iH, :iW].copy_(image)
+        mask[:iH, :iW] = False
 
     # Create nested tensor from padded images and masks
     images = NestedTensor(padded_images, masks)
@@ -245,7 +245,7 @@ class NestedTensor(object):
         """
         Method normalizing the NestedTensor's tensor channels at non-padded positions.
 
-        We assume the NestedTensor object has following shape signature: [*, num_channels, iH, iW].
+        We assume the NestedTensor tensor has following shape signature: [*, num_channels, iH, iW].
 
         Args:
             mean (FloatTensor): Tensor of shape [num_channels] containing the normalization means.

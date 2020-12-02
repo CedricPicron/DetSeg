@@ -209,7 +209,7 @@ class DETR(nn.Module):
         Args:
             images (NestedTensor): NestedTensor consisting of:
                 - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;

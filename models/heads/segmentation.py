@@ -102,12 +102,13 @@ class BinarySegHead(nn.Module):
 
         return analysis_dict
 
-    def forward(self, feat_maps, tgt_dict=None, **kwargs):
+    def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
         """
         Forward method of the BinarySegHead module.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
@@ -136,9 +137,17 @@ class BinarySegHead(nn.Module):
             pred_dict = {'binary_maps': [torch.clamp(logit_map/4 + 0.5, 0.0, 1.0) for logit_map in logit_maps]}
             return pred_dict
 
-        # Flatten logit and target maps and initialize losses tensor (trainval only)
+        # Assume no padded regions when feature masks are missing
+        if feat_masks is None:
+            device = feat_maps[0].device
+            feat_masks = [torch.zeros(*feat_map.shape[:-1], dtype=torch.bool, device=device) for feat_map in feat_maps]
+
+        # Flatten logit maps, feature masks and target maps (trainval only)
         logits = torch.cat([logit_map.flatten() for logit_map in logit_maps])
+        padding_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
         targets = torch.cat([tgt_map.flatten() for tgt_map in tgt_dict['binary_maps']])
+
+        # Initialize losses tensor (trainval only)
         losses = torch.zeros_like(logits)
 
         # Compute losses at background ground-truth positions (trainval only)
@@ -169,14 +178,20 @@ class BinarySegHead(nn.Module):
 
         # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():
+
+            # Get predictions
             preds = torch.clamp(logits/4 + 0.5, 0.0, 1.0)
+
+            # Get background and object masks within non-padded regions
+            bg_mask = torch.bitwise_and(bg_mask, ~padding_mask)
+            obj_mask = torch.bitwise_and(obj_mask, ~padding_mask)
 
             # Perform accuracy-related analyses and place them in analysis dictionary (trainval only)
             pred_correctness = torch.cat([preds[bg_mask] < 0.5, preds[obj_mask] > 0.5], dim=0)
             analysis_dict = BinarySegHead.perform_accuracy_analyses(pred_correctness, bg_mask.sum())
 
             # Perform error analysis and place it in analysis dictionary (trainval only)
-            avg_error = torch.abs(preds - targets).mean()
+            avg_error = torch.abs(preds[~padding_mask] - targets[~padding_mask]).mean()
             analysis_dict['binary_seg_error'] = avg_error
 
             # If desired, perform extended analyses (trainval only)
@@ -204,7 +219,7 @@ class BinarySegHead(nn.Module):
         Args:
             images (NestedTensor): NestedTensor consisting of:
                 - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
             pred_dict (Dict): Prediction dictionary containing at least following key:
                 - binary_maps (List): predicted binary segmentation maps of shape [batch_size, fH, fW].
