@@ -110,7 +110,8 @@ class BiViNet(nn.Module):
         # Compue list of downsampled output maps
         for i in range(len(out_maps)):
             while maps.shape[-2:] != map_sizes[i]:
-                maps = F.conv2d(maps, average_kernel, stride=2, padding=1)
+                maps = F.pad(maps, (1, 1, 1, 1), mode='replicate')
+                maps = F.conv2d(maps, average_kernel, stride=2, padding=0)
 
             out_maps[i] = maps.view(*original_size[:-2], *maps.shape[-2:])
 

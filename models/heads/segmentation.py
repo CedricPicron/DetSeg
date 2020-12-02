@@ -256,7 +256,7 @@ class BinarySegHead(nn.Module):
                 H, W = map_sizes[map_id]
                 pH, pW = (int(H % 2 == 0), int(W % 2 == 0))
 
-                binary_maps = F.pad(binary_maps.unsqueeze(1), (0, pW, 0, pH))
+                binary_maps = F.pad(binary_maps.unsqueeze(1), (0, pW, 0, pH), mode='replicate')
                 binary_maps = F.interpolate(binary_maps, size=(H+pH, W+pW), **interpolation_kwargs)
                 binary_maps = binary_maps[:, :, :H, :W].squeeze(1)
 

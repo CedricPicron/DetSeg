@@ -141,7 +141,7 @@ class BiAttnConv(nn.Module):
             query_map = query_map.view(batch_size, H, W, num_heads, 1, -1)
 
             key_map = scale*proj_map[:, :, :, f:2*f]
-            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
+            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1), mode='replicate').permute(0, 2, 3, 1)
 
             sizes = [batch_size, H, W, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
@@ -150,7 +150,7 @@ class BiAttnConv(nn.Module):
             key_map = key_map.view(batch_size, H, W, num_heads, -1, 9)
 
             value_map = proj_map[:, :, :, 2*f:3*f]
-            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
+            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1), mode='replicate').permute(0, 2, 3, 1)
             value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H, W, f, 9)
             value_map = value_map.view(batch_size, H, W, num_heads, -1, 9)
 
@@ -176,7 +176,7 @@ class BiAttnConv(nn.Module):
             query_map = query_map.view(batch_size, H2, W2, num_heads, 1, -1)
 
             key_map = scale*proj_map2[:, :, :, 3*g:3*g+f] if last_map else scale*proj_map2[:, :, :, 4*g:4*g+f]
-            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
+            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, 1, 1, 1), mode='replicate').permute(0, 2, 3, 1)
 
             sizes = [batch_size, H2, W2, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
@@ -185,7 +185,7 @@ class BiAttnConv(nn.Module):
             key_map = key_map.view(batch_size, H2, W2, num_heads, -1, 9)
 
             value_map = proj_map2[:, :, :, 3*g+f:3*g+2*f] if last_map else proj_map2[:, :, :, 4*g+f:4*g+2*f]
-            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1)).permute(0, 2, 3, 1)
+            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, 1, 1, 1), mode='replicate').permute(0, 2, 3, 1)
             value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H2, W2, f, 9)
             value_map = value_map.view(batch_size, H2, W2, num_heads, -1, 9)
 
@@ -195,7 +195,7 @@ class BiAttnConv(nn.Module):
 
             pH, pW = (int(H1 % 2 == 0), int(W1 % 2 == 0))
             top_down_attn_map = top_down_attn_map.permute(0, 3, 1, 2)
-            top_down_attn_map = F.pad(top_down_attn_map, (0, pW, 0, pH))
+            top_down_attn_map = F.pad(top_down_attn_map, (0, pW, 0, pH), mode='replicate')
             top_down_attn_map = F.interpolate(top_down_attn_map, size=(H1+pH, W1+pW), **interpolation_kwargs)
             top_down_attn_map = top_down_attn_map[:, :, :H1, :W1].permute(0, 2, 3, 1)
             top_down_attn_maps.append(top_down_attn_map)
@@ -217,8 +217,9 @@ class BiAttnConv(nn.Module):
             query_map = scale*proj_map1[:, :, :, -f:]
             query_map = query_map.view(batch_size, H1, W1, num_heads, 1, -1)
 
+            pH, pW = (H0 % 2, W0 % 2)
             key_map = scale*proj_map0[:, :, :, -2*f:-f] if first_map else scale*proj_map0[:, :, :, -e-2*f:-e-f]
-            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
+            key_map = F.pad(key_map.permute(0, 3, 1, 2), (1, pW, 1, pH), mode='replicate').permute(0, 2, 3, 1)
 
             sizes = [batch_size, H1, W1, f, 3, 3]
             s0, s1, s2, s3 = key_map.stride()
@@ -228,7 +229,7 @@ class BiAttnConv(nn.Module):
             key_map = key_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
             value_map = proj_map0[:, :, :, -f:] if first_map else proj_map0[:, :, :, -e-f:-e]
-            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, W0 % 2, 1, H0 % 2)).permute(0, 2, 3, 1)
+            value_map = F.pad(value_map.permute(0, 3, 1, 2), (1, pW, 1, pH), mode='replicate').permute(0, 2, 3, 1)
             value_map = value_map.as_strided(sizes, strides).reshape(batch_size, H1, W1, f, 9)
             value_map = value_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
