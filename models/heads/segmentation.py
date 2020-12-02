@@ -2,6 +2,7 @@
 Segmentation head modules and build function.
 """
 
+from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -179,23 +180,98 @@ class BinarySegHead(nn.Module):
             analysis_dict['binary_seg_error'] = avg_error
 
             # If desired, perform extended analyses (trainval only)
-            if 'extended_analysis' in kwargs:
-                if kwargs['extended_analysis']:
+            if kwargs.setdefault('extended_analysis', False):
 
-                    # Perform map-specific accuracy analyses and them to analysis dictionary (trainval only)
-                    map_sizes = [logit_map.numel() for logit_map in logit_maps]
-                    indices = torch.cumsum(torch.tensor([0, *map_sizes], device=logits.device), dim=0)
+                # Perform map-specific accuracy analyses and them to analysis dictionary (trainval only)
+                map_sizes = [logit_map.numel() for logit_map in logit_maps]
+                indices = torch.cumsum(torch.tensor([0, *map_sizes], device=logits.device), dim=0)
 
-                    for i, i0, i1 in zip(range(len(logit_maps)), indices[:-1], indices[1:]):
-                        map_preds = preds[i0:i1]
-                        pred_correctness = [map_preds[bg_mask[i0:i1]] < 0.5, map_preds[obj_mask[i0:i1]] > 0.5]
-                        pred_correctness = torch.cat(pred_correctness, dim=0)
+                for i, i0, i1 in zip(range(len(logit_maps)), indices[:-1], indices[1:]):
+                    map_preds = preds[i0:i1]
+                    pred_correctness = [map_preds[bg_mask[i0:i1]] < 0.5, map_preds[obj_mask[i0:i1]] > 0.5]
+                    pred_correctness = torch.cat(pred_correctness, dim=0)
 
-                        num_bg_targets = bg_mask[i0:i1].sum()
-                        map_analysis_dict = BinarySegHead.perform_accuracy_analyses(pred_correctness, num_bg_targets)
-                        analysis_dict.update({f'{k}_f{i}': v for k, v in map_analysis_dict.items()})
+                    num_bg_targets = bg_mask[i0:i1].sum()
+                    map_analysis_dict = BinarySegHead.perform_accuracy_analyses(pred_correctness, num_bg_targets)
+                    analysis_dict.update({f'{k}_f{i}': v for k, v in map_analysis_dict.items()})
 
         return loss_dict, analysis_dict
+
+    def visualize(self, images, pred_dict, tgt_dict):
+        """
+        Draws predicted and target binary segmentations on given full-resolution images.
+
+        Args:
+            images (NestedTensor): NestedTensor consisting of:
+                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+                - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+
+            pred_dict (Dict): Prediction dictionary containing at least following key:
+                - binary_maps (List): predicted binary segmentation maps of shape [batch_size, fH, fW].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - binary_maps (List): target binary segmentation maps of shape [batch_size, fH, fW].
+
+        Returns:
+            images_dict (Dict): Dictionary of images with drawn predicted and target binary segmentations.
+        """
+
+        # Get padded images and corresponding image masks
+        images, img_masks = images.decompose()
+
+        # Get desired keys and merge prediction and target binary maps into single list
+        keys = [f'pred_f{i}' for i in range(len(pred_dict['binary_maps']))]
+        keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['binary_maps']))])
+        binary_maps_list = [*pred_dict['binary_maps'], *tgt_dict['binary_maps']]
+
+        # Get possible map sizes
+        map_size = tuple(images.shape[-2:])
+        map_sizes = [map_size]
+
+        while map_size != (1, 1):
+            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
+            map_sizes.append(map_size)
+
+        # Convert images to desired visualization format
+        images = images.permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8)
+        images = images.cpu().numpy()
+
+        # Get image sizes without padding in (height, width) format
+        img_sizes = [(sum(~img_mask[:, 0]).item(), sum(~img_mask[0, :]).item()) for img_mask in img_masks]
+
+        # Get interpolation kwargs and initialize dictionary of annotated images
+        interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
+        images_dict = {}
+
+        # Get annotated images for each batch of binary maps
+        for key, binary_maps in zip(keys, binary_maps_list):
+
+            # Get number of times the binary maps were downsampled
+            map_size = tuple(binary_maps.shape[-2:])
+            times_downsampled = map_sizes.index(map_size)
+
+            # Upsample binary maps to image resolution
+            for map_id in range(times_downsampled-1, -1, -1):
+                H, W = map_sizes[map_id]
+                pH, pW = (int(H % 2 == 0), int(W % 2 == 0))
+
+                binary_maps = F.pad(binary_maps.unsqueeze(1), (0, pW, 0, pH))
+                binary_maps = F.interpolate(binary_maps, size=(H+pH, W+pW), **interpolation_kwargs)
+                binary_maps = binary_maps[:, :, :H, :W].squeeze(1)
+
+            # Get binary masks and convert them to NumPy ndarray
+            binary_masks = (binary_maps >= 0.5).cpu().numpy()
+
+            # Draw binary masks on corresponding images
+            for i, image, img_size, binary_mask in zip(range(len(images)), images, img_sizes, binary_masks):
+                visualizer = Visualizer(image)
+                visualizer.draw_binary_mask(binary_mask)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'bin_seg_{key}_{i}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict
 
 
 def build_seg_heads(args):

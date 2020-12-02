@@ -11,10 +11,10 @@ import torch
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
 from datasets.build import build_dataset
-from engine import evaluate, save_checkpoint, save_log, train
+from engine import evaluate, save_checkpoint, save_log, train, visualize
 from models.bivinet import build_bivinet
 from models.detr import build_detr
-from utils.data import train_collate_fn, val_collate_fn
+from utils.data import SubsetSampler, train_collate_fn, val_collate_fn
 import utils.distributed as distributed
 
 
@@ -22,12 +22,18 @@ def get_parser():
     parser = argparse.ArgumentParser(add_help=False)
 
     # General
-    parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
-    parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
+    parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
+    parser.add_argument('--output_dir', default='', type=str, help='save path during training (no saving when empty)')
+
+    # Evaluation
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
-    parser.add_argument('--load_orig_detr', action='store_true', help='load untrained detr parts from original detr')
-    parser.add_argument('--output_dir', default='', type=str, help='path where to save (no saving when empty)')
+
+    # Visualization
+    parser.add_argument('--visualize', action='store_true', help='visualize model from checkpoint and return')
+    parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
+    parser.add_argument('--image_offset', default=0, type=int, help='image id of first image to be visualized')
+    parser.add_argument('--random_offset', action='store_true', help='generate random image offset')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
@@ -41,7 +47,41 @@ def get_parser():
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
     parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
 
+    # Meta-architecture
+    parser.add_argument('--meta_arch', default='BiViNet', choices=['BiViNet', 'DETR'], help='meta-architecture type')
+
+    # * Backbone
+    parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
+    parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
+
+    # BiViNet
+    parser.add_argument('--min_resolution_id', default=2, type=int, help='highest resolution downsampling exponent')
+    parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
+
+    # * BiCore
+    parser.add_argument('--num_core_layers', default=4, type=int, help='number of core layers of BiViNet module')
+    parser.add_argument('--bicore_type', default='BiAttnConv', type=str, help='type of BiCore module')
+    parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
+    parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
+    parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
+    parser.add_argument('--max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
+    parser.add_argument('--no_pos_feats', action='store_true', help='whether to disable local position features')
+    parser.add_argument('--bicore_dropout', default=0.1, type=float, help='dropout value used with BiCore modules')
+    parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
+
+    # * Heads
+    # ** Segmentation heads
+    parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
+
+    # *** Binary segmentation head
+    parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
+    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
+    parser.add_argument('--no_map_size_correction', action='store_true', help='whether to disable map size correction')
+    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
+
     # DETR
+    parser.add_argument('--load_orig_detr', action='store_true', help='load untrained detr parts from original DETR')
+
     # * Position encoding
     parser.add_argument('--position_encoding', default='sine', type=str, help='type of position encoding')
 
@@ -80,47 +120,15 @@ def get_parser():
     parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
     parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
 
-    # Meta-architecture
-    parser.add_argument('--meta_arch', default='BiViNet', choices=['BiViNet', 'DETR'], help='meta-architecture type')
-
-    # * Backbone
-    parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
-    parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
-
-    # BiViNet
-    parser.add_argument('--min_resolution_id', default=2, type=int, help='highest resolution downsampling exponent')
-    parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
-
-    # * BiCore
-    parser.add_argument('--num_core_layers', default=4, type=int, help='number of core layers of BiViNet module')
-    parser.add_argument('--bicore_type', default='BiAttnConv', type=str, help='type of BiCore module')
-    parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
-    parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
-    parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
-    parser.add_argument('--max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
-    parser.add_argument('--no_pos_feats', action='store_true', help='whether to disable local position features')
-    parser.add_argument('--bicore_dropout', default=0.1, type=float, help='dropout value used with BiCore modules')
-    parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
-
-    # * Heads
-    # ** Segmentation heads
-    parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
-
-    # *** Binary segmentation head
-    parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
-    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
-    parser.add_argument('--no_map_size_correction', action='store_true', help='whether to disable map size correction')
-    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
-
-    # Criterion
+    # * DETR criterion
     parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')
 
-    # * Matcher coefficients
+    # ** Matcher coefficients
     parser.add_argument('--match_coef_class', default=1, type=float, help='class coefficient in the matching cost')
     parser.add_argument('--match_coef_l1', default=5, type=float, help='L1 box coefficient in the matching cost')
     parser.add_argument('--match_coef_giou', default=2, type=float, help='GIoU box coefficient in the matching cost')
 
-    # * Loss coefficients
+    # ** Loss coefficients
     parser.add_argument('--loss_coef_class', default=1, type=float, help='class coefficient in loss')
     parser.add_argument('--loss_coef_l1', default=5, type=float, help='L1 box coefficient in loss')
     parser.add_argument('--loss_coef_giou', default=2, type=float, help='GIoU box coefficient in loss')
@@ -130,7 +138,7 @@ def get_parser():
     parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
 
-    # * Learning rates (general)
+    # * Learning rates (General)
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
     # * Learning rates (BiViNet)
@@ -146,6 +154,7 @@ def get_parser():
     parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
 
     # Scheduler
+    parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
     parser.add_argument('--lr_drop', default=200, type=int, help='scheduler period of learning rate decay')
 
     return parser
@@ -200,13 +209,16 @@ def main(args):
     if args.distributed:
         model = distributed.DistributedDataParallel(model, device_id=args.gpu)
 
-    # Evaluate loaded model if required and return
+    # If requested, evaluate model from checkpoint and return
     if args.eval:
+        if not args.checkpoint:
+            print('No checkpoint model was provided for evaluation. Returning now.')
+            return
+
         val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
+        output_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint).parent
 
-        if args.output_dir and distributed.is_main_process():
-            output_dir = Path(args.output_dir)
-
+        if distributed.is_main_process():
             if evaluator is None:
                 with (output_dir / 'eval.txt').open('w') as eval_file:
                     eval_file.write(json.dumps(val_stats) + "\n")
@@ -216,6 +228,31 @@ def main(args):
                 evaluations = evaluator.sub_evaluators[metric].eval
                 torch.save(evaluations, output_dir / f'eval_{metric}.pth')
 
+        return
+
+    # If requested, visualize model from checkpoint and return
+    if args.visualize:
+        if not args.checkpoint:
+            print("No checkpoint model was provided for visualization. Returning now.")
+            return
+
+        if args.distributed:
+            print("Distributed mode is not supported for visualization. Returning now.")
+            return
+
+        if args.batch_size > 1:
+            print("It's recommended to use 'batch_size=1' so that printed loss and analysis dicts are image-specific.")
+
+        output_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint).parent / 'visualization'
+        output_dir.mkdir(exist_ok=True)
+
+        # Get visualization dataloader
+        subset_sampler = SubsetSampler(val_dataset, args.num_images, args.image_offset, args.random_offset)
+        dataloader_kwargs = {'collate_fn': val_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
+        dataloader = DataLoader(val_dataset, args.batch_size, sampler=subset_sampler, **dataloader_kwargs)
+
+        # Compute and save annotated images and return
+        visualize(model, dataloader, output_dir)
         return
 
     # Get optimizer, scheduler and start epoch

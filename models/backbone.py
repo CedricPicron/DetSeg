@@ -31,7 +31,9 @@ class Backbone(nn.Module):
     Class implementing the Backbone module.
 
     Attributes:
-        body (IntermediateLayerGetter): Module computing the feature maps.
+        in_norm_mean (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization means.
+        in_norm_std (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization standard deviations.
+        body (IntermediateLayerGetter): Module computing feature maps of different resolutions.
         feat_sizes (List): List of size [num_maps] containing the feature size of each returned backbone feature map.
         trained (bool): Bool indicating whether backbone is trained or not.
     """
@@ -49,6 +51,10 @@ class Backbone(nn.Module):
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Register input normalization buffers with values expected by torchvision pretrained backbones
+        self.register_buffer('in_norm_mean', torch.tensor([0.485, 0.456, 0.406]), persistent=False)
+        self.register_buffer('in_norm_std', torch.tensor([0.229, 0.224, 0.225]), persistent=False)
 
         # Load ImageNet pretrained backbone from torchvision
         backbone_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'pretrained': True}
@@ -99,6 +105,9 @@ class Backbone(nn.Module):
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             masks (List): List of size [num_maps] with boolean masks of inactive pixels of shape [batch_size, fH, fW].
         """
+
+        # Normalize input images
+        images = images.normalize(self.in_norm_mean, self.in_norm_std)
 
         # Compute backbone feature maps
         feat_maps = list(self.body(images.tensor).values())

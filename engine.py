@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import sys
 
+from PIL import Image
 import torch
 
 from utils.logging import MetricLogger
@@ -22,7 +23,7 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
         optimizer (torch.optim.Optimizer): Optimizer updating the model parameters during training.
         max_grad_norm (float): Maximum norm of optimizer update (clipped if larger).
         epoch (int): Current training epoch.
-        print_freq (int): Logger print frequency (defaults to 10).
+        print_freq (int): Logger print frequency (default=10).
 
     Returns:
         train_stats (Dict): Dictionary containing the epoch training statistics.
@@ -75,9 +76,9 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
         dataloader (torch.utils.data.Dataloader): Validation dataloader.
-        evaluator (object): Object computing evaluations from predictions and storing them (defaults to None).
-        epoch (int): Training epochs completed (defaults to None).
-        print_freq (int): Logger print frequency (defaults to 10).
+        evaluator (object): Object computing evaluations from predictions and storing them (default=None).
+        epoch (int): Training epochs completed (default=None).
+        print_freq (int): Logger print frequency (default=10).
 
     Returns:
         val_stats (Dict): Dictionary containing the validation statistics.
@@ -136,6 +137,50 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     return val_stats, evaluator
 
 
+@torch.no_grad()
+def visualize(model, dataloader, output_dir):
+    """
+    Visualize model predictions and corresponding ground-truth.
+
+    Args:
+        model (nn.Module): Module to be visualized computing predictions from images.
+        dataloader (torch.utils.data.Dataloader): Visualization dataloader.
+        output_dir (Path): Path object containing the path to the output directory used for saving.
+    """
+
+    # Get device and set model in evaluation mode
+    device = next(model.parameters()).device
+    model.eval()
+
+    # Initialize logger and its logger_every keyword arguments
+    metric_logger = MetricLogger(delimiter="  ")
+    logger_log_every_kwargs = {'print_freq': 1, 'header': 'Visualization:'}
+
+    # Iterate over image batches to be visualized
+    for images, tgt_dict, eval_dict in metric_logger.log_every(dataloader, **logger_log_every_kwargs):
+
+        # Place images and target dictionary on correct device
+        images = images.to(device)
+        tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
+
+        # Get images, loss and analysis dictionary
+        images_dict, loss_dict, analysis_dict = model(images, tgt_dict, visualize=True)
+
+        # Get dataset image ids
+        image_ids = eval_dict['image_ids'].tolist()
+
+        # Save images
+        for key, image in images_dict.items():
+            key_parts = key.split('_')
+            image_id = image_ids[int(key_parts[-1])]
+
+            filename = ('_').join([str(image_id), *key_parts[:-1]])
+            Image.fromarray(image).save(f'{output_dir / filename}.png')
+
+        # Update logger
+        metric_logger.update(**analysis_dict, **loss_dict, loss=sum(loss_dict.values()).item())
+
+
 def save_checkpoint(args, epoch, model, optimizer, scheduler):
     """
     Function used for checkpoint saving.
@@ -174,7 +219,7 @@ def save_log(output_dir, epoch, train_stats, val_stats):
     No logs are saved when output_dir is and empty string.
 
     Args:
-        output_dir (str): String containg the path to the output directory used for saving.
+        output_dir (str): String containing the path to the output directory used for saving.
         epoch (int): Training epochs completed.
         train_stats (Dict): Dictionary containing the training statistics.
         val_stats (Dict): Dictionary containing the val statistics.

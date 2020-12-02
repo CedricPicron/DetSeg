@@ -161,6 +161,8 @@ class BiAttnConv(nn.Module):
 
         # Perform top-down cross-attention
         last_map_bools = [i == len(feat_maps)-1 for i in range(len(feat_maps))]
+        interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
+
         zip_list = [range(len(feat_maps)-1), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
         zip_list = [*zip_list, self.attn_scalings[:-1], last_map_bools[1:], self.num_heads_list[:-1]]
         zip_list = [*zip_list, self.out_proj_weights[:-1], self.out_proj_biases[:-1]]
@@ -191,16 +193,18 @@ class BiAttnConv(nn.Module):
             weighted_map = torch.sum(attn_weights * value_map, dim=-1).view(batch_size, H2, W2, -1)
             top_down_attn_map = F.linear(weighted_map, out_weight[:, f:2*f], out_bias[f:2*f])
 
+            pH, pW = (int(H1 % 2 == 0), int(W1 % 2 == 0))
             top_down_attn_map = top_down_attn_map.permute(0, 3, 1, 2)
-            top_down_attn_map = F.pad(top_down_attn_map, (0, 1, 0, 1))
-            top_down_attn_map = F.interpolate(top_down_attn_map, size=(H1+1, W1+1), mode='bilinear', align_corners=True)
-            top_down_attn_map = top_down_attn_map[:, :, :-1, :-1].permute(0, 2, 3, 1)
+            top_down_attn_map = F.pad(top_down_attn_map, (0, pW, 0, pH))
+            top_down_attn_map = F.interpolate(top_down_attn_map, size=(H1+pH, W1+pW), **interpolation_kwargs)
+            top_down_attn_map = top_down_attn_map[:, :, :H1, :W1].permute(0, 2, 3, 1)
             top_down_attn_maps.append(top_down_attn_map)
 
         top_down_attn_maps.append(torch.zeros_like(feat_maps[-1]))
 
         # Perform bottom-up cross-attention
         first_map_bools = [i == 0 for i in range(len(feat_maps))]
+
         zip_list = [range(1, len(feat_maps)), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
         zip_list = [*zip_list, self.attn_scalings[1:], first_map_bools[:-1], self.num_heads_list[1:]]
         zip_list = [*zip_list, self.out_proj_weights[1:], self.out_proj_biases[1:]]

@@ -1,9 +1,59 @@
 """
 Data loading and data structure utilities.
 """
+import random
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import Sampler
+
+
+class SubsetSampler(Sampler):
+    """
+    Class implementing the SubsetSampler sampler.
+
+    Attributes:
+        dataset (torch.utils.data.Dataset): Dataset to sample from.
+        subset_size (int): Positive integer containing the subset size.
+        subset_offset (int): Positive integer containing the subset offset.
+    """
+
+    def __init__(self, dataset, subset_size, subset_offset=0, random_offset=False):
+        """
+        Initializes the SubsetSampler sampler.
+
+        Args:
+            dataset (torch.utils.data.Dataset): Dataset to sample from.
+            subset_size (int): Positive integer specifying the desired subset size.
+            subset_offset (int): Positive integer specifying the desired subset offset (default=0).
+            random_offset (bool): Boolean indicating whether to generate a random subset offset (default=False).
+        """
+
+        self.dataset = dataset
+        self.subset_size = min(subset_size, len(dataset))
+
+        max_offset = len(dataset) - self.subset_size
+        self.subset_offset = random.randint(0, max_offset) if random_offset else min(subset_offset, max_offset)
+
+    def __iter__(self):
+        """
+        Implements the __iter__ method of the SubsetSampler sampler.
+
+        Returns:
+            An iterator containing the subset indices.
+        """
+
+        return iter(range(self.subset_offset, self.subset_offset+self.subset_size))
+
+    def __len__(self):
+        """
+        Implements the __len__ method of the SubsetSampler sampler.
+
+        Returns:
+            An integer containing the subset size.
+        """
+
+        return self.subset_size
 
 
 def train_collate_fn(batch):
@@ -180,6 +230,41 @@ class NestedTensor(object):
         self.tensor = tensor
         self.mask = mask
 
+    def decompose(self):
+        """
+        Method decomposing the NestedTensor into its tensor and mask constituents.
+
+        Returns:
+            tensor (Tensor): The NestedTensor's tensor with padded entries.
+            mask (BoolTensor): The NestedTensor's mask encoding the padded entries of the tensor.
+        """
+
+        return self.tensor, self.mask
+
+    def normalize(self, mean, std, inplace=False):
+        """
+        Method normalizing the NestedTensor's tensor channels at non-padded positions.
+
+        We assume the NestedTensor object has following shape signature: [*, num_channels, iH, iW].
+
+        Args:
+            mean (FloatTensor): Tensor of shape [num_channels] containing the normalization means.
+            std (FloatTensor): Tensor of shape [num_channels] containing the normalization standard deviations.
+            inplace (bool): Boolean indicating whether to perform operation in place or not (default=False).
+
+        Returns:
+            norm_nested_tensor (NestedTensor): NestedTensor normalized at non-padded positions.
+        """
+
+        tensor, mask = self.decompose()
+        tensor = tensor.clone() if not inplace else tensor
+
+        tensor_view = tensor.movedim([-3, -2, -1], [-1, -3, -2])
+        tensor_view[~mask, :] = tensor_view[~mask, :].sub_(mean).div_(std)
+        norm_nested_tensor = NestedTensor(tensor, mask)
+
+        return norm_nested_tensor
+
     def to(self, device):
         """
         Method to cast NestedTensor to specified device.
@@ -196,14 +281,3 @@ class NestedTensor(object):
         cast_nested_tensor = NestedTensor(cast_tensor, cast_mask)
 
         return cast_nested_tensor
-
-    def decompose(self):
-        """
-        Method decomposing the NestedTensor into its tensor and mask constituents.
-
-        Returns:
-            tensor (Tensor): The NestedTensor's tensor with padded entries.
-            mask (BoolTensor): The NestedTensor's mask encoding the padded entries of the tensor.
-        """
-
-        return self.tensor, self.mask

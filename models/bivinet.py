@@ -88,29 +88,31 @@ class BiViNet(nn.Module):
         Method downsampling the full-resolution 'in_masks' to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
-            in_masks (ByteTensor): Padded full-resolution segmentation masks of shape [*, max_iH, max_iW].
+            in_masks (ByteTensor): Padded full-resolution masks of shape [*, max_iH, max_iW].
             feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
             out_maps (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
         """
 
-        # Initialize list of downsampled output maps
-        device = in_masks.device
-        num_targets_total = in_masks.shape[0]
-        map_sizes = [feat_map.shape[1:-1] for feat_map in feat_maps]
-        out_maps = [torch.zeros(num_targets_total, *map_size, device=device) for map_size in map_sizes]
+        # Get initial maps
+        original_size = in_masks.shape
+        maps = in_masks.float().view(-1, 1, *original_size[-2:])
 
-        # Get initial maps and convolution kernel
-        maps = in_masks[:, None].float()
+        # Get averaging convolutional kernel
+        device = in_masks.device
         average_kernel = torch.ones(1, 1, 3, 3, device=device)/9
+
+        # Initialize list of downsampled output maps
+        map_sizes = [feat_map.shape[1:-1] for feat_map in feat_maps]
+        out_maps = [torch.zeros(*original_size[:-2], *map_size, device=device) for map_size in map_sizes]
 
         # Compue list of downsampled output maps
         for i in range(len(out_maps)):
             while maps.shape[-2:] != map_sizes[i]:
                 maps = F.conv2d(maps, average_kernel, stride=2, padding=1)
 
-            out_maps[i] = maps
+            out_maps[i] = maps.view(*original_size[:-2], *maps.shape[-2:])
 
         return out_maps
 
@@ -217,7 +219,8 @@ class BiViNet(nn.Module):
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
-                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
+                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger);
+                - visualize (bool): boolean indicating whether in visualization mode or not.
 
        Returns:
             * If tgt_dict is not None and optimizer is not None (i.e. during training):
@@ -226,6 +229,11 @@ class BiViNet(nn.Module):
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
                 pred_dict (Dict): Dictionary containing different predictions from the last core layer.
+                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
+                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
+
+            * If in validation mode (see above) with the keyword argument 'visualize=True' (i.e. during visualization):
+                images_dict (Dict): Dictionary of different annotated images based on predictions and targets.
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
@@ -254,7 +262,6 @@ class BiViNet(nn.Module):
 
             # Set correct requires_grad attributes and detach core feature maps (training only)
             if optimizer is not None:
-                # self.set_requires_grads(layer_id=i)
                 feat_maps = [feat_map.detach() for feat_map in feat_maps]
 
             # Update core feature maps (training/validation only)
@@ -267,33 +274,42 @@ class BiViNet(nn.Module):
                 analysis_dict.update(layer_analysis_dict)
 
         # Get prediction dictionary (validation/testing only)
-        if tgt_dict is None or optimizer is None:
+        if optimizer is None:
             pred_dict = {k: v for head in self.heads[0] for k, v in head(feat_maps).items()}
 
         # Return prediction dictionary (testing only)
         if tgt_dict is None:
             return pred_dict
 
-        # Return prediction, loss and analysis dictionaries (validation only)
+        # Return desired dictionaries (validation/visualization only)
         if optimizer is None:
-            return pred_dict, loss_dict, analysis_dict
+
+            # Return prediction, loss and analysis dictionaries (validation only)
+            if not kwargs.setdefault('visualize', False):
+                return pred_dict, loss_dict, analysis_dict
+
+            # Get and return annotated images, loss and analysis dictionaries (visualization only)
+            images_dict = {}
+            for head in self.heads[0]:
+                images_dict = {**images_dict, **head.visualize(images, pred_dict, tgt_dict)}
+
+            return images_dict, loss_dict, analysis_dict
 
         # Clip gradient when positive maximum norm is provided (training only)
-        if 'max_grad_norm' in kwargs:
-            if kwargs['max_grad_norm'] > 0:
-                clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
+        if kwargs.setdefault('max_grad_norm', -1.0) > 0.0:
+            clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
 
         # Update model parameters (training only)
         optimizer.step()
 
         # Compute average heads state dictionary (training only)
-        avg_state_dict = {}
+        avg_heads_state_dict = {}
         for key_values in zip(*[heads.state_dict().items() for heads in self.heads]):
             keys, values = list(zip(*key_values))
-            avg_state_dict[keys[0]] = sum(values) / len(values)
+            avg_heads_state_dict[keys[0]] = sum(values) / len(values)
 
         # Load average heads state dictionary into different heads (training only)
-        [heads.load_state_dict(avg_state_dict) for heads in self.heads]
+        [heads.load_state_dict(avg_heads_state_dict) for heads in self.heads]
 
         return loss_dict, analysis_dict
 

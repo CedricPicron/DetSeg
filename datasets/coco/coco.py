@@ -400,21 +400,18 @@ def get_coco_transforms():
         val_transforms (object): The COCO validation transforms.
     """
 
-    hflip = T.RandomHorizontalFlip()
     crop = T.Compose([T.RandomResize([400, 500, 600]), T.RandomSizeCrop(384, 600)])
-
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
     default_resize = T.RandomResize(scales, max_size=1333)
     cropped_resize = T.Compose([crop, default_resize])
 
+    hflip = T.RandomHorizontalFlip()
     train_resize = T.RandomSelect(default_resize, cropped_resize)
     val_resize = T.RandomResize([800], max_size=1333)
-
     to_tensor = T.ToTensor()
-    normalize = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
-    train_transforms = T.Compose([hflip, train_resize, to_tensor, normalize])
-    val_transforms = T.Compose([val_resize, to_tensor, normalize])
+    train_transforms = T.Compose([hflip, train_resize, to_tensor])
+    val_transforms = T.Compose([val_resize, to_tensor])
 
     return train_transforms, val_transforms
 
