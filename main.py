@@ -76,8 +76,11 @@ def get_parser():
     # *** Binary segmentation head
     parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
     parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
-    parser.add_argument('--no_map_size_correction', action='store_true', help='whether to disable map size correction')
     parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
+
+    # *** Semantic segmentation head
+    parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
+    parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
     # DETR
     parser.add_argument('--load_orig_detr', action='store_true', help='load untrained detr parts from original DETR')

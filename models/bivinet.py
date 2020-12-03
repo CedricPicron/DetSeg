@@ -23,6 +23,7 @@ class BiViNet(nn.Module):
         cores (nn.ModuleList): List of size [num_core_layers] with concatenated core modules.
         heads (nn.ModuleList): List of size [num_core_layers+1] with copies of BiViNet head modules for each layer.
         map_types (Set): Set of strings containing the names of the required map types.
+        num_classes (int, optional): Integer containing the number of object classes (without background).
     """
 
     def __init__(self, backbone, core_feat_sizes, core, num_core_layers, heads):
@@ -35,6 +36,9 @@ class BiViNet(nn.Module):
             core (nn.Module): Module implementing the BiViNet core.
             num_core_layers (int): Number of concatenated core layers.
             heads (List): List of size [num_heads] with BiViNet head modules.
+
+        Raises:
+            ValueError: Error when incompatible heads designed for a different number of classes are provided.
         """
 
         # Initialization of default nn.Module
@@ -53,6 +57,15 @@ class BiViNet(nn.Module):
 
         # Get map types required by the heads
         self.map_types = {map_type for head in heads for map_type in head.required_map_types()}
+
+        # Set number of classes attribute if requested by one of the heads
+        num_classes_set = {head.num_classes for head in heads if hasattr(head, 'num_classes')}
+
+        if len(num_classes_set) == 1:
+            self.num_classes = num_classes_set[0]
+
+        elif len(num_classes_set) > 1:
+            raise ValueError("Incompatible heads designed for a different number of classes are provided.")
 
     @staticmethod
     def get_param_families():
@@ -93,12 +106,41 @@ class BiViNet(nn.Module):
             tgt_masks (ByteTensor): Padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         Returns:
-            binary_masks (ByteTensor): Binary (object + background) segmentation masks of shape [batch_size, iH, iW].
+            binary_masks (ByteTensor): Binary segmentation masks of shape [batch_size, max_iH, max_iW].
         """
 
         binary_masks = torch.stack([tgt_masks[i0:i1].any(dim=0) for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])])
 
         return binary_masks
+
+    def get_semantic_masks(self, tgt_labels, tgt_sizes, tgt_masks):
+        """
+        Method obtaining the semantic masks for each object category and background corresponding to each batch entry.
+
+        Args:
+            tgt_labels (IntTensor): Tensor of shape [num_targets_total] containing the class indices.
+            tgt_sizes (IntTensor): Tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+            tgt_masks (ByteTensor): Padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+
+        Returns:
+            semantic_masks (ByteTensor): Semantic masks of shape [batch_size, num_classes+1, max_iH, max_iW].
+        """
+
+        # Initialize semantic masks
+        batch_size = len(tgt_sizes) - 1
+        semantic_masks = torch.zeros(batch_size, self.num_classes+1, *tgt_masks.shape[-2:]).to(tgt_masks)
+
+        # Compute semantic masks for each batch entry
+        for i, i0, i1 in zip(range(batch_size), tgt_sizes[:-1], tgt_sizes[1:]):
+
+            # Compute semantic masks for each object category
+            for tgt_label, tgt_mask in zip(tgt_labels[i0:i1], tgt_masks[i0:i1]):
+                semantic_masks[i, tgt_label].maximum(tgt_mask)
+
+            # Compute background mask
+            semantic_masks[i, self.num_classes] = torch.where(tgt_masks[i0:i1].any(dim=0), 0, 1)
+
+        return semantic_masks
 
     @staticmethod
     def downsample_masks(masks, feat_maps):
@@ -145,6 +187,7 @@ class BiViNet(nn.Module):
 
         Args:
             tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
@@ -152,7 +195,8 @@ class BiViNet(nn.Module):
 
         Returns:
             tgt_dict (List): Updated target dictionary with 'masks' key removed and potential additional keys:
-                - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
+                - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW];
+                - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
 
         Raises:
             ValueError: Raised when an unknown map type is found in the 'self.map_types' set.
@@ -163,6 +207,11 @@ class BiViNet(nn.Module):
             if map_type == 'binary_maps':
                 binary_masks = BiViNet.get_binary_masks(tgt_dict['sizes'], tgt_dict['masks'])
                 tgt_dict[map_type] = BiViNet.downsample_masks(binary_masks, feat_maps)
+
+            elif map_type == 'semantic_maps':
+                semantic_masks = self.get_semantic_masks(tgt_dict['labels'], tgt_dict['sizes'], tgt_dict['masks'])
+                semantic_maps = BiViNet.downsample_masks(semantic_masks, feat_maps)
+                tgt_dict[map_type] = torch.argmax(semantic_maps, dim=1)
 
             else:
                 raise ValueError(f"Unknown map type '{map_type}' in 'self.map_types'.")
