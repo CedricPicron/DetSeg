@@ -2,7 +2,8 @@
 analysis/*
 condor/*
 datasets/coco/annotations
-datasets/coco/images
+datasets/coco/train2017
+datasets/coco/val2017
 outputs/*
 test/*
 .vscode

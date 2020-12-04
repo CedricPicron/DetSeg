@@ -433,8 +433,8 @@ def build_coco(args):
     """
 
     coco_root = Path() / 'datasets' / 'coco'
-    train_image_folder = coco_root / 'images' / 'train2017'
-    val_image_folder = coco_root / 'images' / 'val2017'
+    train_image_folder = coco_root / 'train2017'
+    val_image_folder = coco_root / 'val2017'
     train_annotation_file = coco_root / 'annotations' / 'instances_train2017.json'
     val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 

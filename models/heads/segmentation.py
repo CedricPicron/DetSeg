@@ -306,9 +306,10 @@ class SemanticSegHead(nn.Module):
         num_classes (int): Integer containing the number of object classes (without background).
         class_weights (FloatTensor): Tensor of shape [num_classes+1] containing class-specific loss weights.
         loss_weight (float): Weight factor used to scale the semantic segmentation loss as a whole.
+        metadata (detectron2.data.Metadata): Metadata instance containing dataset information such as class names.
     """
 
-    def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight):
+    def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight, metadata):
         """
         Initializes the SemanticSegHead module.
 
@@ -317,6 +318,7 @@ class SemanticSegHead(nn.Module):
             num_classes (int): Integer containing the number of object classes (without background).
             bg_weight (float): Cross entropy weight scaling the losses in target background positions.
             loss_weight (float): Weight factor used to scale the semantic segmentation loss.
+            metadata (detectron2.data.Metadata): Metadata instance containing dataset information such as class names.
         """
 
         # Initialization of default nn.Module
@@ -332,6 +334,7 @@ class SemanticSegHead(nn.Module):
         # Set remaining attributes as specified by the input arguments
         self.num_classes = num_classes
         self.loss_weight = loss_weight
+        self.metadata = metadata
 
     @staticmethod
     def required_map_types():
@@ -483,6 +486,85 @@ class SemanticSegHead(nn.Module):
 
         return loss_dict, analysis_dict
 
+    def visualize(self, images, pred_dict, tgt_dict):
+        """
+        Draws predicted and target semantic segmentations on given full-resolution images.
+
+        Args:
+            images (NestedTensor): NestedTensor consisting of:
+                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
+                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
+
+            pred_dict (Dict): Prediction dictionary containing following key:
+                - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
+
+        Returns:
+            images_dict (Dict): Dictionary of images with drawn predicted and target semantic segmentations.
+        """
+
+        # Get padded images and corresponding image masks
+        images, img_masks = images.decompose()
+
+        # Get desired keys and merge prediction and target semantic maps into single list
+        keys = [f'pred_f{i}' for i in range(len(pred_dict['semantic_maps']))]
+        keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['semantic_maps']))])
+        semantic_maps_list = [*pred_dict['semantic_maps'], *tgt_dict['semantic_maps']]
+
+        # Get possible map sizes
+        map_size = tuple(images.shape[-2:])
+        map_sizes = [map_size]
+
+        while map_size != (1, 1):
+            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
+            map_sizes.append(map_size)
+
+        # Convert images to desired visualization format
+        images = images.permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8)
+        images = images.cpu().numpy()
+
+        # Get image sizes without padding in (height, width) format
+        img_sizes = [(sum(~img_mask[:, 0]).item(), sum(~img_mask[0, :]).item()) for img_mask in img_masks]
+
+        # Get interpolation kwargs and initialize dictionary of annotated images
+        interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
+        images_dict = {}
+
+        # Get annotated images for each batch of semantic maps
+        for key, semantic_maps in zip(keys, semantic_maps_list):
+
+            # Get number of times the semantic maps were downsampled
+            map_size = tuple(semantic_maps.shape[-2:])
+            times_downsampled = map_sizes.index(map_size)
+
+            # Get class-specific semantic maps
+            class_semantic_maps = torch.stack([semantic_maps == i for i in range(self.num_classes+1)], dim=1).float()
+
+            # Upsample class-specific semantic maps to image resolution
+            for map_id in range(times_downsampled-1, -1, -1):
+                H, W = map_sizes[map_id]
+                pH, pW = (int(H % 2 == 0), int(W % 2 == 0))
+
+                class_semantic_maps = F.pad(class_semantic_maps, (0, pW, 0, pH), mode='replicate')
+                class_semantic_maps = F.interpolate(class_semantic_maps, size=(H+pH, W+pW), **interpolation_kwargs)
+                class_semantic_maps = class_semantic_maps[:, :, :H, :W]
+
+            # Get general (non-class specific) semantic maps and convert them to NumPy ndarray
+            semantic_maps = torch.argmax(class_semantic_maps, dim=1).cpu().numpy()
+
+            # Draw semantic masks on corresponding images
+            for i, image, img_size, semantic_map in zip(range(len(images)), images, img_sizes, semantic_maps):
+                visualizer = Visualizer(image, metadata=self.metadata)
+                visualizer.draw_sem_seg(semantic_map)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'sem_seg_{key}_{i}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict
+
 
 def build_seg_heads(args):
     """
@@ -508,11 +590,13 @@ def build_seg_heads(args):
     # Build desired segmentation head modules
     for seg_head_type in args.seg_heads:
         if seg_head_type == 'binary':
-            binary_seg_head = BinarySegHead(feat_sizes, args.disputed_loss, args.disputed_beta, args.bin_seg_weight)
+            head_args = [args.disputed_loss, args.disputed_beta, args.bin_seg_weight]
+            binary_seg_head = BinarySegHead(feat_sizes, *head_args)
             seg_heads.append(binary_seg_head)
 
         elif seg_head_type == 'semantic':
-            semantic_seg_head = SemanticSegHead(feat_sizes, args.num_classes, args.bg_weight, args.sem_seg_weight)
+            head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, args.val_metadata]
+            semantic_seg_head = SemanticSegHead(feat_sizes, *head_args)
             seg_heads.append(semantic_seg_head)
 
         else:

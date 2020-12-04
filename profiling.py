@@ -1,5 +1,10 @@
+"""
+Profiling script.
+"""
+
 import argparse
 
+from detectron2.data import MetadataCatalog
 import torch
 import torch.autograd.profiler as profiler
 from torch.utils.benchmark import Timer
@@ -100,6 +105,7 @@ elif profiling_args.model == 'bivinet':
     main_args.num_classes = 91
     main_args.seg_heads = ['binary', 'semantic']
     main_args.disputed_loss = True
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_bivinet(main_args).to('cuda')
 
     images = torch.randn(2, 3, 1024, 1024)
@@ -212,6 +218,7 @@ elif profiling_args.model == 'sem_seg_head':
     main_args.min_resolution_id = 3
     main_args.num_classes = 91
     main_args.seg_heads = ['semantic']
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_seg_heads(main_args)[0].to('cuda')
 
     feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')

@@ -79,19 +79,19 @@ class BiViNet(nn.Module):
         return ['backbone', 'projs', 'core', 'heads']
 
     @staticmethod
-    def get_feat_masks(img_masks, feat_maps):
+    def get_feat_masks(img_masks, map_sizes):
         """
         Method obtaining feature masks corresponding to each feature map encoding features from padded image regions.
 
         Args:
             img_masks (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
-            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            map_sizes (List): List of size [num_core_maps] with tuples of requested map sizes (fH, fW).
 
         Returns:
             feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
         """
 
-        padding_maps = BiViNet.downsample_masks(img_masks, feat_maps)
+        padding_maps = BiViNet.downsample_masks(img_masks, map_sizes)
         feat_masks = [padding_map > 0.5 for padding_map in padding_maps]
 
         return feat_masks
@@ -113,9 +113,9 @@ class BiViNet(nn.Module):
 
         return binary_masks
 
-    def get_semantic_masks(self, tgt_labels, tgt_sizes, tgt_masks):
+    def get_semantic_maps(self, tgt_labels, tgt_sizes, tgt_masks):
         """
-        Method obtaining the semantic masks for each object category and background corresponding to each batch entry.
+        Method obtaining the full-resolution semantic segmentation map corresponding to each batch entry.
 
         Args:
             tgt_labels (IntTensor): Tensor of shape [num_targets_total] containing the class indices.
@@ -123,33 +123,29 @@ class BiViNet(nn.Module):
             tgt_masks (ByteTensor): Padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         Returns:
-            semantic_masks (ByteTensor): Semantic masks of shape [batch_size, num_classes+1, max_iH, max_iW].
+            semantic_maps (LongTensor): Semantic maps with class indices of shape [batch_size, max_iH, max_iW].
         """
 
-        # Initialize semantic masks
+        # Initialize semantic maps
         batch_size = len(tgt_sizes) - 1
-        semantic_masks = torch.zeros(batch_size, self.num_classes+1, *tgt_masks.shape[-2:]).to(tgt_masks)
+        tensor_kwargs = {'dtype': torch.long, 'device': tgt_masks.device}
+        semantic_maps = torch.full((batch_size, *tgt_masks.shape[-2:]), self.num_classes, **tensor_kwargs)
 
-        # Compute semantic masks for each batch entry
+        # Compute full-resolution semantic masks for each batch entry
         for i, i0, i1 in zip(range(batch_size), tgt_sizes[:-1], tgt_sizes[1:]):
-
-            # Compute semantic masks for each object category
             for tgt_label, tgt_mask in zip(tgt_labels[i0:i1], tgt_masks[i0:i1]):
-                semantic_masks[i, tgt_label].maximum(tgt_mask)
+                semantic_maps[i].masked_fill_(tgt_mask, tgt_label)
 
-            # Compute background mask
-            semantic_masks[i, self.num_classes] = torch.where(tgt_masks[i0:i1].any(dim=0), 0, 1)
-
-        return semantic_masks
+        return semantic_maps
 
     @staticmethod
-    def downsample_masks(masks, feat_maps):
+    def downsample_masks(masks, map_sizes):
         """
-        Method downsampling the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
+        Method downsampling the full-resolution masks to maps with the given map sizes.
 
         Args:
             masks (ByteTensor): Padded full-resolution masks of shape [*, max_iH, max_iW].
-            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            map_sizes (List): List of size [num_core_maps] with tuples of requested map sizes (fH, fW).
 
         Returns:
             maps_list (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
@@ -164,7 +160,6 @@ class BiViNet(nn.Module):
         average_kernel = torch.ones(1, 1, 3, 3, device=device)/9
 
         # Initialize list of downsampled output maps
-        map_sizes = [feat_map.shape[1:-1] for feat_map in feat_maps]
         maps_list = [torch.zeros(*original_size[:-2], *map_size, device=device) for map_size in map_sizes]
 
         # Compue list of downsampled output maps
@@ -177,7 +172,48 @@ class BiViNet(nn.Module):
 
         return maps_list
 
-    def prepare_tgt_maps(self, tgt_dict, feat_maps):
+    @staticmethod
+    def downsample_index_maps(index_maps, map_sizes):
+        """
+        Method downsampling the full-resolution index maps to maps with the given map sizes.
+
+        Args:
+            index_maps (LongTensor): Padded full-resolution index maps of shape [*, max_iH, max_iW].
+            map_sizes (List): List of size [num_core_maps] with tuples of requested map sizes (fH, fW).
+
+        Returns:
+            maps_list (List): List of size [num_core_maps] with downsampled index maps of shape [*, fH, fW].
+        """
+
+        # Save original size of index maps and convert index maps into desired format
+        original_size = index_maps.shape
+        index_maps = index_maps.view(-1, *original_size[-2:])
+
+        # Get list of truncation heights and widths
+        map_size = tuple(original_size[-2:])
+        truncation = tuple(original_size[-2:])
+        truncations = []
+        factor = 1
+
+        while len(truncations) < len(map_sizes):
+            if map_size in map_sizes:
+                truncations.append(truncation)
+
+            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
+            delta_truncation = (factor*(int(map_size[0] % 2 == 0)), factor*(int(map_size[1] % 2 == 0)))
+            truncation = (truncation[0] - delta_truncation[0], truncation[1] - delta_truncation[1])
+            factor = 2*factor
+
+        # Get downsampled index maps
+        maps_list = []
+        for (H, W), (tH, tW) in zip(map_sizes, truncations):
+            heights = torch.linspace(0, tH-1, steps=H).round().to(index_maps).view(-1, 1)
+            widths = torch.linspace(0, tW-1, steps=W).round().to(index_maps).view(1, -1)
+            maps_list.append(index_maps[:, heights, widths].view(*original_size[:-2], H, W))
+
+        return maps_list
+
+    def prepare_tgt_maps(self, tgt_dict, map_sizes):
         """
         Method preparing the target segmentation maps and adding them to the target dictionary.
 
@@ -191,7 +227,7 @@ class BiViNet(nn.Module):
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
-            feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            map_sizes (List): List of size [num_core_maps] with tuples of requested map sizes (fH, fW).
 
         Returns:
             tgt_dict (List): Updated target dictionary with 'masks' key removed and potential additional keys:
@@ -206,12 +242,11 @@ class BiViNet(nn.Module):
         for map_type in self.map_types:
             if map_type == 'binary_maps':
                 binary_masks = BiViNet.get_binary_masks(tgt_dict['sizes'], tgt_dict['masks'])
-                tgt_dict[map_type] = BiViNet.downsample_masks(binary_masks, feat_maps)
+                tgt_dict[map_type] = BiViNet.downsample_masks(binary_masks, map_sizes)
 
             elif map_type == 'semantic_maps':
-                semantic_masks = self.get_semantic_masks(tgt_dict['labels'], tgt_dict['sizes'], tgt_dict['masks'])
-                semantic_maps = BiViNet.downsample_masks(semantic_masks, feat_maps)
-                tgt_dict[map_type] = [torch.argmax(semantic_map, dim=1) for semantic_map in semantic_maps]
+                semantic_maps = self.get_semantic_maps(tgt_dict['labels'], tgt_dict['sizes'], tgt_dict['masks'])
+                tgt_dict[map_type] = BiViNet.downsample_index_maps(semantic_maps, map_sizes)
 
             else:
                 raise ValueError(f"Unknown map type '{map_type}' in 'self.map_types'.")
@@ -235,7 +270,8 @@ class BiViNet(nn.Module):
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW].
+                - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW];
+                - semantic_maps (List): semantic segmentation maps of shape [batch_size, fH, fW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
             layer_id (int): Layer index, with 0 for the backbone layer and higher integers for the core layers.
@@ -284,7 +320,7 @@ class BiViNet(nn.Module):
                 - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
                 - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, iH, iW].
+                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
@@ -323,8 +359,9 @@ class BiViNet(nn.Module):
 
         # Do some preparation and train/evaluate initial core feature maps (training/validation only)
         if tgt_dict is not None:
-            feat_masks = BiViNet.get_feat_masks(images.mask, feat_maps)
-            tgt_dict = self.prepare_tgt_maps(tgt_dict, feat_maps)
+            map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+            feat_masks = BiViNet.get_feat_masks(images.mask, map_sizes)
+            tgt_dict = self.prepare_tgt_maps(tgt_dict, map_sizes)
 
             train_eval_args = (feat_masks, tgt_dict, optimizer)
             loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, layer_id=0, **kwargs)
