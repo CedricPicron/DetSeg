@@ -17,8 +17,8 @@ from utils.data import nested_tensor_from_image_list
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'bicore', 'binary_seg_head', 'bivinet', 'criterion', 'detr', 'encoder', 'global_decoder']
-model_choices = [*model_choices, 'sample_decoder']
+model_choices = ['backbone', 'bicore', 'bin_seg_head', 'bivinet', 'criterion', 'detr', 'encoder', 'global_decoder']
+model_choices = [*model_choices, 'sample_decoder', 'sem_seg_head']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -63,7 +63,7 @@ elif profiling_args.model == 'bicore':
     forward_stmt = "model(*inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
 
-elif profiling_args.model == 'binary_seg_head':
+elif profiling_args.model == 'bin_seg_head':
     main_args.min_resolution_id = 3
     main_args.seg_heads = ['binary']
     main_args.disputed_loss = True
@@ -88,16 +88,17 @@ elif profiling_args.model == 'binary_seg_head':
     tgt_maps = [tgt_map3, tgt_map4, tgt_map5, tgt_map6]
     tgt_dict = {'binary_maps': tgt_maps}
 
-    inputs = [feat_maps, tgt_dict]
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs)[0]['binary_seg_loss'].backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[0]['bin_seg_loss'].backward()"
 
 elif profiling_args.model == 'bivinet':
     main_args.meta_arch = 'BiViNet'
     main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
-    main_args.seg_heads = ['binary']
+    main_args.num_classes = 91
+    main_args.seg_heads = ['binary', 'semantic']
     main_args.disputed_loss = True
     model = build_bivinet(main_args).to('cuda')
 
@@ -105,9 +106,10 @@ elif profiling_args.model == 'bivinet':
     images = nested_tensor_from_image_list(images).to('cuda')
 
     num_targets_total = 20
+    labels = torch.randint(model.num_classes, size=(num_targets_total,)).to('cuda')
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     masks = (torch.randn(num_targets_total, 1024, 1024) > 1.0).to('cuda')
-    tgt_dict = {'sizes': sizes, 'masks': masks}
+    tgt_dict = {'labels': labels, 'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
     globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
@@ -205,6 +207,36 @@ elif profiling_args.model == 'sample_decoder':
 
     forward_stmt = "model(*inputs)"
     backward_stmt = "model(*inputs)['slots'].sum().backward()"
+
+elif profiling_args.model == 'sem_seg_head':
+    main_args.min_resolution_id = 3
+    main_args.num_classes = 91
+    main_args.seg_heads = ['semantic']
+    model = build_seg_heads(main_args)[0].to('cuda')
+
+    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
+    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
+    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
+    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
+    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
+    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
+
+    tgt_map0 = torch.randint(model.num_classes+1, size=(2, 1024, 1024)).to('cuda')
+    tgt_map1 = torch.randint(model.num_classes+1, size=(2, 512, 512)).to('cuda')
+    tgt_map2 = torch.randint(model.num_classes+1, size=(2, 256, 256)).to('cuda')
+    tgt_map3 = torch.randint(model.num_classes+1, size=(2, 128, 128)).to('cuda')
+    tgt_map4 = torch.randint(model.num_classes+1, size=(2, 64, 64)).to('cuda')
+    tgt_map5 = torch.randint(model.num_classes+1, size=(2, 32, 32)).to('cuda')
+    tgt_map6 = torch.randint(model.num_classes+1, size=(2, 16, 16)).to('cuda')
+    tgt_maps = [tgt_map3, tgt_map4, tgt_map5, tgt_map6]
+    tgt_dict = {'semantic_maps': tgt_maps}
+
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[0]['sem_seg_loss'].backward()"
 
 # Select forward or backward statement
 stmt = forward_stmt if profiling_args.forward else backward_stmt

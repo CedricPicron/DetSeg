@@ -19,7 +19,7 @@ class BinarySegHead(nn.Module):
         loss_weight (float): Weight factor used to scale the binary segmentation loss.
     """
 
-    def __init__(self, feat_sizes, disputed_loss, disputed_beta, map_size_correction, loss_weight):
+    def __init__(self, feat_sizes, disputed_loss, disputed_beta, loss_weight):
         """
         Initializes the BinarySegHead module.
 
@@ -87,24 +87,24 @@ class BinarySegHead(nn.Module):
 
         Returns:
             analysis_dict (Dict): Dictionary of accuracy-related analyses containing following keys:
-                - binary_seg_acc (FloatTensor): accuracy of the binary segmentation of shape [];
-                - binary_seg_acc_bg (FloatTensor): background accuracy of the binary segmentation of shape [];
-                - binary_seg_acc_obj (FloatTensor): object accuracy of the binary segmentation of shape [].
+                - bin_seg_acc (FloatTensor): accuracy of the binary segmentation of shape [];
+                - bin_seg_acc_bg (FloatTensor): background accuracy of the binary segmentation of shape [];
+                - bin_seg_acc_obj (FloatTensor): object accuracy of the binary segmentation of shape [].
         """
 
         # Compute general accuracy and place it into analysis dictionary
         accuracy = BinarySegHead.get_accuracy(preds, targets)
-        analysis_dict = {'binary_seg_acc': 100*accuracy}
+        analysis_dict = {'bin_seg_acc': 100*accuracy}
 
         # Compute background accuracy and place it into analysis dictionary
         bg_mask = targets == 0
         bg_accuracy = BinarySegHead.get_accuracy(preds[bg_mask], targets[bg_mask])
-        analysis_dict['binary_seg_acc_bg': 100*bg_accuracy]
+        analysis_dict['bin_seg_acc_bg'] = 100*bg_accuracy
 
         # Compute object accuracy and place it into analysis dictionary
         obj_mask = targets == 1
         obj_accuracy = BinarySegHead.get_accuracy(preds[obj_mask], targets[obj_mask])
-        analysis_dict['binary_seg_acc_obj': 100*obj_accuracy]
+        analysis_dict['bin_seg_acc_obj'] = 100*obj_accuracy
 
         return analysis_dict
 
@@ -127,10 +127,10 @@ class BinarySegHead(nn.Module):
                     - binary_seg_loss (FloatTensor): weighted binary segmentation loss of shape [].
 
                 analysis_dict (Dictionary): Analysis dictionary containing at least following keys:
-                    - binary_seg_acc (FloatTensor): accuracy of the binary segmentation of shape [];
-                    - binary_seg_acc_bg (FloatTensor): background accuracy of the binary segmentation of shape [];
-                    - binary_seg_acc_obj (FloatTensor): object accuracy of the binary segmentation of shape [];
-                    - binary_seg_error (FloatTensor): average error of the binary segmentation of shape [].
+                    - bin_seg_acc (FloatTensor): accuracy of the binary segmentation of shape [];
+                    - bin_seg_acc_bg (FloatTensor): background accuracy of the binary segmentation of shape [];
+                    - bin_seg_acc_obj (FloatTensor): object accuracy of the binary segmentation of shape [];
+                    - bin_seg_error (FloatTensor): average error of the binary segmentation of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following key:
@@ -177,7 +177,7 @@ class BinarySegHead(nn.Module):
         avg_losses = [torch.mean(losses[i0:i1]) for i0, i1 in zip(indices[:-1], indices[1:])]
 
         # Get loss dictionary with weighted binary segmentation loss (trainval only)
-        loss_dict = {'binary_seg_loss': self.loss_weight * sum(avg_losses)}
+        loss_dict = {'bin_seg_loss': self.loss_weight * sum(avg_losses)}
 
         # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():
@@ -199,6 +199,9 @@ class BinarySegHead(nn.Module):
 
             # Perform accuracy-related analyses and place them in analysis dictionary (trainval only)
             analysis_dict = BinarySegHead.perform_accuracy_analyses(preds[acc_mask] > 0.5, targets[acc_mask] > 0.5)
+
+            # Perform error analysis and place it in analysis dictionary (trainval only)
+            analysis_dict['bin_seg_error'] = torch.abs(preds[~padding_mask] - targets[~padding_mask]).mean()
 
             # If requested, perform extended analyses (trainval only)
             if kwargs.setdefault('extended_analysis', False):
@@ -302,11 +305,10 @@ class SemanticSegHead(nn.Module):
         projs (ModuleList): List of size [num_maps] with linear projection modules.
         num_classes (int): Integer containing the number of object classes (without background).
         class_weights (FloatTensor): Tensor of shape [num_classes+1] containing class-specific loss weights.
-        map_size_correction (bool): Bool indicating whether to scale losses relative to their map sizes.
         loss_weight (float): Weight factor used to scale the semantic segmentation loss as a whole.
     """
 
-    def __init__(self, feat_sizes, num_classes, bg_weight, map_size_correction, loss_weight):
+    def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight):
         """
         Initializes the SemanticSegHead module.
 
@@ -314,7 +316,6 @@ class SemanticSegHead(nn.Module):
             feat_sizes (List): List of size [num_maps] containing the feature size of each map.
             num_classes (int): Integer containing the number of object classes (without background).
             bg_weight (float): Cross entropy weight scaling the losses in target background positions.
-            map_size_correction (bool): Bool indicating whether to scale losses relative to their map sizes.
             loss_weight (float): Weight factor used to scale the semantic segmentation loss.
         """
 
@@ -330,7 +331,6 @@ class SemanticSegHead(nn.Module):
 
         # Set remaining attributes as specified by the input arguments
         self.num_classes = num_classes
-        self.map_size_correction = map_size_correction
         self.loss_weight = loss_weight
 
     @staticmethod
@@ -378,24 +378,24 @@ class SemanticSegHead(nn.Module):
 
         Returns:
             analysis_dict (Dict): Dictionary of accuracy-related analyses containing following keys:
-                - semantic_seg_acc (FloatTensor): accuracy of the semantic segmentation of shape [];
-                - semantic_seg_acc_bg (FloatTensor): background accuracy of the semantic segmentation of shape [];
-                - semantic_seg_acc_obj (FloatTensor): object accuracy of the semantic segmentation of shape [].
+                - sem_seg_acc (FloatTensor): accuracy of the semantic segmentation of shape [];
+                - sem_seg_acc_bg (FloatTensor): background accuracy of the semantic segmentation of shape [];
+                - sem_seg_acc_obj (FloatTensor): object accuracy of the semantic segmentation of shape [].
         """
 
         # Compute general accuracy and place it into analysis dictionary
         accuracy = SemanticSegHead.get_accuracy(preds, targets)
-        analysis_dict = {'semantic_seg_acc': 100*accuracy}
+        analysis_dict = {'sem_seg_acc': 100*accuracy}
 
         # Compute background accuracy and place it into analysis dictionary
         bg_mask = targets == self.num_classes
         bg_accuracy = SemanticSegHead.get_accuracy(preds[bg_mask], targets[bg_mask])
-        analysis_dict['semantic_seg_acc_bg': 100*bg_accuracy]
+        analysis_dict['sem_seg_acc_bg'] = 100*bg_accuracy
 
         # Compute object accuracy and place it into analysis dictionary
         obj_mask = targets < self.num_classes
         obj_accuracy = SemanticSegHead.get_accuracy(preds[obj_mask], targets[obj_mask])
-        analysis_dict['semantic_seg_acc_obj': 100*obj_accuracy]
+        analysis_dict['sem_seg_acc_obj'] = 100*obj_accuracy
 
         return analysis_dict
 
@@ -415,12 +415,12 @@ class SemanticSegHead(nn.Module):
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
                 loss_dict (Dictionary): Loss dictionary containing following key:
-                    - semantic_seg_loss (FloatTensor): weighted semantic segmentation loss of shape [].
+                    - sem_seg_loss (FloatTensor): weighted semantic segmentation loss of shape [].
 
                 analysis_dict (Dictionary): Analysis dictionary containing at least following keys:
-                    - semantic_seg_acc (FloatTensor): accuracy of the semantic segmentation of shape [];
-                    - semantic_seg_acc_bg (FloatTensor): background accuracy of the semantic segmentation of shape [];
-                    - semantic_seg_acc_obj (FloatTensor): object accuracy of the semantic segmentation of shape [].
+                    - sem_seg_acc (FloatTensor): accuracy of the semantic segmentation of shape [];
+                    - sem_seg_acc_bg (FloatTensor): background accuracy of the semantic segmentation of shape [];
+                    - sem_seg_acc_obj (FloatTensor): object accuracy of the semantic segmentation of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following key:
@@ -440,7 +440,7 @@ class SemanticSegHead(nn.Module):
         avg_losses = [F.cross_entropy(map0, map1, self.class_weights) for map0, map1 in zip(logit_maps, tgt_maps)]
 
         # Get loss dictionary with weighted semantic segmentation loss (trainval only)
-        loss_dict = {'semantic_seg_loss': self.loss_weight * sum(avg_losses)}
+        loss_dict = {'sem_seg_loss': self.loss_weight * sum(avg_losses)}
 
         # Perform accuracy and error analyses and place them in analysis dictionary (trainval only)
         with torch.no_grad():

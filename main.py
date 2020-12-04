@@ -79,7 +79,7 @@ def get_parser():
     parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
 
     # *** Semantic segmentation head
-    parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
+    parser.add_argument('--bg_weight', default=0.2, type=float, help='weight scaling losses in background positions')
     parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
     # DETR

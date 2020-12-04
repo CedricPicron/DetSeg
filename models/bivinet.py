@@ -62,7 +62,7 @@ class BiViNet(nn.Module):
         num_classes_set = {head.num_classes for head in heads if hasattr(head, 'num_classes')}
 
         if len(num_classes_set) == 1:
-            self.num_classes = num_classes_set[0]
+            self.num_classes = num_classes_set.pop()
 
         elif len(num_classes_set) > 1:
             raise ValueError("Incompatible heads designed for a different number of classes are provided.")
@@ -211,7 +211,7 @@ class BiViNet(nn.Module):
             elif map_type == 'semantic_maps':
                 semantic_masks = self.get_semantic_masks(tgt_dict['labels'], tgt_dict['sizes'], tgt_dict['masks'])
                 semantic_maps = BiViNet.downsample_masks(semantic_masks, feat_maps)
-                tgt_dict[map_type] = torch.argmax(semantic_maps, dim=1)
+                tgt_dict[map_type] = [torch.argmax(semantic_map, dim=1) for semantic_map in semantic_maps]
 
             else:
                 raise ValueError(f"Unknown map type '{map_type}' in 'self.map_types'.")
