@@ -331,9 +331,13 @@ class SemanticSegHead(nn.Module):
         self.register_buffer('class_weights', torch.ones(num_classes+1))
         self.class_weights[num_classes] = bg_weight
 
-        # Set remaining attributes as specified by the input arguments
+        # Set number of classes and loss weight attributes
         self.num_classes = num_classes
         self.loss_weight = loss_weight
+
+        # Set dataset metadata attribute used during visualization
+        metadata.stuff_classes = metadata.thing_classes
+        metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
     @staticmethod
@@ -552,8 +556,15 @@ class SemanticSegHead(nn.Module):
                 class_semantic_maps = F.interpolate(class_semantic_maps, size=(H+pH, W+pW), **interpolation_kwargs)
                 class_semantic_maps = class_semantic_maps[:, :, :H, :W]
 
-            # Get general (non-class specific) semantic maps and convert them to NumPy ndarray
-            semantic_maps = torch.argmax(class_semantic_maps, dim=1).cpu().numpy()
+            # Get general (non-class specific) semantic maps
+            semantic_maps = torch.argmax(class_semantic_maps, dim=1)
+
+            # Change labels from dataset ids to contiguous ids (as expected by metadata)
+            id_dict = self.metadata.thing_dataset_id_to_contiguous_id
+            [semantic_maps.masked_fill_(semantic_maps == k, v) for k, v in id_dict.items()]
+
+            # Convert semantic maps to NumPy ndarray
+            semantic_maps = semantic_maps.cpu().numpy()
 
             # Draw semantic masks on corresponding images
             for i, image, img_size, semantic_map in zip(range(len(images)), images, img_sizes, semantic_maps):

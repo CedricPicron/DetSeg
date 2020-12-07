@@ -151,7 +151,7 @@ class BiViNet(nn.Module):
             maps_list (List): List of size [num_core_maps] with downsampled FloatTensor maps of shape [*, fH, fW].
         """
 
-        # Get initial full-resolution maps
+        # Save original size of masks and get initial full-resolution maps
         original_size = masks.shape
         maps = masks.float().view(-1, 1, *original_size[-2:])
 
@@ -162,7 +162,7 @@ class BiViNet(nn.Module):
         # Initialize list of downsampled output maps
         maps_list = [torch.zeros(*original_size[:-2], *map_size, device=device) for map_size in map_sizes]
 
-        # Compue list of downsampled output maps
+        # Compute list of downsampled output maps
         for i in range(len(maps_list)):
             while maps.shape[-2:] != map_sizes[i]:
                 maps = F.pad(maps, (1, 1, 1, 1), mode='replicate')
@@ -187,29 +187,17 @@ class BiViNet(nn.Module):
 
         # Save original size of index maps and convert index maps into desired format
         original_size = index_maps.shape
-        index_maps = index_maps.view(-1, *original_size[-2:])
+        maps = index_maps.view(-1, *original_size[-2:])
 
-        # Get list of truncation heights and widths
-        map_size = tuple(original_size[-2:])
-        truncation = tuple(original_size[-2:])
-        truncations = []
-        factor = 1
+        # Initialize list of downsampled index maps
+        maps_list = [torch.zeros(*original_size[:-2], *map_size).to(index_maps) for map_size in map_sizes]
 
-        while len(truncations) < len(map_sizes):
-            if map_size in map_sizes:
-                truncations.append(truncation)
+        # Compute list of downsampled index maps
+        for i in range(len(maps_list)):
+            while maps.shape[-2:] != map_sizes[i]:
+                maps = maps[:, ::2, ::2]
 
-            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
-            delta_truncation = (factor*(int(map_size[0] % 2 == 0)), factor*(int(map_size[1] % 2 == 0)))
-            truncation = (truncation[0] - delta_truncation[0], truncation[1] - delta_truncation[1])
-            factor = 2*factor
-
-        # Get downsampled index maps
-        maps_list = []
-        for (H, W), (tH, tW) in zip(map_sizes, truncations):
-            heights = torch.linspace(0, tH-1, steps=H).round().to(index_maps).view(-1, 1)
-            widths = torch.linspace(0, tW-1, steps=W).round().to(index_maps).view(1, -1)
-            maps_list.append(index_maps[:, heights, widths].view(*original_size[:-2], H, W))
+            maps_list[i] = maps.view(*original_size[:-2], *maps.shape[-2:]).contiguous()
 
         return maps_list
 
