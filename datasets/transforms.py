@@ -204,7 +204,7 @@ def hflip(image, tgt_dict):
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
-        tgt_dict['masks'] = tgt_dict['masks'].fliplr()
+        tgt_dict['masks'] = tgt_dict['masks'].flip([-1])
 
     return flipped_image, tgt_dict
 
