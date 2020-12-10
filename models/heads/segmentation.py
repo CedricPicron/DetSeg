@@ -591,7 +591,7 @@ def build_seg_heads(args):
         ValueError: Error when unknown segmentation head type was provided.
     """
 
-    # Get feature sizes and number of heads list
+    # Get feature sizes
     map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
     feat_sizes = [min((args.base_feat_size * 2**i, args.max_feat_size)) for i in map_ids]
 
