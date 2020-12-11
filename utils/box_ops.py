@@ -7,7 +7,7 @@ from torchvision.ops.boxes import box_area
 
 def box_cxcywh_to_xywh(boxes_cxcywh):
     """
-    Function transforming boxes from (center_x, center_y, width, height) to (left, top, widht, height) format.
+    Function transforming boxes from (center_x, center_y, width, height) to (left, top, width, height) format.
 
     Args:
         boxes_cxcywh (Tensor): Boxes in (center_x, center_y, width, height) format of shape [*, 4].
@@ -44,16 +44,33 @@ def box_xyxy_to_cxcywh(boxes_xyxy):
     Function transforming boxes from (left, top, right, bottom) to (center_x, center_y, width, height) format.
 
     Args:
-        boxes_cxcywh (Tensor): Boxes in (left, top, right, bottom) format of shape [*, 4].
+        boxes_xyxy (Tensor): Boxes in (left, top, right, bottom) format of shape [*, 4].
 
     Returns:
-        boxes_xyxy (Tensor): Transformed boxes in (center_x, center_y, width, height) format of shape [*, 4].
+        boxes_cxcywh (Tensor): Transformed boxes in (center_x, center_y, width, height) format of shape [*, 4].
     """
 
     x0, y0, x1, y1 = boxes_xyxy.unbind(dim=-1)
     boxes_cxcywh = torch.stack([(x0+x1)/2, (y0+y1)/2, x1-x0, y1-y0], dim=-1)
 
     return boxes_cxcywh
+
+
+def box_xyxy_to_xywh(boxes_xyxy):
+    """
+    Function transforming boxes from (left, top, right, bottom) to (left, top, width, height) format.
+
+    Args:
+        boxes_xyxy (Tensor): Boxes in (left, top, right, bottom) format of shape [*, 4].
+
+    Returns:
+        boxes_xywh (Tensor): Transformed boxes in (left, top, width, height) format of shape [*, 4].
+    """
+
+    x0, y0, x1, y1 = boxes_xyxy.unbind(dim=-1)
+    boxes_xywh = torch.stack([x0, y0, x1-x0, y1-y0], dim=-1)
+
+    return boxes_xywh
 
 
 def box_iou(boxes1, boxes2):

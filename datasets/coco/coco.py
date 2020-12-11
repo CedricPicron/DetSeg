@@ -197,9 +197,9 @@ class CocoEvaluator(object):
 
         Args:
             pred_dict (Dict): Dictionary containing at least following keys:
-                - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                - boxes (FloatTensor): normalized box coordinates of shape [num_slots_total, 4];
-                - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
+                - logits (FloatTensor): classification logits of shape [num_preds, num_classes+1];
+                - boxes (FloatTensor): normalized boxes of shape [num_preds, 4] in (cx, cy, width, height) format;
+                - batch_idx (IntTensor): batch indices of predictions of shape [num_preds].
 
             eval_dict (Dict): Dictionary containing following keys:
                 - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;

@@ -114,11 +114,12 @@ class BinarySegHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): List of size [num_maps] with padding feature masks of shape [batch_size, fH, fW].
+            feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
+
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
                 - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
@@ -412,11 +413,12 @@ class SemanticSegHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): List of size [num_maps] with padding feature masks of shape [batch_size, fH, fW].
+            feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
+
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
                 - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
