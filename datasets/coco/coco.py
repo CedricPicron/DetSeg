@@ -12,11 +12,9 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as coco_mask
 import torch
-import torch.nn.functional as F
 from torchvision.datasets.vision import VisionDataset
 
 import datasets.transforms as T
-from utils.box_ops import box_cxcywh_to_xywh
 import utils.distributed as distributed
 
 
@@ -87,11 +85,11 @@ class CocoDataset(VisionDataset):
         Returns:
             image (FloatTensor): Tensor containing the image of shape [3, iH, iW].
             tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
-                - image_id (IntTensor): tensor of shape [1] containing the image id;
-                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
+                - image_id (LongTensor): tensor of shape [1] containing the image id;
+                - image_size (LongTensor): tensor of shape [2] containing the image size (before data augmentation).
         """
 
         # Load image
@@ -191,55 +189,38 @@ class CocoEvaluator(object):
         self.image_ids = []
         self.image_evals = {metric: [] for metric in self.metrics}
 
-    def update(self, pred_dict, eval_dict):
+    def update(self, image_ids, pred_dict):
         """
-        Updates the evaluator object with the given predictions.
+        Updates the evaluator object with the given predictions for the images with the given image ids.
 
         Args:
-            pred_dict (Dict): Dictionary containing at least following keys:
-                - logits (FloatTensor): classification logits of shape [num_preds, num_classes+1];
-                - boxes (FloatTensor): normalized boxes of shape [num_preds, 4] in (cx, cy, width, height) format;
-                - batch_idx (IntTensor): batch indices of predictions of shape [num_preds].
-
-            eval_dict (Dict): Dictionary containing following keys:
-                - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
-                - image_sizes (IntTensor): tensor of shape [batch_size, 2] containing the image sizes.
+            image_ids (LongTensor): Tensor of shape [batch_size] containing the dataset images ids.
+            pred_dict (Dict): Prediction dictionary containing following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
-        # Compute max scores and resulting labels among object classes
-        probs = F.softmax(pred_dict['logits'], dim=-1)
-        scores, labels = probs[:, :-1].max(dim=-1)
-
-        # Convert boxes to (left, top, right, bottom) format
-        boxes = box_cxcywh_to_xywh(pred_dict['boxes'])
-
-        # Convert boxes from relative to absolute coordinates
-        batch_idx = pred_dict['batch_idx']
-        image_sizes = eval_dict['image_sizes']
-
-        h, w = image_sizes[batch_idx, :].unbind(1)
-        scale = torch.stack([w, h, w, h], dim=1)
-        boxes = scale*boxes
-
-        # Get image ids and update image_ids attribute
-        image_ids = eval_dict['image_ids'].tolist()
-        self.image_ids.extend(image_ids)
+        # Update the image_ids attribute
+        self.image_ids.extend(image_ids.tolist())
 
         # Get image id for every prediction
-        pred_image_ids = eval_dict['image_ids'][batch_idx]
+        batch_ids = pred_dict['batch_ids']
+        image_ids = image_ids[batch_ids]
 
         # Go from tensors to lists
-        pred_image_ids = pred_image_ids.tolist()
-        labels = labels.tolist()
-        boxes = boxes.tolist()
-        scores = scores.tolist()
+        image_ids = image_ids.tolist()
+        labels = pred_dict['labels'].tolist()
+        boxes = pred_dict['boxes'].tolist()
+        scores = pred_dict['scores'].tolist()
 
         # Perform evaluation for every evaluation type
         for metric in self.metrics:
             result_dicts = []
 
             if metric == 'bbox':
-                for i, image_id in enumerate(pred_image_ids):
+                for i, image_id in enumerate(image_ids):
                     result_dict = {}
                     result_dict['image_id'] = image_id
                     result_dict['category_id'] = labels[i]

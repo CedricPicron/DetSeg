@@ -102,7 +102,7 @@ class BiViNet(nn.Module):
         Method obtaining the binary mask (object + background) corresponding to each batch entry.
 
         Args:
-            tgt_sizes (IntTensor): Tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+            tgt_sizes (LongTensor): Tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
             tgt_masks (ByteTensor): Padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         Returns:
@@ -118,8 +118,8 @@ class BiViNet(nn.Module):
         Method obtaining the full-resolution semantic segmentation map corresponding to each batch entry.
 
         Args:
-            tgt_labels (IntTensor): Tensor of shape [num_targets_total] containing the class indices.
-            tgt_sizes (IntTensor): Tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+            tgt_labels (LongTensor): Tensor of shape [num_targets_total] containing the class indices.
+            tgt_sizes (LongTensor): Tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
             tgt_masks (ByteTensor): Padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         Returns:
@@ -211,8 +211,8 @@ class BiViNet(nn.Module):
 
         Args:
             tgt_dict (Dict): Target dictionary containing at least following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             map_sizes (List): List of size [num_core_maps] with tuples of requested map sizes (fH, fW).
@@ -255,9 +255,9 @@ class BiViNet(nn.Module):
             feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
             tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW];
                 - semantic_maps (List): semantic segmentation maps of shape [batch_size, fH, fW].
 
@@ -305,9 +305,9 @@ class BiViNet(nn.Module):
                 - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.

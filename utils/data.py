@@ -64,7 +64,7 @@ def train_collate_fn(batch):
         batch (List): List of size [batch_size] containing tuples of:
             - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
 
@@ -74,9 +74,9 @@ def train_collate_fn(batch):
             - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
-            - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+            - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
-            - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+            - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
             - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
     """
 
@@ -116,11 +116,11 @@ def val_collate_fn(batch):
         batch (List): List of size [batch_size] containing tuples of:
             - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
-                - image_id (IntTensor): tensor of shape [1] containing the image id;
-                - image_size (IntTensor): tensor of shape [2] containing the image size (before data augmentation).
+                - image_id (LongTensor): tensor of shape [1] containing the image id;
+                - image_size (LongTensor): tensor of shape [2] containing the image size (before data augmentation).
 
     Returns:
         images (NestedTensor): NestedTensor consisting of:
@@ -128,14 +128,14 @@ def val_collate_fn(batch):
             - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
          tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
-            - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+            - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
-            - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+            - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
             - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         eval_dict (Dict): Dictionary containing following keys:
-            - image_ids (IntTensor): tensor of shape [batch_size] containing the images ids;
-            - image_sizes (IntTensor): tensor of shape [batch_size, 2] containing the image sizes.
+            - image_ids (LongTensor): tensor of shape [batch_size] containing the dataset images ids;
+            - image_sizes (LongTensor): tensor of shape [batch_size, 2] containing the image sizes before padding.
     """
 
     # Get batch images and target dictionaries

@@ -92,7 +92,7 @@ class GlobalDecoder(nn.Module):
        Returns:
             output_dict (Dict): Dictionary containing following keys:
                 slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
-                batch_idx (IntTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
+                batch_ids (LongTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
         """
 
         batch_size = feature_masks.shape[0]
@@ -113,9 +113,9 @@ class GlobalDecoder(nn.Module):
         slots = torch.stack(slots_list, dim=0)
         slots = slots.transpose(1, 2).reshape(num_pred_sets, batch_size*self.num_slots, self.feat_dim)
 
-        batch_idx = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
-        batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
-        output_dict = {'slots': slots, 'batch_idx': batch_idx}
+        batch_ids = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
+        batch_ids = batch_ids[None, :].expand(num_pred_sets, -1)
+        output_dict = {'slots': slots, 'batch_ids': batch_ids}
 
         return output_dict
 
@@ -355,7 +355,7 @@ class SampleDecoder(nn.Module):
 
         Returns:
             slots (FloatTensor): Initial slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Initial segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Initial curiosity maps of shape [num_slots_total, fH, fW].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
@@ -366,12 +366,12 @@ class SampleDecoder(nn.Module):
         device = pos_encodings.device
 
         # Uniform sampling of initial slots within non-padded regions
-        batch_idx = torch.arange(num_slots_total, device=device) // self.num_init_slots
+        batch_ids = torch.arange(num_slots_total, device=device) // self.num_init_slots
         modified_masks = ~feature_masks.view(batch_size, fH*fW)
         modified_masks = modified_masks * torch.randint(9, size=(batch_size, fH*fW), device=device)
         _, sorted_idx = torch.sort(modified_masks, dim=1, descending=True)
         flat_pos_idx = sorted_idx[:, :self.num_init_slots].flatten()
-        slots = pos_encodings[flat_pos_idx, batch_idx, :].unsqueeze(0)
+        slots = pos_encodings[flat_pos_idx, batch_ids, :].unsqueeze(0)
 
         # Initialize segmentation maps
         seg_maps = torch.zeros(num_slots_total, fH, fW, device=device, dtype=torch.float32)
@@ -388,14 +388,14 @@ class SampleDecoder(nn.Module):
 
         curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+fH, pos_idx[1, :]+xy_grid[1]+fW] = gauss_kernel
         curio_maps = curio_maps[:, fH:2*fH, fW:2*fW].contiguous()
-        curio_maps.masked_fill_(feature_masks[batch_idx], mask_fill)
+        curio_maps.masked_fill_(feature_masks[batch_ids], mask_fill)
         curio_maps = self.curio_init_weight * curio_maps
         curio_maps = F.layer_norm(curio_maps, [fH, fW])
 
         # Compute maximum masked entries of mask from feature_masks
         max_mask_entries = torch.max(torch.sum(feature_masks.view(batch_size, fH*fW), dim=1)).item()
 
-        return slots, batch_idx, seg_maps, curio_maps, max_mask_entries
+        return slots, batch_ids, seg_maps, curio_maps, max_mask_entries
 
     def forward(self, features, feature_masks, pos):
         """
@@ -409,19 +409,19 @@ class SampleDecoder(nn.Module):
         Returns:
             output_dict (Dict): Dictionary containing following keys:
                 slots (FloatTensor): Object slots of shape [num_pred_sets, num_slots_total, feat_dim].
-                batch_idx (IntTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
+                batch_ids (LongTensor): Slot batch indices (ascending order) of shape [num_pred_sets, num_slots_total].
                 seg_maps (FloatTensor): Segmentation maps at last decoder layer of shape [num_slots_total, fH, fW].
                 curio_losses (FloatTensor): Losses based on affinity/curiosity discrepancies of shape [num_layers].
         """
 
         # Some initialization
-        slots, batch_idx, seg_maps, curio_maps, max_mask_entries = self.forward_init(feature_masks, pos)
+        slots, batch_ids, seg_maps, curio_maps, max_mask_entries = self.forward_init(feature_masks, pos)
         slots_list = []
         curio_loss_list = []
 
         # Iterate over sample decoder layers
         for layer_id, layer in enumerate(self.layers):
-            outputs = layer(features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, self.shared_items)
+            outputs = layer(features, pos, slots, batch_ids, seg_maps, curio_maps, max_mask_entries, self.shared_items)
             slots, seg_maps, curio_loss, curio_maps = outputs
 
             slots_list.append(slots) if self.return_all else None
@@ -436,13 +436,13 @@ class SampleDecoder(nn.Module):
         slots_list.reverse()
         slots = torch.stack(slots_list, dim=0)
         slots = slots.transpose(1, 2).reshape(num_pred_sets, -1, self.feat_dim)
-        batch_idx = batch_idx[None, :].expand(num_pred_sets, -1)
+        batch_ids = batch_ids[None, :].expand(num_pred_sets, -1)
 
         curio_loss_list.reverse()
         curio_losses = torch.cat(curio_loss_list)
 
         # Create output dictionary
-        output_dict = {'slots': slots, 'batch_idx': batch_idx, 'seg_maps': seg_maps, 'curio_losses': curio_losses}
+        output_dict = {'slots': slots, 'batch_ids': batch_ids, 'seg_maps': seg_maps, 'curio_losses': curio_losses}
 
         return output_dict
 
@@ -484,7 +484,7 @@ class SampleDecoderLayer(nn.Module):
         self.num_iterations = iter_dict['num_iterations']
         self.iteration_type = iter_dict['type']
 
-    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, shared_items):
+    def forward(self, features, pos, slots, batch_ids, seg_maps, curio_maps, max_mask_entries, shared_items):
         """
         Forward method of the SampleDecoderLayer module.
 
@@ -492,7 +492,7 @@ class SampleDecoderLayer(nn.Module):
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
             pos (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
             max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
@@ -513,23 +513,23 @@ class SampleDecoderLayer(nn.Module):
         # Perform cross-attenion, self-attention and FFN
         if self.iteration_type == 'outside':
             for _ in range(self.num_iterations):
-                inputs = (features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
+                inputs = (features, pos, slots, batch_ids, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
                 outputs = self.cross_attention(*inputs)
                 slots, seg_maps, curio_loss, curio_maps = outputs
                 curio_loss_list.append(curio_loss)
 
-                outputs = self.self_attention(slots, batch_idx, seg_maps, curio_maps, self_shared_items)
+                outputs = self.self_attention(slots, batch_ids, seg_maps, curio_maps, self_shared_items)
                 slots, seg_maps, curio_maps = outputs
                 slots = self.ffn(slots)
 
         elif self.iteration_type == 'inside':
             for _ in range(self.num_iterations):
-                inputs = (features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
+                inputs = (features, pos, slots, batch_ids, seg_maps, curio_maps, max_mask_entries, cross_shared_items)
                 outputs = self.cross_attention(*inputs)
                 slots, seg_maps, curio_loss, curio_maps = outputs
                 curio_loss_list.append(curio_loss)
 
-            outputs = self.self_attention(slots, batch_idx, seg_maps, curio_maps, self_shared_items)
+            outputs = self.self_attention(slots, batch_ids, seg_maps, curio_maps, self_shared_items)
             slots, seg_maps, curio_maps = outputs
             slots = self.ffn(slots)
 
@@ -645,7 +645,7 @@ class SampleCrossAttention(nn.Module):
             max_mask_entries (int): Maximum number of masked entries in map from curio_maps.
 
         Returns:
-            feat_idx (IntTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
+            feat_idx (LongTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
                                   Here num_samples is the sum of the number of positive and negative samples per slot,
                                   with the positive samples in the front positions of the resulting tensor.
         """
@@ -668,7 +668,7 @@ class SampleCrossAttention(nn.Module):
 
         return feat_idx
 
-    def update_slots(self, slots, features, pos_encodings, feat_idx, batch_idx):
+    def update_slots(self, slots, features, pos_encodings, feat_idx, batch_ids):
         """
         Update object slots through slot-feature attention.
 
@@ -676,8 +676,8 @@ class SampleCrossAttention(nn.Module):
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
-            feat_idx (IntTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            feat_idx (LongTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -686,8 +686,8 @@ class SampleCrossAttention(nn.Module):
 
         # Sample features if desired
         if self.sample_type == 'before':
-            features = features[feat_idx, batch_idx, :]
-            pos_encodings = pos_encodings[feat_idx, batch_idx, :]
+            features = features[feat_idx, batch_ids, :]
+            pos_encodings = pos_encodings[feat_idx, batch_ids, :]
 
         # Get queries, keys and values
         queries = slots
@@ -713,8 +713,8 @@ class SampleCrossAttention(nn.Module):
 
         # Sample keys and values if desired
         if self.sample_type == 'after':
-            proj_keys = proj_keys[feat_idx, batch_idx, :]
-            proj_values = proj_values[feat_idx[:self.num_pos_samples], batch_idx, :]
+            proj_keys = proj_keys[feat_idx, batch_ids, :]
+            proj_values = proj_values[feat_idx[:self.num_pos_samples], batch_ids, :]
 
         # Reshape and expose different heads
         num_slots_total = slots.shape[1]
@@ -756,7 +756,7 @@ class SampleCrossAttention(nn.Module):
 
         Args:
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
-            feat_idx (IntTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
+            feat_idx (LongTensor): Indices of positions of sampled features of shape [num_samples, num_slots_total].
             norm_affinities (FloatTensor): Normalized slot-feature affinities of shape [num_samples, num_slots_total].
 
         Returns:
@@ -776,7 +776,7 @@ class SampleCrossAttention(nn.Module):
         Compute loss based on discrepancies between attention affinities and curiosities.
 
         Args:
-            feat_idx (IntTensor): Indices of sampled positions of shape [num_samples, num_slots_total].
+            feat_idx (LongTensor): Indices of sampled positions of shape [num_samples, num_slots_total].
             norm_affinities (FloatTensor): Normalized slot-feature affinities of shape [num_samples, num_slots_total].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
 
@@ -828,7 +828,7 @@ class SampleCrossAttention(nn.Module):
 
         return curio_maps
 
-    def forward(self, features, pos, slots, batch_idx, seg_maps, curio_maps, max_mask_entries, cross_shared_items):
+    def forward(self, features, pos, slots, batch_ids, seg_maps, curio_maps, max_mask_entries, cross_shared_items):
         """
         Forward method of SampleCrossAttention module.
 
@@ -836,7 +836,7 @@ class SampleCrossAttention(nn.Module):
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
             pos (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
             max_mask_entries (int): Maximum masked entries of mask from feature_masks.
@@ -851,7 +851,7 @@ class SampleCrossAttention(nn.Module):
 
         self.set_shared_items(cross_shared_items)
         feat_idx = self.sample(features, curio_maps, max_mask_entries)
-        slots, norm_affinities = self.update_slots(slots, features, pos, feat_idx, batch_idx)
+        slots, norm_affinities = self.update_slots(slots, features, pos, feat_idx, batch_ids)
         seg_maps = self.update_seg_maps(seg_maps, feat_idx, norm_affinities)
         curio_loss = self.get_curio_loss(curio_maps, feat_idx, norm_affinities)
         curio_maps = self.update_curio_maps(curio_maps, seg_maps)
@@ -908,13 +908,13 @@ class SampleSelfAttention(nn.Module):
         prefix_length = len('self_')
         [setattr(self, key[prefix_length:], value) for key, value in self_shared_items.items()]
 
-    def update_slots(self, slots, batch_idx):
+    def update_slots(self, slots, batch_ids):
         """
         Update object slots through self-attention.
 
         Args:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
 
         Returns:
             slots (FloatTensor): Updated object slots of shape [1, num_slots_total, feat_dim].
@@ -923,7 +923,7 @@ class SampleSelfAttention(nn.Module):
 
         # Perform self-attention
         queries = keys = values = slots.transpose(0, 1)
-        attn_mask = (batch_idx[:, None]-batch_idx[None, :]) != 0
+        attn_mask = (batch_ids[:, None]-batch_ids[None, :]) != 0
         delta_slots, attn_weights = self.mha(queries, keys, values, attn_mask=attn_mask)
 
         # Update slots with self-attention output
@@ -987,13 +987,13 @@ class SampleSelfAttention(nn.Module):
 
         return curio_maps
 
-    def forward(self, slots, batch_idx, seg_maps, curio_maps, self_shared_items):
+    def forward(self, slots, batch_ids, seg_maps, curio_maps, self_shared_items):
         """
         Forward method of SampleSelfAttention module.
 
         Args:
             slots (FloatTensor): Object slots of shape [1, num_slots_total, feat_dim].
-            batch_idx (IntTensor): Batch indices corresponding to the slots of shape [num_slots_total].
+            batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
             self_shared_items (Dict): Dictionary containing self-attention related shared modules and parameters.
@@ -1005,7 +1005,7 @@ class SampleSelfAttention(nn.Module):
         """
 
         self.set_shared_items(self_shared_items)
-        slots, attn_weights = self.update_slots(slots, batch_idx)
+        slots, attn_weights = self.update_slots(slots, batch_ids)
         seg_maps = self.update_seg_maps(seg_maps, attn_weights)
         curio_maps = self.update_curio_maps(curio_maps, attn_weights)
 

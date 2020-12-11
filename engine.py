@@ -100,7 +100,8 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
         eval_dict = {k: v.to(device) for k, v in eval_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict, extended_analysis=True)
+        val_kwargs = {'extended_analysis': True, 'image_sizes': eval_dict['image_sizes']}
+        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict, **val_kwargs)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
@@ -118,7 +119,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
 
         # Update evaluator
         if evaluator is not None:
-            evaluator.update(pred_dict, eval_dict)
+            evaluator.update(eval_dict['image_ids'], pred_dict)
 
     # Accumulate predictions from all images and summarize
     if evaluator is not None:

@@ -202,8 +202,8 @@ class TestModelsForwardOnly(unittest.TestCase):
         num_slots_total = self.args.batch_size * self.args.num_init_slots
         logits = torch.randn(num_slots_total, self.args.num_classes+1, device='cuda')
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda'))
-        batch_idx, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
-        pred_dict = {'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 6, 'iter_id': 1}
+        batch_ids, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
+        pred_dict = {'logits': logits, 'boxes': boxes, 'batch_ids': batch_ids, 'layer_id': 6, 'iter_id': 1}
 
         num_target_boxes_total = 20
         labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
@@ -227,8 +227,8 @@ class TestModelsForwardOnly(unittest.TestCase):
         num_slots_total = self.args.batch_size * self.args.num_init_slots
         logits = torch.randn(num_slots_total, self.args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-        batch_idx, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
-        pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 6, 'iter_id': 1}]
+        batch_ids, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
+        pred_list = [{'logits': logits, 'boxes': boxes, 'batch_ids': batch_ids, 'layer_id': 6, 'iter_id': 1}]
 
         num_target_boxes_total = 20
         labels = torch.randint(self.args.num_classes, (num_target_boxes_total,), device='cuda')
@@ -386,8 +386,8 @@ class TestModelsWithBackward(unittest.TestCase):
             num_slots_total = self.args.batch_size * self.args.num_init_slots
             logits = torch.randn(num_slots_total, self.args.num_classes+1, device='cuda', requires_grad=True)
             boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-            batch_idx, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
-            pred_list = [{'logits': logits, 'boxes': boxes, 'batch_idx': batch_idx, 'layer_id': 6, 'iter_id': 1}]
+            batch_ids, _ = torch.randint(self.args.batch_size, (num_slots_total,), device='cuda').sort()
+            pred_list = [{'logits': logits, 'boxes': boxes, 'batch_ids': batch_ids, 'layer_id': 6, 'iter_id': 1}]
 
             return pred_list
 

@@ -5,6 +5,7 @@ from collections import OrderedDict
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
 from .backbone import build_backbone
@@ -13,6 +14,7 @@ from .decoder import build_decoder, GlobalDecoder
 from .encoder import build_encoder
 from .position import build_position_encoder
 from .utils import MLP
+from utils.box_ops import box_cxcywh_to_xywh
 
 
 class DETR(nn.Module):
@@ -175,25 +177,25 @@ class DETR(nn.Module):
         return ['backbone', 'projector', 'encoder', 'decoder', 'class_head', 'bbox_head']
 
     @staticmethod
-    def get_sizes(batch_idx, batch_size):
+    def get_sizes(batch_ids, batch_size):
         """
         Computes the cumulative number of predictions across batch entries.
 
         Args:
-            batch_idx (IntTensor): Batch indices (sorted in ascending order) of shape [num_pred_sets, num_slots_total].
+            batch_ids (LongTensor): Batch indices (sorted in ascending order) of shape [num_pred_sets, num_slots_total].
             batch_size (int): Total number of batch entries.
 
         Returns:
-            sizes (IntTensor): Cumulative sizes of batch entries of shape [num_pred_sets, batch_size+1].
+            sizes (LongTensor): Cumulative sizes of batch entries of shape [num_pred_sets, batch_size+1].
         """
 
-        num_pred_sets, num_slots_total = batch_idx.shape
-        sizes = torch.zeros(num_pred_sets, batch_size+1, dtype=torch.int)
+        num_pred_sets, num_slots_total = batch_ids.shape
+        sizes = torch.zeros(num_pred_sets, batch_size+1).to(batch_ids)
 
         for i in range(num_pred_sets):
             prev_idx = 0
 
-            for j, curr_idx in enumerate(batch_idx[i]):
+            for j, curr_idx in enumerate(batch_ids[i]):
                 if curr_idx != prev_idx:
                     sizes[i, prev_idx+1:curr_idx+1] = j
                     prev_idx = curr_idx
@@ -201,6 +203,46 @@ class DETR(nn.Module):
             sizes[i, curr_idx+1:] = num_slots_total
 
         return sizes
+
+    def make_predictions(self, out_dict, image_sizes):
+        """
+        Make classified bounding box predictions based on given DETR decoder layer output dictionary.
+
+        Args:
+            out_dict (Dict): Output dictionary containing at least following keys:
+                - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
+                - boxes (FloatTensor): normalized box coordinates within non-padded regions of shape
+                                       [num_slots_total, 4] in (center_x, center_y, width, height) format;
+                - batch_ids (LongTensor): batch indices of slots (in ascending order) of shape [num_slots_total].
+
+            image_sizes (LongTensor): Tensor of shape [batch_size, 2] containing the image sizes before padding.
+
+        Returns:
+            pred_dict (Dict): Prediction dictionary containing following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+        """
+
+        # Get predicted object scores and labels
+        probs = F.softmax(out_dict['logits'], dim=-1)
+        scores, labels = probs[:, :-1].max(dim=-1)
+
+        # Get predicted bounding boxes
+        boxes = box_cxcywh_to_xywh(out_dict['boxes'])
+        height, width = image_sizes[out_dict['batch_ids'], :].unbind(1)
+        scale = torch.stack([width, height, width, height], dim=1)
+        boxes = scale*boxes
+
+        # Place predictions into prediction dictionary
+        pred_dict = {}
+        pred_dict['labels'] = labels
+        pred_dict['boxes'] = boxes
+        pred_dict['scores'] = scores
+        pred_dict['batch_ids'] = out_dict['batch_ids']
+
+        return pred_dict
 
     def forward(self, images, tgt_dict=None, optimizer=None, **kwargs):
         """
@@ -212,12 +254,13 @@ class DETR(nn.Module):
                 - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the DETR model parameters during training.
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+                - image_sizes (LongTensor): image sizes of shape [batch_size, 2] before padding used for prediction;
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
 
         Returns:
@@ -227,13 +270,10 @@ class DETR(nn.Module):
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
                 pred_dict (Dict): Prediction dictionary from the last decoder layer containing following keys:
-                    - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
-                    - boxes (FloatTensor): normalized box coordinates within non-padded regions of shape
-                                           [num_slots_total, 4] in (center_x, center_y, width, height) format;
-                    - batch_idx (IntTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
-                    - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
-                    - layer_id (int): integer corresponding to the decoder layer producing the predictions;
-                    - curio_loss (FloatTensor): optional curiosity based loss value of shape [1] from a sample decoder.
+                    - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                    - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                    - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
 
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -258,35 +298,38 @@ class DETR(nn.Module):
         decoder_output_dict = self.decoder(encoder_features, feature_masks, pos_encodings)
 
         # Compute the number of predictions (i.e. slots) per batch entry
-        batch_idx = decoder_output_dict['batch_idx']
-        sizes = self.get_sizes(batch_idx, batch_size)
+        batch_ids = decoder_output_dict['batch_ids']
+        sizes = self.get_sizes(batch_ids, batch_size)
 
         # Predict classification logits and bounding box coordinates
         slots = decoder_output_dict['slots']
         class_logits = self.class_head(slots)
         bbox_coord = self.bbox_head(slots).sigmoid()
 
-        # Build list of prediction dictionaries
-        pred_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
-        [pred_dict.update({'batch_idx': batch_idx[i], 'sizes': sizes[i]}) for i, pred_dict in enumerate(pred_list)]
-        [pred_dict.update({'layer_id': self.decoder.num_layers-i}) for i, pred_dict in enumerate(pred_list)]
+        # Build list of output dictionaries
+        out_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
+        [out_dict.update({'batch_ids': batch_ids[i], 'sizes': sizes[i]}) for i, out_dict in enumerate(out_list)]
+        [out_dict.update({'layer_id': self.decoder.num_layers-i}) for i, out_dict in enumerate(out_list)]
 
-        # Add curiosity losses to the prediction dictionaries if available
+        # Add curiosity losses to the output dictionaries if available
         if 'curio_losses' in decoder_output_dict.keys():
             curio_losses = decoder_output_dict['curio_losses']
-            [pred_dict.update({'curio_loss': curio_losses[i]}) for i, pred_dict in enumerate(pred_list)]
-
-        # Return prediction dictionary (testing only)
-        if tgt_dict is None:
-            pred_dict = pred_list[0]
-            return pred_dict
+            [out_dict.update({'curio_loss': curio_losses[i]}) for i, out_dict in enumerate(out_list)]
 
         # Get loss and analysis dictionaries (training/validation only)
-        loss_dict, analysis_dict = self.criterion(pred_list, tgt_dict)
+        if tgt_dict is not None:
+            loss_dict, analysis_dict = self.criterion(out_list, tgt_dict)
+
+        # Get prediction dictionary (validation/testing only)
+        if optimizer is None:
+            pred_dict = self.make_predictions(out_list[0], kwargs['image_sizes'])
+
+        # Return prediction dictionary
+        if tgt_dict is None:
+            return pred_dict
 
         # Return prediction, loss and analysis dictionaries (validation only)
         if optimizer is None:
-            pred_dict = pred_list[0]
             return pred_dict, loss_dict, analysis_dict
 
         # Reset gradients of model parameters (training only)

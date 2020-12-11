@@ -19,7 +19,7 @@ def crop(image, tgt_dict, crop_region):
     Args:
         image (PIL.Image.Image): Image in PIL format to be cropped.
         tgt_dict (Dict): Target dictionary corresponding to the image, with following required and optional keys:
-            - labels (IntTensor, required): tensor of shape [num_targets] containing the class indices;
+            - labels (LongTensor, required): tensor of shape [num_targets] containing the class indices;
             - boxes (FloatTensor, optional): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
             - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
         crop_region (Tuple): Tuple delineating the cropped region in (top, left, height, width) format.

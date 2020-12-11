@@ -214,13 +214,12 @@ def main(args):
 
     # If requested, evaluate model from checkpoint and return
     if args.eval:
-        if not args.checkpoint:
-            print('No checkpoint model was provided for evaluation. Returning now.')
+        val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
+
+        if not args.checkpoint and not args.output_dir:
             return
 
-        val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
         output_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint).parent
-
         if distributed.is_main_process():
             if evaluator is None:
                 with (output_dir / 'eval.txt').open('w') as eval_file:
@@ -235,8 +234,8 @@ def main(args):
 
     # If requested, visualize model from checkpoint and return
     if args.visualize:
-        if not args.checkpoint:
-            print("No checkpoint model was provided for visualization. Returning now.")
+        if not args.checkpoint and not args.output_dir:
+            print("No output directory was given or could be derived from checkpoint. Returning now.")
             return
 
         if args.distributed:

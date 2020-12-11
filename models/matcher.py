@@ -44,31 +44,31 @@ class HungarianMatcher(nn.Module):
         self.cost_giou = cost_giou
 
     @torch.no_grad()
-    def forward(self, pred_dict, tgt_dict):
+    def forward(self, out_dict, tgt_dict):
         """
         Forward method of the HungarianMatcher module. Performs the hungarian matching.
 
         Args:
-            pred_dict (Dict): Dictionary containing at least following keys:
+            out_dict (Dict): Output dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (IntTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
+                - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
 
             tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
-            pred_idx (IntTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))].
-            tgt_idx (IntTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
+            pred_idx (LongTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))].
+            tgt_idx (LongTensor): Matching targets of shape [sum(min(num_slots_batch, num_targets_batch))].
         """
 
         # Compute class probablities of predictions
-        pred_probs = pred_dict['logits'].softmax(dim=-1)
+        pred_probs = out_dict['logits'].softmax(dim=-1)
 
         # Some renaming for code readability
-        pred_boxes = pred_dict['boxes']
+        pred_boxes = out_dict['boxes']
         tgt_labels = tgt_dict['labels']
         tgt_boxes = tgt_dict['boxes']
 
@@ -87,7 +87,7 @@ class HungarianMatcher(nn.Module):
 
         # Compute cumulative number of predictions and targets in each batch entry
         batch_size = len(tgt_dict['sizes'])-1
-        pred_sizes = pred_dict['sizes'].tolist()
+        pred_sizes = out_dict['sizes'].tolist()
         tgt_sizes = tgt_dict['sizes'].tolist()
 
         # Match predictions with targets

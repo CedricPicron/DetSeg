@@ -95,14 +95,14 @@ class RetinaHead(nn.Module):
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             tgt_dict (Dict): Optional target dictionary containing at least following keys:
-                - labels (IntTensor): tensor of shape [num_targets_total] containing the class indices;
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (cx, cy, width, height) format;
-                - sizes (IntTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
                 tgt_dict (Dict): Updated target dictionary containing following additional keys:
-                    - anchor_labels (IntTensor): tensor of class indices of shape [batch_size, num_anchors_total];
+                    - anchor_labels (LongTensor): tensor of class indices of shape [batch_size, num_anchors_total];
                     - anchor_deltas (FloatTensor): anchor to box deltas of shape [batch_size, num_anchors_total, 4].
         """
 
@@ -168,7 +168,7 @@ class RetinaHead(nn.Module):
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
                 - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                - batch_idx (LongTensor): batch indices of predictions of shape [num_preds_total].
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
         # Initialize list of predicted labels and boxes
@@ -220,7 +220,7 @@ class RetinaHead(nn.Module):
         pred_dict['labels'] = []
         pred_dict['boxes'] = []
         pred_dict['scores'] = []
-        pred_dict['batch_idx'] = []
+        pred_dict['batch_ids'] = []
 
         # Get final predictions for every image
         for i in range(batch_size):
@@ -238,7 +238,7 @@ class RetinaHead(nn.Module):
             pred_dict['labels'].append(labels[keep])
             pred_dict['boxes'].append(box_xyxy_to_xywh(boxes[keep]))
             pred_dict['scores'].append(scores[keep])
-            pred_dict['batch_idx'].append(torch.full((len(keep),), i, device=labels.device))
+            pred_dict['batch_ids'].append(torch.full((len(keep),), i, device=labels.device))
 
         # Concatenate different image predictions into single tensor
         pred_dict = {k: torch.cat(v, dim=0) for k, v in pred_dict.items()}
@@ -309,7 +309,7 @@ class RetinaHead(nn.Module):
             feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary containing at least following keys:
-                - anchor_labels (IntTensor): tensor of class indices of shape [batch_size, num_anchors_total];
+                - anchor_labels (LongTensor): tensor of class indices of shape [batch_size, num_anchors_total];
                 - anchor_deltas (FloatTensor): anchor to box deltas of shape [batch_size, num_anchors_total, 4].
 
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
@@ -331,7 +331,7 @@ class RetinaHead(nn.Module):
                     - labels (LongTensor): predicted class indices of shape [num_preds_total];
                     - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                    - batch_idx (LongTensor): batch indices of predictions of shape [num_preds_total].
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
         # Assume no padded regions when feature masks are missing (trainval only)
