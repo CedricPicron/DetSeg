@@ -112,7 +112,7 @@ elif profiling_args.model == 'bivinet':
     images = nested_tensor_from_image_list(images).to('cuda')
 
     num_targets_total = 20
-    labels = torch.randint(model.num_classes, size=(num_targets_total,)).to('cuda')
+    labels = torch.randint(main_args.num_classes, size=(num_targets_total,)).to('cuda')
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     masks = (torch.randn(num_targets_total, 1024, 1024) > 1.0).to('cuda')
     tgt_dict = {'labels': labels, 'sizes': sizes, 'masks': masks}

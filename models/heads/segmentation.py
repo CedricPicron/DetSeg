@@ -7,6 +7,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from ..utils import downsample_index_maps, downsample_masks
+
 
 class BinarySegHead(nn.Module):
     """
@@ -40,17 +42,6 @@ class BinarySegHead(nn.Module):
         self.disputed_loss = disputed_loss
         self.disputed_beta = disputed_beta
         self.loss_weight = loss_weight
-
-    @staticmethod
-    def required_map_types():
-        """
-        Method returning the required map types of the BinarySegHead module.
-
-        Returns:
-            List of strings containing the names of the module's required map types.
-        """
-
-        return ['binary_maps']
 
     @staticmethod
     def get_accuracy(preds, targets):
@@ -107,6 +98,43 @@ class BinarySegHead(nn.Module):
         analysis_dict['bin_seg_acc_obj'] = 100*obj_accuracy
 
         return analysis_dict
+
+    def forward_init(self, feat_maps, tgt_dict=None):
+        """
+        Forward initialization method of the BinarySegHead module.
+
+        The forward initialization consists of 2 steps:
+            1) Get the desired full-resolution binary masks.
+            2) Downsample the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
+
+        Args:
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+
+        Returns:
+            * If tgt_dict is not None (i.e. during training and validation):
+                tgt_dict (Dict): Updated target dictionary containing following additional key:
+                    - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
+
+            * If tgt_dict is None (i.e. during testing), it returns None.
+        """
+
+        # Return when no target dictionary is provided (testing only)
+        if tgt_dict is None:
+            return
+
+        # Get full-resolution binary target masks (trainval only)
+        tgt_sizes = tgt_dict['sizes']
+        tgt_masks = tgt_dict['masks']
+        binary_masks = torch.stack([tgt_masks[i0:i1].any(dim=0) for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])])
+
+        # Compute and place downsampled binary maps into target dictionary (trainval only)
+        map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+        tgt_dict['binary_maps'] = downsample_masks(binary_masks, map_sizes)
+
+        return tgt_dict
 
     def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
         """
@@ -342,17 +370,6 @@ class SemanticSegHead(nn.Module):
         self.metadata = metadata
 
     @staticmethod
-    def required_map_types():
-        """
-        Method returning the required map types of the SemanticSegHead module.
-
-        Returns:
-            List of strings containing the names of the module's required map types.
-        """
-
-        return ['semantic_maps']
-
-    @staticmethod
     def get_accuracy(preds, targets):
         """
         Method returning the accuracy of the given predictions compared to the given targets.
@@ -406,6 +423,54 @@ class SemanticSegHead(nn.Module):
         analysis_dict['sem_seg_acc_obj'] = 100*obj_accuracy
 
         return analysis_dict
+
+    def forward_init(self, feat_maps, tgt_dict=None):
+        """
+        Forward initialization method of the SemanticSegHead module.
+
+        The forward initialization consists of 2 steps:
+            1) Get the desired full-resolution semantic segmentation masks.
+            2) Downsample the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
+
+        Args:
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+
+        Returns:
+            * If tgt_dict is not None (i.e. during training and validation):
+                tgt_dict (Dict): Updated target dictionary containing following additional key:
+                    - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
+
+            * If tgt_dict is None (i.e. during testing), it returns None.
+        """
+
+        # Return when no target dictionary is provided (testing only)
+        if tgt_dict is None:
+            return
+
+        # Some renaming for clarity
+        tgt_labels = tgt_dict['labels']
+        tgt_sizes = tgt_dict['sizes']
+        tgt_masks = tgt_dict['masks']
+
+        # Initialize full-resolution semantic maps
+        batch_size = len(tgt_sizes) - 1
+        tensor_kwargs = {'dtype': torch.long, 'device': tgt_masks.device}
+        semantic_maps = torch.full((batch_size, *tgt_masks.shape[-2:]), self.num_classes, **tensor_kwargs)
+
+        # Compute full-resolution semantic maps for each batch entry
+        for i, i0, i1 in zip(range(batch_size), tgt_sizes[:-1], tgt_sizes[1:]):
+            for tgt_label, tgt_mask in zip(tgt_labels[i0:i1], tgt_masks[i0:i1]):
+                semantic_maps[i].masked_fill_(tgt_mask, tgt_label)
+
+        # Compute and place downsampled semantic masks into target dictionary
+        map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+        tgt_dict['semantic_maps'] = downsample_index_maps(semantic_maps, map_sizes)
+
+        return tgt_dict
 
     def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
         """

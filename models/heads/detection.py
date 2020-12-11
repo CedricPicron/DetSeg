@@ -90,11 +90,12 @@ class RetinaHead(nn.Module):
         """
         Forward initialization method of the RetinaHead module.
 
-        It updates the 'loss_normalizer' attribute when 'tgt_dict' is not None (i.e. during training and validation).
+        It sets the 'anchors' attribute, which is used when making predictions (see 'make_predictions' method).
+        It also updates the 'loss_normalizer' attribute when 'tgt_dict' is not None (i.e. during training/validation).
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            tgt_dict (Dict): Optional target dictionary containing at least following keys:
+            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (cx, cy, width, height) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
@@ -104,6 +105,8 @@ class RetinaHead(nn.Module):
                 tgt_dict (Dict): Updated target dictionary containing following additional keys:
                     - anchor_labels (LongTensor): tensor of class indices of shape [batch_size, num_anchors_total];
                     - anchor_deltas (FloatTensor): anchor to box deltas of shape [batch_size, num_anchors_total, 4].
+
+            * If tgt_dict is None (i.e. during testing), it returns None (after setting the 'anchors' attribute).
         """
 
         # Generate anchors and set anchors attribute
