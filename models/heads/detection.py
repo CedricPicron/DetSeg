@@ -20,15 +20,63 @@ from utils.distributed import get_world_size, is_dist_avail_and_initialized
 class RetinaHead(nn.Module):
     """
     Implements the RetinaHead module.
+
+    Attributes:
+        num_classes (int): Integer containing the number of object classes (without background).
+
+        anchor_generator (DefaultAnchorGenerator): Module generating anchors for a given list of feature maps.
+        anchor_matcher (Matcher): Module matching target boxes with anchors via their pairwise IoU-matrix.
+        box_to_box (Box2BoxTransform): Object capable of computing deltas from two set of boxes and back.
+
+        in_projs (nn.ModuleList): List of size [num_maps] with input projection modules before the prediction head.
+        pred_head (RetinaNetHead): Module computing logits and box deltas for every anchor-position combination.
+
+        focal_alpha (float): Alpha value of the sigmoid focal loss used during classification.
+        focal_gamma (float): Gamma value of the sigmoid focal loss used during classification.
+        smooth_l1_beta (float): Beta value of the smooth L1 loss used during bounding box regression.
+
+        loss_normalizer (FloatTensor): buffer containing the current loss normalizer value.
+        loss_momentum (float): Momentum factor used during the loss normalizer update.
+        loss_weight (float): General loss factor weighting the loss originating from this head.
+
+        score_threshold (float): Threshold used to remove detections before non-maxima suppression (NMS).
+        num_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
+        nms_threshold (float): Threshold used during NMS to remove duplicate detections.
+        max_detections (int): Maximum number of detections to keep per image after NMS.
     """
 
-    def __init__(self, in_feat_sizes, num_classes, pred_head_dict, matcher_dict, loss_dict, inference_dict):
+    def __init__(self, num_classes, in_feat_sizes, pred_head_dict, loss_dict, test_dict):
         """
         Initializes the RetinaHead module.
+
+        Args:
+            num_classes (int): Integer containing the number of object classes (without background).
+            in_feat_sizes (Dict): Dictionary containing the feature size of each map, identified by their map id key.
+
+            pred_head_dict (Dict): Dictionary containing prediction head hyperparameters:
+                - feat_size (int): the feature size used internally by the prediction head;
+                - num_convs (int): the number of internal convolutions in the prediction head before prediction.
+
+            loss_dict (Dict): Dictionary containing hyperparameters related the head's loss:
+                - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
+                - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
+                - smooth_l1_beta (float): beta value of the smooth L1 loss used during bounding box regression;
+                - normalizer (float): initial loss normalizer value (estimates expected number of positive anchors);
+                - momentum (float): momentum factor used during the loss normalizer update;
+                - weight (float): general loss factor weighting the loss originating from this head.
+
+            test_dict (Dict): Dictionary containing testing (i.e. inference) hyperparameters:
+                - score_threshold (float): threshold used to remove detections before non-maxima suppression (NMS);
+                - num_candidates (int): maximum number of candidate detections to keep per map of an image for NMS;
+                - nms_threshold (float): threshold used during NMS to remove duplicate detections;
+                - max_detections (int): maximum number of detections to keep per image after NMS.
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Set number of classes attribute
+        self.num_classes = num_classes
 
         # Initialization of anchor generator
         anchor_sizes = [[2**(i+2), 2**(i+2) * 2**(1.0/3), 2**(i+2) * 2**(2.0/3)] for i in in_feat_sizes.keys()]
@@ -62,11 +110,11 @@ class RetinaHead(nn.Module):
         self.loss_momentum = loss_dict['momentum']
         self.loss_weight = loss_dict['weight']
 
-        # Initialization of inference attributes
-        self.test_score_threshold = inference_dict['score_threshold']
-        self.test_num_candidates = inference_dict['num_candidates']
-        self.test_nms_threshold = inference_dict['nms_threshold']
-        self.test_max_detections = inference_dict['max_detections']
+        # Initialization of test attributes
+        self.test_score_threshold = test_dict['score_threshold']
+        self.test_num_candidates = test_dict['num_candidates']
+        self.test_nms_threshold = test_dict['nms_threshold']
+        self.test_max_detections = test_dict['max_detections']
 
     @staticmethod
     def reshape_pred_map(pred_map, pred_size):
@@ -453,7 +501,17 @@ def build_det_heads(args):
     # Build desired detection head modules
     for det_head_type in args.det_heads:
         if det_head_type == 'retina':
-            retina_head = RetinaHead(feat_sizes)
+            pred_head_dict = {'feat_size': args.ret_feat_size, 'conv_dims': args.ret_conv_dims}
+
+            loss_dict = {'focal_alpha': args.ret_focal_alpha, 'focal_gamma': args.ret_focal_gamma}
+            loss_dict = {**loss_dict, 'smooth_l1_beta': args.ret_smooth_l1_beta, 'normalizer': args.ret_normalizer}
+            loss_dict = {**loss_dict, 'momentum': args.ret_momentum, 'weight': args.ret_weight}
+
+            test_dict = {'score_threshold': args.ret_score_threshold, 'max_candidates': args.ret_max_candidates}
+            test_dict = {**test_dict, 'nms_threshold': args.ret_nms_threshold}
+            test_dict = {**test_dict, 'max_detections': args.ret_max_detections}
+
+            retina_head = RetinaHead(args.num_classes, feat_sizes, pred_head_dict, loss_dict, test_dict)
             det_heads.append(retina_head)
 
         else:

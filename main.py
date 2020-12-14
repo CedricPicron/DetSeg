@@ -70,6 +70,26 @@ def get_parser():
     parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
 
     # * Heads
+    # ** Detection heads
+    parser.add_argument('--det_heads', nargs='*', default='', type=str, help='names of desired detection heads')
+
+    # *** Retina head
+    parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
+    parser.add_argument('--ret_conv_dims', default=4, type=int, help='number of retina head convolutions')
+
+    parser.add_argument('--ret_focal_alpha', default=0.25, type=float, help='retina head focal alpha value')
+    parser.add_argument('--ret_focal_gamma', default=2.0, type=float, help='retina head focal gamma value')
+    parser.add_argument('--ret_smooth_l1_beta', default=0.0, type=float, help='retina head smooth L1 beta value')
+
+    parser.add_argument('--ret_normalizer', default=100.0, type=float, help='initial retina head loss normalizer')
+    parser.add_argument('--ret_momentum', default=0.9, type=float, help='momentum factor of retina head loss')
+    parser.add_argument('--ret_weight', default=1.0, type=float, help='factor weighting the retina head loss')
+
+    parser.add_argument('--ret_score_threshold', default=0.05, type=float, help='retina head test score threshold')
+    parser.add_argument('--ret_max_candidates', default=1000, type=int, help='retina head max candidates before NMS')
+    parser.add_argument('--ret_nms_threshold', default=0.5, type=float, help='retina head NMS threshold')
+    parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
+
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
 

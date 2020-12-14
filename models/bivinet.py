@@ -9,6 +9,7 @@ from torch.nn.utils import clip_grad_norm_
 
 from .backbone import build_backbone
 from .bicore import build_bicore
+from .heads.detection import build_det_heads
 from .heads.segmentation import build_seg_heads
 from .utils import downsample_masks
 
@@ -273,7 +274,7 @@ def build_bivinet(args):
     # Build backbone, core and desired heads
     backbone = build_backbone(args)
     core = build_bicore(args)
-    heads = [*build_seg_heads(args)]
+    heads = [*build_det_heads(args), *build_seg_heads(args)]
 
     # Build BiViNet module
     bivinet = BiViNet(backbone, core_feat_sizes, core, args.num_core_layers, heads)
