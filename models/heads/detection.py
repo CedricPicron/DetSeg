@@ -14,6 +14,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_xywh
+from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
 class RetinaHead(nn.Module):
@@ -56,7 +57,8 @@ class RetinaHead(nn.Module):
         self.focal_gamma = loss_dict['focal_gamma']
         self.smooth_l1_beta = loss_dict['smooth_l1_beta']
 
-        self.loss_normalizer = loss_dict['normalizer']
+        loss_normalizer = torch.tensor(loss_dict['normalizer'], dtype=torch.float)
+        self.loss_normalizer = self.register_buffer('loss_normalizer', loss_normalizer)
         self.loss_momentum = loss_dict['momentum']
         self.loss_weight = loss_dict['weight']
 
@@ -90,9 +92,6 @@ class RetinaHead(nn.Module):
         """
         Forward initialization method of the RetinaHead module.
 
-        It sets the 'anchors' attribute, which is used when making predictions (see 'make_predictions' method).
-        It also updates the 'loss_normalizer' attribute when 'tgt_dict' is not None (i.e. during training/validation).
-
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
@@ -106,16 +105,29 @@ class RetinaHead(nn.Module):
                     - anchor_labels (LongTensor): tensor of class indices of shape [batch_size, num_anchors_total];
                     - anchor_deltas (FloatTensor): anchor to box deltas of shape [batch_size, num_anchors_total, 4].
 
-            * If tgt_dict is None (i.e. during testing), it returns None (after setting the 'anchors' attribute).
+                attr_dict (Dict): Dictionary of attributes to be set and shared between the different head copies:
+                    - anchors (List): list of size [num_maps] containing the anchor boxes corresponding to each map.
+
+                buffer_dict (Dict): Dictionary containing updated buffer tensors:
+                    - loss_normalizer (float): new loss normalizer updated by the current number of positive anchors.
+
+            * If tgt_dict is None (i.e. during testing):
+                tgt_dict (None): Contains the None value.
+
+                attr_dict (Dict): Dictionary of attributes to be set and shared between the different head copies:
+                    - anchors (List): list of size [num_maps] containing the anchor boxes corresponding to each map.
+
+                buffer_dict (Dict): Empty dictionary.
         """
 
-        # Generate anchors and set anchors attribute
+        # Generate anchors and place into attribute dictionary
         feat_map_views = [feat_map.permute(0, 3, 1, 2) for feat_map in feat_maps]
-        self.anchors = self.anchor_generator(feat_map_views)
+        anchors = self.anchor_generator(feat_map_views)
+        attr_dict = {'anchors': anchors}
 
         # Return when no target dictionary is provided (validation/testing only)
         if tgt_dict is None:
-            return
+            return None, attr_dict, {}
 
         # Some preparation before anchor labeling (trainval only)
         anchors = Boxes.cat(self.anchors)
@@ -147,16 +159,22 @@ class RetinaHead(nn.Module):
         anchor_labels = torch.stack(anchor_labels_list)
         anchor_deltas = torch.stack(anchor_deltas_list)
 
-        # Update loss normalizer attribute (trainval only)
-        num_pos_anchors = ((anchor_labels >= 0) & (anchor_labels != self.num_classes)).sum().item()
-        self.loss_normalizer *= self.loss_momentum
-        self.loss_normalizer += (1 - self.loss_momentum) * max(num_pos_anchors, 1)
+        # Get updated loss normalizer and place it in buffer dictionary (trainval only)
+        num_pos_anchors = ((anchor_labels >= 0) & (anchor_labels != self.num_classes)).sum()
+
+        if is_dist_avail_and_initialized():
+            num_pos_anchors = torch.distributed.all_reduce(num_pos_anchors) / get_world_size()
+
+        num_pos_anchors = num_pos_anchors.clamp(min=1)
+        loss_normalizer = self.loss_momentum * self.loss_normalizer
+        loss_normalizer += (1 - self.loss_momentum) * num_pos_anchors
+        buffer_dict = {'loss_normalizer': loss_normalizer}
 
         # Add batched anchor labels and deltas to target dictionary
         tgt_dict['anchor_labels'] = anchor_labels
         tgt_dict['anchor_deltas'] = anchor_deltas
 
-        return tgt_dict
+        return tgt_dict, attr_dict, buffer_dict
 
     def make_predictions(self, logit_maps, delta_maps):
         """

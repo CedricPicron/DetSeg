@@ -118,12 +118,18 @@ class BinarySegHead(nn.Module):
                 tgt_dict (Dict): Updated target dictionary containing following additional key:
                     - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
-            * If tgt_dict is None (i.e. during testing), it returns None.
+                attr_dict (Dict): Empty dictionary.
+                buffer_dict (Dict): Empty dictionary.
+
+            * If tgt_dict is None (i.e. during testing):
+                tgt_dict (None): Contains the None value.
+                attr_dict (Dict): Empty dictionary.
+                buffer_dict (Dict): Empty dictionary.
         """
 
         # Return when no target dictionary is provided (testing only)
         if tgt_dict is None:
-            return
+            return None, {}, {}
 
         # Get full-resolution binary target masks (trainval only)
         tgt_sizes = tgt_dict['sizes']
@@ -134,7 +140,7 @@ class BinarySegHead(nn.Module):
         map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
         tgt_dict['binary_maps'] = downsample_masks(binary_masks, map_sizes)
 
-        return tgt_dict
+        return tgt_dict, {}, {}
 
     def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
         """
@@ -444,12 +450,18 @@ class SemanticSegHead(nn.Module):
                 tgt_dict (Dict): Updated target dictionary containing following additional key:
                     - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
 
-            * If tgt_dict is None (i.e. during testing), it returns None.
+                attr_dict (Dict): Empty dictionary.
+                buffer_dict (Dict): Empty dictionary.
+
+            * If tgt_dict is None (i.e. during testing):
+                tgt_dict (None): Contains the None value.
+                attr_dict (Dict): Empty dictionary.
+                buffer_dict (Dict): Empty dictionary.
         """
 
         # Return when no target dictionary is provided (testing only)
         if tgt_dict is None:
-            return
+            return None, {}, {}
 
         # Some renaming for clarity
         tgt_labels = tgt_dict['labels']
@@ -470,7 +482,7 @@ class SemanticSegHead(nn.Module):
         map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
         tgt_dict['semantic_maps'] = downsample_index_maps(semantic_maps, map_sizes)
 
-        return tgt_dict
+        return tgt_dict, {}, {}
 
     def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
         """

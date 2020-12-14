@@ -182,8 +182,10 @@ class BiViNet(nn.Module):
         feat_maps = [proj(feat_maps[i]).permute(0, 2, 3, 1) for i, proj in zip(map_ids, self.projs)]
 
         # Prepare heads and target dictionary for current forward pass
-        for head in self.heads[-1]:
-            tgt_dict = head.forward_init(feat_maps, tgt_dict)
+        for head_copies in zip(*self.heads):
+            tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
+            [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
+            [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
 
         # Get feature masks and train/evaluate initial core feature maps (trainval only)
         if tgt_dict is not None:
