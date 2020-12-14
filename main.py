@@ -75,7 +75,7 @@ def get_parser():
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
-    parser.add_argument('--ret_conv_dims', default=4, type=int, help='number of retina head convolutions')
+    parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')
 
     parser.add_argument('--ret_focal_alpha', default=0.25, type=float, help='retina head focal alpha value')
     parser.add_argument('--ret_focal_gamma', default=2.0, type=float, help='retina head focal gamma value')

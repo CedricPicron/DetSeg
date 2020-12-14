@@ -2,7 +2,7 @@
 Detection head modules and build function.
 """
 
-from detectron2.layers import batched_nms
+from detectron2.layers import batched_nms, ShapeSpec
 from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.modeling.matcher import Matcher
@@ -39,10 +39,10 @@ class RetinaHead(nn.Module):
         loss_momentum (float): Momentum factor used during the loss normalizer update.
         loss_weight (float): General loss factor weighting the loss originating from this head.
 
-        score_threshold (float): Threshold used to remove detections before non-maxima suppression (NMS).
-        num_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
-        nms_threshold (float): Threshold used during NMS to remove duplicate detections.
-        max_detections (int): Maximum number of detections to keep per image after NMS.
+        test_score_threshold (float): Threshold used to remove detections before non-maxima suppression (NMS).
+        test_max_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
+        test_nms_threshold (float): Threshold used during NMS to remove duplicate detections.
+        test_max_detections (int): Maximum number of detections to keep per image after NMS.
     """
 
     def __init__(self, num_classes, in_feat_sizes, pred_head_dict, loss_dict, test_dict):
@@ -67,7 +67,7 @@ class RetinaHead(nn.Module):
 
             test_dict (Dict): Dictionary containing testing (i.e. inference) hyperparameters:
                 - score_threshold (float): threshold used to remove detections before non-maxima suppression (NMS);
-                - num_candidates (int): maximum number of candidate detections to keep per map of an image for NMS;
+                - max_candidates (int): maximum number of candidate detections to keep per map of an image for NMS;
                 - nms_threshold (float): threshold used during NMS to remove duplicate detections;
                 - max_detections (int): maximum number of detections to keep per image after NMS.
         """
@@ -82,7 +82,9 @@ class RetinaHead(nn.Module):
         anchor_sizes = [[2**(i+2), 2**(i+2) * 2**(1.0/3), 2**(i+2) * 2**(2.0/3)] for i in in_feat_sizes.keys()]
         anchor_aspect_ratios = [[0.5, 1.0, 2.0]]
         anchor_strides = [2**i for i in in_feat_sizes.keys()]
-        self.anchor_generator = DefaultAnchorGenerator(anchor_sizes, anchor_aspect_ratios, anchor_strides)
+
+        kwargs = {'sizes': anchor_sizes, 'aspect_ratios': anchor_aspect_ratios, 'strides': anchor_strides}
+        self.anchor_generator = DefaultAnchorGenerator(**kwargs)
 
         # Initialization of anchor matcher
         matcher_thresholds = [0.4, 0.5]
@@ -96,9 +98,11 @@ class RetinaHead(nn.Module):
         self.in_projs = nn.ModuleList(nn.Linear(f, pred_head_dict['feat_size']) for f in in_feat_sizes.values())
 
         # Initialization of RetinaNet prediction head module
+        input_shape = [ShapeSpec(channels=pred_head_dict['feat_size'])]
         num_anchors = self.anchor_generator.num_cell_anchors[0]
         conv_dims = [pred_head_dict['feat_size']] * pred_head_dict['num_convs']
-        self.pred_head = RetinaNetHead(num_classes=num_classes, num_anchors=num_anchors, conv_dims=conv_dims)
+        kwargs = {'input_shape': input_shape, 'num_anchors': num_anchors, 'conv_dims': conv_dims}
+        self.pred_head = RetinaNetHead(num_classes=num_classes, **kwargs)
 
         # Initialization of loss attributes
         self.focal_alpha = loss_dict['focal_alpha']
@@ -106,13 +110,13 @@ class RetinaHead(nn.Module):
         self.smooth_l1_beta = loss_dict['smooth_l1_beta']
 
         loss_normalizer = torch.tensor(loss_dict['normalizer'], dtype=torch.float)
-        self.loss_normalizer = self.register_buffer('loss_normalizer', loss_normalizer)
+        self.register_buffer('loss_normalizer', loss_normalizer)
         self.loss_momentum = loss_dict['momentum']
         self.loss_weight = loss_dict['weight']
 
         # Initialization of test attributes
         self.test_score_threshold = test_dict['score_threshold']
-        self.test_num_candidates = test_dict['num_candidates']
+        self.test_max_candidates = test_dict['max_candidates']
         self.test_nms_threshold = test_dict['nms_threshold']
         self.test_max_detections = test_dict['max_detections']
 
@@ -178,7 +182,7 @@ class RetinaHead(nn.Module):
             return None, attr_dict, {}
 
         # Some preparation before anchor labeling (trainval only)
-        anchors = Boxes.cat(self.anchors)
+        anchors = Boxes.cat(anchors)
         tgt_sizes = tgt_dict['sizes']
 
         anchor_labels_list = []
@@ -250,19 +254,16 @@ class RetinaHead(nn.Module):
         for logit_map, delta_map, map_anchors in zip(logit_maps, delta_maps, self.anchors):
             for i, img_logit_map, img_delta_map in zip(range(batch_size), logit_map, delta_map):
 
-                # Flatten image logit and delta_maps
+                # Flatten image logit maps and get class probabilities
                 logits = img_logit_map.flatten()
-                deltas = img_delta_map.flatten()
-
-                # Get class probabilities
                 probs = logits.sigmoid_()
 
                 # Filter predictions: Absolute (only keep predictions of sufficient confidence)
-                abs_keep = probs > self.test_score_thresh
+                abs_keep = probs > self.test_score_threshold
                 probs = probs[abs_keep]
 
                 # Filter predictions: Relative (only keep top predictions)
-                num_preds_kept = min(self.test_topk_candidates, len(probs))
+                num_preds_kept = min(self.test_max_candidates, len(probs))
                 probs, sort_ids = probs.sort(descending=True)
                 top_scores = probs[:num_preds_kept]
 
@@ -275,7 +276,7 @@ class RetinaHead(nn.Module):
 
                 # Get boxes of top predictions
                 anchor_ids = top_ids // self.num_classes
-                top_deltas = deltas[anchor_ids]
+                top_deltas = img_delta_map[anchor_ids]
                 top_anchors = map_anchors.tensor[anchor_ids]
                 top_boxes = self.box_to_box.apply_deltas(top_deltas, top_anchors)
 
@@ -300,7 +301,7 @@ class RetinaHead(nn.Module):
             scores = torch.cat(pred_scores[i], dim=0)
 
             # Keep best predictions after non-maxima suppression (NMS)
-            keep = batched_nms(boxes, scores, labels, iou_threshold=self.test_nms_thresholds)
+            keep = batched_nms(boxes, scores, labels, iou_threshold=self.test_nms_threshold)
             keep = keep[:self.test_max_detections]
 
             # Add final predictions to the prediction dictionary
@@ -452,7 +453,7 @@ class RetinaHead(nn.Module):
 
             # Perform classification accuracy analyses (trainval only)
             num_anchors = self.anchor_generator.num_cell_anchors[0]
-            feat_masks = [feat_mask.expand(-1, -1, -1, num_anchors).flatten(1) for feat_mask in feat_masks]
+            feat_masks = [mask[:, :, :, None].expand(-1, -1, -1, num_anchors).flatten(1) for mask in feat_masks]
             padding_mask = torch.cat(feat_masks, dim=1)
 
             acc_mask = ~padding_mask & class_mask
@@ -501,7 +502,7 @@ def build_det_heads(args):
     # Build desired detection head modules
     for det_head_type in args.det_heads:
         if det_head_type == 'retina':
-            pred_head_dict = {'feat_size': args.ret_feat_size, 'conv_dims': args.ret_conv_dims}
+            pred_head_dict = {'feat_size': args.ret_feat_size, 'num_convs': args.ret_num_convs}
 
             loss_dict = {'focal_alpha': args.ret_focal_alpha, 'focal_gamma': args.ret_focal_gamma}
             loss_dict = {**loss_dict, 'smooth_l1_beta': args.ret_smooth_l1_beta, 'normalizer': args.ret_normalizer}
