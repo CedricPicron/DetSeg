@@ -127,6 +127,7 @@ elif profiling_args.model == 'bivinet_ret':
     main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
     main_args.num_classes = 91
+    main_args.ret_num_convs = 4
     model = build_bivinet(main_args).to('cuda')
 
     images = torch.randn(2, 3, 1024, 1024)
@@ -246,6 +247,7 @@ elif profiling_args.model == 'ret_head':
     main_args.det_heads = ['retina']
     main_args.min_resolution_id = 3
     main_args.num_classes = 91
+    main_args.ret_num_convs = 4
     model = build_det_heads(main_args)[0].to('cuda')
 
     feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
