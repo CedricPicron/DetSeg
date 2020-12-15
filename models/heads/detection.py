@@ -326,24 +326,13 @@ class RetinaHead(nn.Module):
 
         Returns:
             analysis_dict (Dict): Dictionary of accuracy-related analyses containing following keys:
-                - ret_cls_acc (FloatTensor): accuracy of the retina head classification of shape [];
-                - ret_cls_acc_bg (FloatTensor): background accuracy of the retina head classification of shape [];
                 - ret_cls_acc_obj (FloatTensor): object accuracy of the retina head classification of shape [].
         """
-
-        # Compute general accuracy and place it into analysis dictionary
-        accuracy = RetinaHead.get_accuracy(preds, targets)
-        analysis_dict = {'ret_cls_acc': 100*accuracy}
-
-        # Compute background accuracy and place it into analysis dictionary
-        bg_mask = targets == self.num_classes
-        bg_accuracy = RetinaHead.get_accuracy(preds[bg_mask], targets[bg_mask])
-        analysis_dict['ret_cls_acc_bg'] = 100*bg_accuracy
 
         # Compute object accuracy and place it into analysis dictionary
         obj_mask = targets < self.num_classes
         obj_accuracy = RetinaHead.get_accuracy(preds[obj_mask], targets[obj_mask])
-        analysis_dict['ret_cls_acc_obj'] = 100*obj_accuracy
+        analysis_dict = {'ret_cls_acc_obj': 100*obj_accuracy}
 
         return analysis_dict
 
@@ -369,8 +358,6 @@ class RetinaHead(nn.Module):
                     - ret_box_loss (FloatTensor): weighted bounding box regression loss of shape [].
 
                 analysis_dict (Dict): Analysis dictionary at least containing following keys:
-                    - ret_cls_acc (FloatTensor): accuracy of the retina head classification of shape [];
-                    - ret_cls_acc_bg (FloatTensor): background accuracy of the retina head classification of shape [];
                     - ret_cls_acc_obj (FloatTensor): object accuracy of the retina head classification of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
@@ -431,8 +418,7 @@ class RetinaHead(nn.Module):
             padding_mask = torch.cat(feat_masks, dim=1)
             acc_mask = ~padding_mask & class_mask
 
-            bg_logits = torch.full((*logits.shape[:-1], 1), 0.0).to(logits)
-            class_preds = torch.cat([logits, bg_logits], dim=-1).argmax(dim=-1)
+            class_preds = torch.argmax(logits, dim=-1)
             analysis_dict = self.perform_accuracy_analyses(class_preds[acc_mask], anchor_labels[acc_mask])
 
             # If requested, perform extended analyses (trainval only)
