@@ -455,9 +455,10 @@ class RetinaHead(nn.Module):
             num_anchors = self.anchor_generator.num_cell_anchors[0]
             feat_masks = [mask[:, :, :, None].expand(-1, -1, -1, num_anchors).flatten(1) for mask in feat_masks]
             padding_mask = torch.cat(feat_masks, dim=1)
-
             acc_mask = ~padding_mask & class_mask
-            class_preds = torch.argmax(logits, dim=-1)
+
+            bg_logits = torch.full((*logits.shape[:-1], 1), 0.0).to(logits)
+            class_preds = torch.cat([logits, bg_logits], dim=-1).argmax(dim=-1)
             analysis_dict = self.perform_accuracy_analyses(class_preds[acc_mask], anchor_labels[acc_mask])
 
             # If requested, perform extended analyses (trainval only)
