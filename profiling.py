@@ -136,6 +136,7 @@ elif profiling_args.model == 'bivinet_ret':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes[:, 2:] += boxes[:, :2]
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -175,6 +176,7 @@ elif profiling_args.model == 'criterion':
         num_slots_total = main_args.batch_size * main_args.num_init_slots
         logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
+        boxes[:, 2:] += boxes[:, :2]
         sizes = torch.tensor([i*main_args.num_init_slots for i in range(main_args.batch_size+1)], device='cuda')
         pred_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
 
@@ -183,6 +185,7 @@ elif profiling_args.model == 'criterion':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes[:, 2:] += boxes[:, :2]
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -204,6 +207,7 @@ elif profiling_args.model == 'detr':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes[:, 2:] += boxes[:, :2]
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 

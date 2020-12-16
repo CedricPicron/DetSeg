@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_xywh
+from utils.box_ops import box_xyxy_to_xywh
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
@@ -33,9 +33,11 @@ class RetinaHead(nn.Module):
         focal_gamma (float): Gamma value of the sigmoid focal loss used during classification.
         smooth_l1_beta (float): Beta value of the smooth L1 loss used during bounding box regression.
 
-        loss_normalizer (FloatTensor): buffer containing the current loss normalizer value.
+        loss_normalizers (FloatTensor): Buffer of shape [num_maps] containing the loss normalizers for each map.
         loss_momentum (float): Momentum factor used during the loss normalizer update.
-        loss_weight (float): General loss factor weighting the loss originating from this head.
+
+        cls_loss_weight (float): Factor weighting the classification loss originating from this head.
+        box_loss_weight (float): Factor weighting the bounding box regression loss originating from this head.
 
         test_score_threshold (float): Threshold used to remove detections before non-maxima suppression (NMS).
         test_max_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
@@ -63,7 +65,8 @@ class RetinaHead(nn.Module):
                 - smooth_l1_beta (float): beta value of the smooth L1 loss used during bounding box regression;
                 - normalizer (float): initial loss normalizer value (estimates expected number of positive anchors);
                 - momentum (float): momentum factor used during the loss normalizer update;
-                - weight (float): general loss factor weighting the loss originating from this head.
+                - cls_weight (float): factor weighting the classification loss originating from this head;
+                - box_weight (float): factor weighting the boundig box regression loss originating from this head.
 
             test_dict (Dict): Dictionary containing testing (i.e. inference) hyperparameters:
                 - score_threshold (float): threshold used to remove detections before non-maxima suppression (NMS);
@@ -105,10 +108,12 @@ class RetinaHead(nn.Module):
         self.focal_gamma = loss_dict['focal_gamma']
         self.smooth_l1_beta = loss_dict['smooth_l1_beta']
 
-        loss_normalizer = torch.tensor(loss_dict['normalizer'], dtype=torch.float)
-        self.register_buffer('loss_normalizer', loss_normalizer)
+        loss_normalizers = torch.full((len(map_ids),), loss_dict['normalizer'], dtype=torch.float)
+        self.register_buffer('loss_normalizers', loss_normalizers)
         self.loss_momentum = loss_dict['momentum']
-        self.loss_weight = loss_dict['weight']
+
+        self.cls_loss_weight = loss_dict['cls_weight']
+        self.box_loss_weight = loss_dict['box_weight']
 
         # Initialization of test attributes
         self.test_score_threshold = test_dict['score_threshold']
@@ -125,7 +130,7 @@ class RetinaHead(nn.Module):
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (cx, cy, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
@@ -138,7 +143,7 @@ class RetinaHead(nn.Module):
                     - anchors (List): list of size [num_maps] containing the anchor boxes corresponding to each map.
 
                 buffer_dict (Dict): Dictionary containing updated buffer tensors:
-                    - loss_normalizer (float): new loss normalizer updated by the current number of positive anchors.
+                    - loss_normalizers (FloatTensor): updated loss normalizers of shape [num_maps].
 
             * If tgt_dict is None (i.e. during testing):
                 tgt_dict (None): Contains the None value.
@@ -159,6 +164,10 @@ class RetinaHead(nn.Module):
             return None, attr_dict, {}
 
         # Some preparation before anchor labeling (trainval only)
+        map_sizes = [0] + [anchor.tensor.shape[0] for anchor in anchors]
+        map_sizes = torch.tensor(map_sizes, dtype=torch.int, device=anchors[0].device)
+        map_sizes = torch.cumsum(map_sizes, dim=0)
+
         anchors = Boxes.cat(anchors)
         tgt_sizes = tgt_dict['sizes']
 
@@ -168,7 +177,7 @@ class RetinaHead(nn.Module):
         # Label anchors for every batch entry (trainval only)
         for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
             tgt_labels = tgt_dict['labels'][i0:i1]
-            tgt_boxes = Boxes(box_cxcywh_to_xyxy(tgt_dict['boxes'][i0:i1]))
+            tgt_boxes = Boxes(tgt_dict['boxes'][i0:i1])
             matched_ids, match_labels = self.anchor_matcher(pairwise_iou(tgt_boxes, anchors))
 
             if len(tgt_labels) > 0:
@@ -188,16 +197,20 @@ class RetinaHead(nn.Module):
         anchor_labels = torch.stack(anchor_labels_list)
         anchor_deltas = torch.stack(anchor_deltas_list)
 
-        # Get updated loss normalizer and place it in buffer dictionary (trainval only)
-        num_pos_anchors = ((anchor_labels >= 0) & (anchor_labels != self.num_classes)).sum()
+        # Get updated loss normalizers and place it in buffer dictionary (trainval only)
+        num_pos_anchors = torch.zeros(len(feat_maps)).to(map_sizes)
+
+        for i, i0, i1 in zip(range(len(feat_maps)), map_sizes[:-1], map_sizes[1:]):
+            map_anchor_labels = anchor_labels[:, i0:i1]
+            num_pos_anchors[i] = ((map_anchor_labels >= 0) & (map_anchor_labels != self.num_classes)).sum()
 
         if is_dist_avail_and_initialized():
             num_pos_anchors = torch.distributed.all_reduce(num_pos_anchors) / get_world_size()
 
         num_pos_anchors = num_pos_anchors.clamp(min=1)
-        loss_normalizer = self.loss_momentum * self.loss_normalizer
-        loss_normalizer += (1 - self.loss_momentum) * num_pos_anchors
-        buffer_dict = {'loss_normalizer': loss_normalizer}
+        loss_normalizers = self.loss_momentum * self.loss_normalizers
+        loss_normalizers += (1 - self.loss_momentum) * num_pos_anchors
+        buffer_dict = {'loss_normalizers': loss_normalizers}
 
         # Add batched anchor labels and deltas to target dictionary
         tgt_dict['anchor_labels'] = anchor_labels
@@ -216,7 +229,7 @@ class RetinaHead(nn.Module):
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
@@ -363,7 +376,7 @@ class RetinaHead(nn.Module):
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                    - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                    - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
@@ -385,29 +398,39 @@ class RetinaHead(nn.Module):
 
         # Compute weighted classification loss (trainval only)
         anchor_labels = tgt_dict['anchor_labels']
-        class_mask = anchor_labels >= 0
+        cls_mask = anchor_labels >= 0
 
         logits = torch.cat(logit_maps, dim=1)
-        class_logits = logits[class_mask]
+        cls_logits = logits[cls_mask]
 
-        class_targets = F.one_hot(anchor_labels[class_mask], num_classes=self.num_classes+1)
-        class_targets = class_targets[:, :-1].to(class_logits.dtype)
+        cls_targets = F.one_hot(anchor_labels[cls_mask], num_classes=self.num_classes+1)
+        cls_targets = cls_targets[:, :-1].to(cls_logits.dtype)
 
-        class_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
-        class_loss = sigmoid_focal_loss(class_logits, class_targets, **class_kwargs)
-        class_loss = self.loss_weight * class_loss / self.loss_normalizer
+        cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'none'}
+        cls_losses = sigmoid_focal_loss(cls_logits, cls_targets, **cls_kwargs)
+
+        map_sizes = [0] + [logit_map.shape[1] for logit_map in logit_maps]
+        cls_map_sizes = [cls_mask[i0:i1].sum() for i0, i1 in zip(map_sizes[:-1], map_sizes[1:])]
+
+        cls_map_losses = torch.cat([map_losses.sum()[None] for map_losses in cls_losses.split(cls_map_sizes, dim=0)])
+        cls_map_losses = cls_map_losses / self.loss_normalizers
+        cls_loss = self.cls_loss_weight * cls_map_losses.sum()
 
         # Compute weighted bounding box regression loss (trainval only)
-        box_mask = class_mask & (anchor_labels != self.num_classes)
+        box_mask = cls_mask & (anchor_labels != self.num_classes)
         box_preds = torch.cat(delta_maps, dim=1)[box_mask]
         box_targets = tgt_dict['anchor_deltas'][box_mask]
 
-        box_kwargs = {'beta': self.smooth_l1_beta, 'reduction': 'sum'}
-        box_loss = smooth_l1_loss(box_preds, box_targets, **box_kwargs)
-        box_loss = self.loss_weight * box_loss / self.loss_normalizer
+        box_kwargs = {'beta': self.smooth_l1_beta, 'reduction': 'none'}
+        box_losses = smooth_l1_loss(box_preds, box_targets, **box_kwargs)
+
+        box_map_sizes = [box_mask[i0:i1].sum() for i0, i1 in zip(map_sizes[:-1], map_sizes[1:])]
+        box_map_losses = torch.cat([map_losses.sum()[None] for map_losses in box_losses.split(box_map_sizes, dim=0)])
+        box_map_losses = box_map_losses / self.loss_normalizers
+        box_loss = self.box_loss_weight * box_map_losses.sum()
 
         # Place weighted losses into loss dictionary (trainval only)
-        loss_dict = {'ret_cls_loss': class_loss, 'ret_box_loss': box_loss}
+        loss_dict = {'ret_cls_loss': cls_loss, 'ret_box_loss': box_loss}
 
         # Perform analyses (trainval only)
         with torch.no_grad():
@@ -416,7 +439,7 @@ class RetinaHead(nn.Module):
             num_anchors = self.anchor_generator.num_cell_anchors[0]
             feat_masks = [mask[:, :, :, None].expand(-1, -1, -1, num_anchors).flatten(1) for mask in feat_masks]
             padding_mask = torch.cat(feat_masks, dim=1)
-            acc_mask = ~padding_mask & class_mask
+            acc_mask = ~padding_mask & cls_mask
 
             class_preds = torch.argmax(logits, dim=-1)
             analysis_dict = self.perform_accuracy_analyses(class_preds[acc_mask], anchor_labels[acc_mask])
@@ -571,7 +594,8 @@ def build_det_heads(args):
 
             loss_dict = {'focal_alpha': args.ret_focal_alpha, 'focal_gamma': args.ret_focal_gamma}
             loss_dict = {**loss_dict, 'smooth_l1_beta': args.ret_smooth_l1_beta, 'normalizer': args.ret_normalizer}
-            loss_dict = {**loss_dict, 'momentum': args.ret_momentum, 'weight': args.ret_weight}
+            loss_dict = {**loss_dict, 'momentum': args.ret_momentum, 'cls_weight': args.ret_cls_weight}
+            loss_dict = {**loss_dict, 'box_weight': args.ret_box_weight}
 
             test_dict = {'score_threshold': args.ret_score_threshold, 'max_candidates': args.ret_max_candidates}
             test_dict = {**test_dict, 'nms_threshold': args.ret_nms_threshold}

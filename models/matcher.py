@@ -51,12 +51,12 @@ class HungarianMatcher(nn.Module):
         Args:
             out_dict (Dict): Output dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
                 - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
 
-            tgt_dict (Dict): Target dictionary containing following keys:
+            tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:

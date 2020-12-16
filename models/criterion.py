@@ -63,9 +63,8 @@ class SetCriterion(nn.Module):
                 - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
-            tgt_dict (Dict): Target dictionary containing following keys:
+            tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
             match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
@@ -129,13 +128,11 @@ class SetCriterion(nn.Module):
 
         Args:
             out_dict (Dict): Output dictionary containing at least following keys:
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
-            tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format.
 
             match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
                 - pred_idx (LongTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
@@ -175,17 +172,15 @@ class SetCriterion(nn.Module):
         Computes the average number of target boxes across all nodes, for normalization purposes.
 
         Args:
-            tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format.
 
         Returns:
             num_boxes (float): Average number of target boxes across all nodes.
         """
 
-        num_boxes = len(tgt_dict['labels'])
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_dict['labels'].device)
+        num_boxes = len(tgt_dict['boxes'])
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_dict['boxes'].device)
 
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -202,16 +197,15 @@ class SetCriterion(nn.Module):
         Args:
            pred_list (List): List of predictions, where each entry is a dict containing following keys:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
-                - boxes (FloatTensor): normalized box coordinates within non-padded regions of shape
-                                       [num_slots_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
                 - batch_ids (LongTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
                 - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions;
                 - curio_loss (FloatTensor): optional curiosity based loss value of shape [1] from a sample decoder.
 
-            tgt_dict (Dict): Target dictionary containing following keys:
+            tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:

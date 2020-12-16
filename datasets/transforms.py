@@ -8,8 +8,6 @@ from torchvision.ops.misc import interpolate
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
 
-from utils.box_ops import box_xyxy_to_cxcywh
-
 
 # 1. Transforms based on cropping
 def crop(image, tgt_dict, crop_region):
@@ -356,14 +354,6 @@ class RandomSelect(object):
 class ToTensor(object):
     def __call__(self, image, target):
         image = F.to_tensor(image)
-        target = target.copy()
-        h, w = image.shape[-2:]
-
-        if 'boxes' in target:
-            boxes = target['boxes']
-            boxes = box_xyxy_to_cxcywh(boxes)
-            boxes = boxes / torch.tensor([w, h, w, h], dtype=torch.float32)
-            target['boxes'] = boxes
 
         return image, target
 

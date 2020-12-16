@@ -65,7 +65,7 @@ def train_collate_fn(batch):
             - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
 
     Returns:
@@ -75,7 +75,7 @@ def train_collate_fn(batch):
 
         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
+            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
             - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
     """
@@ -92,7 +92,7 @@ def train_collate_fn(batch):
 
     # Compute cumulative target sizes of batch entries
     tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
-    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
+    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int64)
     tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
 
     # Place target labels, boxes and sizes in new target dictionary
@@ -117,7 +117,7 @@ def val_collate_fn(batch):
             - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
             - tgt_dict (Dict): target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
                 - image_id (LongTensor): tensor of shape [1] containing the image id;
                 - image_size (LongTensor): tensor of shape [2] containing the image size (before data augmentation).
@@ -129,13 +129,13 @@ def val_collate_fn(batch):
 
          tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
             - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (center_x, center_y, width, height) format;
+            - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
             - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         eval_dict (Dict): Dictionary containing following keys:
             - image_ids (LongTensor): tensor of shape [batch_size] containing the dataset images ids;
-            - image_sizes (LongTensor): tensor of shape [batch_size, 2] containing the image sizes before padding.
+            - image_sizes (LongTensor): original image sizes (before data augmentation) of shape [batch_size, 2].
     """
 
     # Get batch images and target dictionaries
@@ -150,7 +150,7 @@ def val_collate_fn(batch):
 
     # Compute cumulative target sizes of batch entries
     tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
-    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int)
+    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int64)
     tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
 
     # Place target labels, boxes and sizes in new target dictionary

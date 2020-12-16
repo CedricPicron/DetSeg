@@ -83,7 +83,9 @@ def get_parser():
 
     parser.add_argument('--ret_normalizer', default=100.0, type=float, help='initial retina head loss normalizer')
     parser.add_argument('--ret_momentum', default=0.9, type=float, help='momentum factor of retina head loss')
-    parser.add_argument('--ret_weight', default=1.0, type=float, help='factor weighting the retina head loss')
+
+    parser.add_argument('--ret_cls_weight', default=1.0, type=float, help='retina classification weight factor')
+    parser.add_argument('--ret_box_weight', default=1.0, type=float, help='retina box regression weight factor')
 
     parser.add_argument('--ret_score_threshold', default=0.05, type=float, help='retina head test score threshold')
     parser.add_argument('--ret_max_candidates', default=1000, type=int, help='retina head max candidates before NMS')

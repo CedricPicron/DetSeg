@@ -86,7 +86,7 @@ class CocoDataset(VisionDataset):
             image (FloatTensor): Tensor containing the image of shape [3, iH, iW].
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
                 - image_id (LongTensor): tensor of shape [1] containing the image id;
                 - image_size (LongTensor): tensor of shape [2] containing the image size (before data augmentation).
@@ -197,7 +197,7 @@ class CocoEvaluator(object):
             image_ids (LongTensor): Tensor of shape [batch_size] containing the dataset images ids.
             pred_dict (Dict): Prediction dictionary containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (FloatTensor): predicted boxes of shape [num_preds_total, 4] in (left, top, width, height);
+                - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """

@@ -93,7 +93,7 @@ class BiViNet(nn.Module):
             feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - binary_maps (List, optional): binary segmentation maps of shape [batch_size, fH, fW];
                 - semantic_maps (List): semantic segmentation maps of shape [batch_size, fH, fW].
@@ -143,7 +143,7 @@ class BiViNet(nn.Module):
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in (center_x, center_y, width, height) format;
+                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
