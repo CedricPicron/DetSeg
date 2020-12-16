@@ -26,9 +26,10 @@ class CocoDataset(VisionDataset):
         coco (COCO): Object containing the COCO dataset annotations.
         image_ids (List): List of image indices, sorted in ascending order.
         requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, image_folder, annotation_file, transforms, requires_masks):
+    def __init__(self, image_folder, annotation_file, transforms, metadata, requires_masks):
         """
         Initializes the CocoDataset dataset.
 
@@ -37,6 +38,7 @@ class CocoDataset(VisionDataset):
             annotation_file (Path): Path to annotation file with COCO annotations.
             transforms (object): The transforms to be applied on both image and its bounding boxes.
             requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         with open(os.devnull, 'w') as devnull:
@@ -45,6 +47,7 @@ class CocoDataset(VisionDataset):
                 self.coco = COCO(annotation_file)
                 self.image_ids = list(sorted(self.coco.imgs.keys()))
                 self.requires_masks = requires_masks
+                self.metadata = metadata
 
     @staticmethod
     def get_masks(annotations, iH, iW):
@@ -104,8 +107,9 @@ class CocoDataset(VisionDataset):
         # Remove crowd annotations
         annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
-        # Get object class labels
-        labels = [annotation['category_id'] for annotation in annotations]
+        # Get object class labels (in contiguous id space)
+        id_dict = self.metadata.thing_dataset_id_to_contiguous_id
+        labels = [id_dict[annotation['category_id']] for annotation in annotations]
         labels = torch.tensor(labels, dtype=torch.int64)
 
         # Get object boxes in (left, top, width, height) format
@@ -159,22 +163,25 @@ class CocoEvaluator(object):
 
     Attributes:
         coco (COCO): Object containing the COCO dataset annotations.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         metrics (List): List of strings containing the evaluation metrics to be used.
         sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric.
         image_ids (List): List of evaluated image ids.
         image_evals (Dict): Dictionary of lists containing image evaluations for each metric.
     """
 
-    def __init__(self, coco, metrics=['bbox']):
+    def __init__(self, coco, metadata, metrics=['bbox']):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             coco (COCO): Object containing the COCO dataset annotations.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             metrics (List): List of strings containing the evaluation metrics to be used.
         """
 
         self.coco = coco
+        self.metadata = metadata
         self.metrics = metrics
         self.sub_evaluators = {metric: COCOeval(coco, iouType=metric) for metric in self.metrics}
 
@@ -214,6 +221,10 @@ class CocoEvaluator(object):
         labels = pred_dict['labels'].tolist()
         boxes = pred_dict['boxes'].tolist()
         scores = pred_dict['scores'].tolist()
+
+        # Get labels in original non-contiguous id space
+        inv_id_dict = {v: k for k, v in self.metadata.thing_dataset_id_to_contiguous_id.items()}
+        labels = [inv_id_dict[label] for label in labels]
 
         # Perform evaluation for every evaluation type
         for metric in self.metrics:
@@ -420,13 +431,16 @@ def build_coco(args):
     val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 
     train_transforms, val_transforms = get_coco_transforms()
-    requires_masks = True if args.meta_arch in ['BiViNet'] else False
+    train_metadata, val_metadata = (args.train_metadata, args.val_metadata)
 
-    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, requires_masks)
-    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, requires_masks)
+    requires_masks = True if args.meta_arch in ['BiViNet'] else False
+    kwargs = {'requires_masks': requires_masks}
+
+    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, train_metadata, **kwargs)
+    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, val_metadata, **kwargs)
 
     if args.evaluator == 'detection':
-        evaluator = CocoEvaluator(val_dataset.coco)
+        evaluator = CocoEvaluator(val_dataset.coco, val_metadata)
     elif args.evaluator == 'none':
         evaluator = None
     else:

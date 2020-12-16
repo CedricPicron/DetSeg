@@ -26,7 +26,7 @@ def build_dataset(args):
     """
 
     if args.dataset == 'coco':
-        args.num_classes = 91
+        args.num_classes = 80
         args.train_metadata = MetadataCatalog.get('coco_2017_train')
         args.val_metadata = MetadataCatalog.get('coco_2017_val')
         train_dataset, val_dataset, evaluator = build_coco(args)

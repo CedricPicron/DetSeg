@@ -23,7 +23,7 @@ class DETR(nn.Module):
 
     Attributes:
         backbone (nn.Module): Module implementing the DETR backbone.
-        position_encoder (nn.Module): Module implementing the position encoding.
+        position_encoder (nn.Module): Module implementing the position encoder.
         projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
         encoder (nn.Module): Module implementing the DETR encoder.
         decoder (nn.Module): Module implementing the DETR decoder.
@@ -33,19 +33,20 @@ class DETR(nn.Module):
         train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
     """
 
-    def __init__(self, backbone, position_encoder, encoder, decoder, criterion, num_classes, train_dict):
+    def __init__(self, backbone, position_encoder, encoder, decoder, criterion, num_classes, train_dict, metadata):
         """
         Initializes the DETR module.
 
         Args:
             backbone (nn.Module): Module implementing the DETR backbone.
-            position_encoder (nn.Module): Module implementing the position encoding.
+            position_encoder (nn.Module): Module implementing the position encoder.
             projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
             encoder (nn.Module): Module implementing the DETR encoder.
             decoder (nn.Module): Module implementing the DETR decoder.
             criterion (nn.Module): Module comparing predictions with targets.
             num_classes (int): Number of object classes (without background class).
             train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
+            metadata (detectron2.data.Metadata, optional): Metadata instance containing additional dataset information.
         """
 
         super().__init__()
@@ -64,7 +65,9 @@ class DETR(nn.Module):
 
         self.bbox_head = MLP(decoder.feat_dim, decoder.feat_dim, 4, 3)
         self.bbox_head.requires_grad_(train_dict['bbox_head'])
+
         self.train_dict = train_dict
+        self.metadata = metadata
 
     def load_state_dict(self, state_dict):
         """
@@ -143,6 +146,10 @@ class DETR(nn.Module):
             if class_head_identifier in original_name:
                 new_name = original_name[identifier_length:]
                 class_head_state_dict[new_name] = state
+
+        original_ids = [*self.metadata.thing_dataset_id_to_contiguous_id.keys(), 91]
+        class_head_state_dict['weight'] = class_head_state_dict['weight'][original_ids]
+        class_head_state_dict['bias'] = class_head_state_dict['bias'][original_ids]
 
         self.class_head.load_state_dict(class_head_state_dict)
 
@@ -382,6 +389,7 @@ def build_detr(args):
     train_bbox_head = args.lr_bbox_head > 0
 
     train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
-    detr = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict)
+    metadata = args.train_metadata if args.dataset == 'coco' else None
+    detr = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
 
     return detr

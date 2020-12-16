@@ -341,7 +341,7 @@ class SemanticSegHead(nn.Module):
         num_classes (int): Integer containing the number of object classes (without background).
         class_weights (FloatTensor): Tensor of shape [num_classes+1] containing class-specific loss weights.
         loss_weight (float): Weight factor used to scale the semantic segmentation loss as a whole.
-        metadata (detectron2.data.Metadata): Metadata instance containing dataset information such as class names.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
     def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight, metadata):
@@ -353,7 +353,7 @@ class SemanticSegHead(nn.Module):
             num_classes (int): Integer containing the number of object classes (without background).
             bg_weight (float): Cross entropy weight scaling the losses in target background positions.
             loss_weight (float): Weight factor used to scale the semantic segmentation loss.
-            metadata (detectron2.data.Metadata): Metadata instance containing dataset information such as class names.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -635,15 +635,8 @@ class SemanticSegHead(nn.Module):
                 class_semantic_maps = F.interpolate(class_semantic_maps, size=(H+pH, W+pW), **interpolation_kwargs)
                 class_semantic_maps = class_semantic_maps[:, :, :H, :W]
 
-            # Get general (non-class specific) semantic maps
-            semantic_maps = torch.argmax(class_semantic_maps, dim=1)
-
-            # Change labels from dataset ids to contiguous ids (as expected by metadata)
-            id_dict = self.metadata.thing_dataset_id_to_contiguous_id
-            [semantic_maps.masked_fill_(semantic_maps == k, v) for k, v in id_dict.items()]
-
-            # Convert semantic maps to NumPy ndarray
-            semantic_maps = semantic_maps.cpu().numpy()
+            # Get general (non-class specific) semantic maps anc convert to NumPy ndarray
+            semantic_maps = torch.argmax(class_semantic_maps, dim=1).cpu().numpy()
 
             # Draw semantic masks on corresponding images
             for i, image, img_size, semantic_map in zip(range(len(images)), images, img_sizes, semantic_maps):
