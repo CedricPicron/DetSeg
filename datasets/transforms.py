@@ -3,10 +3,9 @@ Transforms on both image and corresponding target dictionaries.
 """
 import random
 
-import torch
+import torch.nn.functional as F
 from torchvision.ops.misc import interpolate
 import torchvision.transforms as T
-import torchvision.transforms.functional as F
 
 
 # 1. Transforms based on cropping
@@ -15,43 +14,40 @@ def crop(image, tgt_dict, crop_region):
     Function cropping the input image w.r.t. the given crop region. The input target dictionary is updated accordingly.
 
     Args:
-        image (PIL.Image.Image): Image in PIL format to be cropped.
-        tgt_dict (Dict): Target dictionary corresponding to the image, with following required and optional keys:
-            - labels (LongTensor, required): tensor of shape [num_targets] containing the class indices;
-            - boxes (FloatTensor, optional): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
-            - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
-        crop_region (Tuple): Tuple delineating the cropped region in (top, left, height, width) format.
+        image (Images): Images structure with PIL Image to be cropped.
+
+        tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
+            - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
+            - boxes (Boxes): structure of axis-aligned bounding boxes of size [num_targets];
+            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
+
+        crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
 
     Returns:
-        cropped_image (PIL.Image.Image): Image cropped by the given crop region.
+        image (Images): Updated Images structure with cropped PIL Image.
         tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
     """
 
     # Crop the image w.r.t. the given crop region
-    top, left, height, width = crop_region
-    cropped_image = F.crop(image, top, left, height, width)
+    image.crop(crop_region)
 
     # Update bounding boxes and identify targets no longer in the image
     if 'boxes' in tgt_dict:
-        cropped_boxes = tgt_dict['boxes'] - torch.as_tensor([left, top, left, top])
-        cropped_boxes = cropped_boxes.clamp(min=0)
-        max_size = torch.as_tensor([width, height], dtype=torch.float32)
-        cropped_boxes = torch.min(cropped_boxes.reshape(-1, 2, 2), max_size)
-        keep = torch.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], dim=1)
-        tgt_dict['boxes'] = cropped_boxes.reshape(-1, 4)
+        well_defined = tgt_dict['boxes'].crop(crop_region)
 
     # Update segmentation masks and identify targets no longer in the image (if not already done)
     if 'masks' in tgt_dict:
+        left, top, width, height = crop_region
         tgt_dict['masks'] = tgt_dict['masks'][:, top:top+height, left:left+width]
-        keep = tgt_dict['masks'].flatten(1).any(1) if 'boxes' not in tgt_dict else keep
+        well_defined = tgt_dict['masks'].flatten(1).any(1) if 'boxes' not in tgt_dict else well_defined
 
     # Remove targets that no longer appear in the cropped image
     if 'boxes' in tgt_dict or 'masks' in tgt_dict:
         for key in tgt_dict.keys():
             if key in ['labels', 'boxes', 'masks']:
-                tgt_dict[key] = tgt_dict[key][keep]
+                tgt_dict[key] = tgt_dict[key][well_defined]
 
-    return cropped_image, tgt_dict
+    return image, tgt_dict
 
 
 class CenterCrop(object):
@@ -77,11 +73,11 @@ class CenterCrop(object):
         The __call__ method corresponding to the CenterCrop transform.
 
         Args:
-            image (PIL.Image.Image): Image in PIL format to be cropped.
+            image (Images): Images structure with PIL Image to be cropped.
             tgt_dict (Dict): Target dictionary corresponding to the input image.
 
         Returns:
-            cropped_image (PIL.Image.Image): Image cropped in the center and of size 'crop_size'.
+            image (Images): Updated Images structure with cropped PIL Image.
             tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
         """
 
@@ -89,10 +85,10 @@ class CenterCrop(object):
         crop_top = int(round((image.height - crop_height) / 2.))
         crop_left = int(round((image.width - crop_width) / 2.))
 
-        crop_region = (crop_top, crop_left, crop_height, crop_width)
-        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+        crop_region = (crop_left, crop_top, crop_width, crop_height)
+        image, tgt_dict = crop(image, tgt_dict, crop_region)
 
-        return cropped_image, tgt_dict
+        return image, tgt_dict
 
 
 class RandomCrop(object):
@@ -118,18 +114,19 @@ class RandomCrop(object):
         The __call__ method corresponding to the RandomCrop transform.
 
         Args:
-            image (PIL.Image.Image): Image in PIL format to be cropped.
+            image (Images): Images structure with PIL Image to be cropped.
             tgt_dict (Dict): Target dictionary corresponding to the input image.
 
         Returns:
-            cropped_image (PIL.Image.Image): Image cropped at a random position and of size 'crop_size'.
+            image (Images): Updated Images structure with cropped PIL Image.
             tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
         """
 
         crop_region = T.RandomCrop.get_params(image, self.crop_size)
-        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+        crop_region = (crop_region[1], crop_region[0], crop_region[3], crop_region[2])
+        image, tgt_dict = crop(image, tgt_dict, crop_region)
 
-        return cropped_image, tgt_dict
+        return image, tgt_dict
 
 
 class RandomSizeCrop(object):
@@ -158,11 +155,11 @@ class RandomSizeCrop(object):
         The __call__ method corresponding to the RandomSizeCrop transform.
 
         Args:
-            image (PIL.Image.Image): Image in PIL format to be cropped.
+            image (Images): Images structure with PIL Image to be cropped.
             tgt_dict (Dict): Target dictionary corresponding to the input image.
 
         Returns:
-            cropped_image (PIL.Image.Image): Image cropped at a random position and of allowed random size.
+            image (Images): Updated Images structure with cropped PIL Image.
             tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
         """
 
@@ -170,9 +167,10 @@ class RandomSizeCrop(object):
         crop_height = random.randint(self.min_crop_size, min(image.height, self.max_crop_size))
 
         crop_region = T.RandomCrop.get_params(image, [crop_height, crop_width])
-        cropped_image, tgt_dict = crop(image, tgt_dict, crop_region)
+        crop_region = (crop_region[1], crop_region[0], crop_region[3], crop_region[2])
+        image, tgt_dict = crop(image, tgt_dict, crop_region)
 
-        return cropped_image, tgt_dict
+        return image, tgt_dict
 
 
 # 2. Transforms based on horizontal flipping
@@ -181,30 +179,28 @@ def hflip(image, tgt_dict):
     Function flipping the input image horizontally and updating the target dictionary accordingly.
 
     Args:
-        image (PIL.Image.Image): Image in PIL format to be flipped horizontally.
+        image (Images): Images structure with PIL Image to be flipped horizontally.
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
-            - boxes (FloatTensor, optional): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
+            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets];
             - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
 
     Returns:
-        flipped_image (PIL.Image.Image): The horizontally flipped input image.
+        image (Images): Updated Images structure with horizontally flipped PIL Image.
         tgt_dict (Dict): Updated target dictionary corresponding to the new flipped image.
     """
 
     # Flip the image horizontally
-    flipped_image = F.hflip(image)
+    image.hflip()
 
     # Update the bounding boxes
     if 'boxes' in tgt_dict:
-        boxes = tgt_dict['boxes']
-        mirrored_boxes = boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1])
-        tgt_dict['boxes'] = mirrored_boxes + torch.as_tensor([image.width, 0, image.width, 0])
+        tgt_dict['boxes'].hflip(image.width)
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
         tgt_dict['masks'] = tgt_dict['masks'].flip([-1])
 
-    return flipped_image, tgt_dict
+    return image, tgt_dict
 
 
 class RandomHorizontalFlip(object):
@@ -230,11 +226,11 @@ class RandomHorizontalFlip(object):
         The __call__ method of the RandomHorizontalFlip transform.
 
         Args:
-            image (PIL.Image.Image): Image in PIL format, potentially to be flipped horizontally.
+            image (Images): Images structure with PIL Image to (potentially) be flipped horizontally.
             tgt_dict (Dict): Target dictionary corresponding to the input image.
 
         Returns:
-            image (PIL.Image.Image): The input image, horizontally flipped or not.
+            image (Images): Images structure with potential update due to horizontal flipping.
             tgt_dict (Dict): The (potentially updated) target dictionary corresponding to the returned image.
         """
 
@@ -244,137 +240,269 @@ class RandomHorizontalFlip(object):
         return image, tgt_dict
 
 
-def resize(image, target, size, max_size=None):
-    # size can be min_size (scalar) or (w, h) tuple
+# 3. Transforms based on padding
+def pad(image, tgt_dict, padding):
+    """
+    Function padding the input image w.r.t. the given padding vector. The target dictionary is updated accordingly.
 
-    def get_size_with_aspect_ratio(image_size, size, max_size=None):
-        w, h = image_size
-        if max_size is not None:
-            min_original_size = float(min((w, h)))
-            max_original_size = float(max((w, h)))
-            if max_original_size / min_original_size * size > max_size:
-                size = int(round(max_size * min_original_size / max_original_size))
+    Args:
+        image (Images): Images structure with PIL Image to be padded.
 
-        if (w <= h and w == size) or (h <= w and h == size):
-            return (h, w)
+        tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following key:
+            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
 
-        if w < h:
-            ow = size
-            oh = int(size * h / w)
-        else:
-            oh = size
-            ow = int(size * w / h)
+        padding (Tuple): Padding vector of size [4] with padding values in (left, top, right, bottom) format.
 
-        return (oh, ow)
+    Returns:
+        image (Images): Updated Images structure with padded PIL Image.
+        tgt_dict (Dict): Updated target dictionary corresponding to the new padded image.
+    """
 
-    def get_size(image_size, size, max_size=None):
-        if isinstance(size, (list, tuple)):
-            return size[::-1]
-        else:
-            return get_size_with_aspect_ratio(image_size, size, max_size)
+    # Pad the image as specified by the padding vector
+    image.pad(padding)
 
-    size = get_size(image.size, size, max_size)
-    rescaled_image = F.resize(image, size)
+    # Update the segmentation masks
+    if 'masks' in tgt_dict:
+        mask_padding = (padding[0], padding[2], padding[1], padding[3])
+        tgt_dict['masks'] = F.pad(tgt_dict['masks'], mask_padding)
 
-    if target is None:
-        return rescaled_image, None
-
-    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_image.size, image.size))
-    ratio_width, ratio_height = ratios
-
-    target = target.copy()
-    if "boxes" in target:
-        boxes = target["boxes"]
-        scaled_boxes = boxes * torch.as_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
-        target["boxes"] = scaled_boxes
-
-    h, w = size
-    target["size"] = torch.tensor([h, w])
-
-    if "masks" in target:
-        target['masks'] = interpolate(
-            target['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
-
-    return rescaled_image, target
+    return image, tgt_dict
 
 
-def pad(image, target, padding):
-    # assumes that we only pad on the bottom right corners
-    padded_image = F.pad(image, (0, 0, padding[0], padding[1]))
-    if target is None:
-        return padded_image, None
-    target = target.copy()
-    # should we do something wrt the original size?
-    target["size"] = torch.tensor(padded_image.size[::-1])
-    if "masks" in target:
-        target['masks'] = torch.nn.functional.pad(target['masks'], (0, padding[0], 0, padding[1]))
-    return padded_image, target
+class RandomPad(object):
+    """
+    Class implementing the RandomPad transform.
+
+    It randomly pads the right and bottom of images with 'max_pad' attribute as maximum padding value.
+
+    Attributes:
+        max_pad (int): Integer containing the maximum value for the right and bottom padding values.
+    """
+
+    def __init__(self, max_pad):
+        """
+        Initializes the RandomPad transform.
+
+        Args:
+            max_pad (int): Integer containing the maximum value for the right and bottom padding values.
+        """
+
+        self.max_pad = max_pad
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomPad transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be padded.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with padded PIL Image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new padded image.
+        """
+
+        pad_x = random.randint(0, self.max_pad)
+        pad_y = random.randint(0, self.max_pad)
+
+        padding = (0, 0, pad_x, pad_y)
+        image, tgt_dict = pad(image, tgt_dict, padding)
+
+        return image, tgt_dict
+
+
+# 4. Transforms based on resizing
+def resize(image, tgt_dict, size, max_size=None):
+    """
+    Function resizing the input image. The input target dictionary is updated accordingly.
+
+    Args:
+        image (Images): Images structure with PIL Image to be resized.
+
+        tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
+            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets];
+            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
+
+        size: It can be one of following two possibilities:
+            1) size (int): integer containing the minimum size (width or height) to resize to;
+            2) size (Tuple): tuple of size [2] containing respectively the width and height to resize to.
+
+        max_size (int): Overrules above size whenever this value is exceded in width or height (defaults to None).
+
+    Returns:
+        image (Images): Updated Images structure with resized PIL Image.
+        tgt_dict (Dict): Updated target dictionary corresponding to the new resized image.
+    """
+
+    # Resize the image as specified by the size and max_size arguments
+    resize_ratio = image.resize(size, max_size)
+
+    # Update bounding boxes
+    if 'boxes' in tgt_dict:
+        tgt_dict['boxes'].resize(resize_ratio)
+
+    # Update segmentation masks
+    if 'masks' in tgt_dict:
+        tgt_dict['masks'] = interpolate(tgt_dict['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
+
+    return image, tgt_dict
 
 
 class RandomResize(object):
+    """
+    Class implementing the RandomResize transform.
+
+    Attributes:
+        sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
+        max_size (int): Overrules size whenever this value is exceded in width or height (defaults to None).
+    """
+
     def __init__(self, sizes, max_size=None):
+        """
+        Initializes the RandomResize transform.
+
+        Args:
+            sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
+            max_size (int): Overrules size whenever this value is exceded in width or height (defaults to None).
+        """
+
         assert isinstance(sizes, (list, tuple))
         self.sizes = sizes
         self.max_size = max_size
 
-    def __call__(self, img, target):
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomResize transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be resized.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with resized PIL Image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new resized image.
+        """
+
         size = random.choice(self.sizes)
+        image, tgt_dict = resize(image, tgt_dict, size, self.max_size)
 
-        return resize(img, target, size, self.max_size)
-
-
-class RandomPad(object):
-    def __init__(self, max_pad):
-        self.max_pad = max_pad
-
-    def __call__(self, img, target):
-        pad_x = random.randint(0, self.max_pad)
-        pad_y = random.randint(0, self.max_pad)
-
-        return pad(img, target, (pad_x, pad_y))
+        return image, tgt_dict
 
 
+# 5. Miscellaneous transforms
 class RandomSelect(object):
     """
-    Randomly selects between transforms1 and transforms2,
-    with probability p for transforms1 and (1 - p) for transforms2
+    Class implementing the RandomSelect transform.
+
+    It Randomly selects between one of two transforms.
+
+    Attributes:
+        t1 (object): Transform object chosen with probability 'prob'.
+        t2 (object): Transform object chosen with probability '1-prob'.
+        prob (float): Probability (between 0 and 1) of choosing transforms1.
     """
-    def __init__(self, transforms1, transforms2, p=0.5):
-        self.transforms1 = transforms1
-        self.transforms2 = transforms2
-        self.p = p
 
-    def __call__(self, img, target):
-        if random.random() < self.p:
-            return self.transforms1(img, target)
+    def __init__(self, t1, t2, prob=0.5):
+        """
+        Initializes the RandomSelect transform.
 
-        return self.transforms2(img, target)
+        Args:
+            t1 (object): Transform object chosen with probability 'prob'.
+            t2 (object): Transform object chosen with probability '1-prob'.
+            prob (float): Probability (between 0 and 1) of choosing transforms1 (defaults to 0.5).
+        """
+
+        self.t1 = t1
+        self.t2 = t2
+        self.prob = prob
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomSelect transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be transformed.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with transformed PIL Image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new transformed image.
+        """
+
+        image, tgt_dict = self.t1(image, tgt_dict) if random.random() < self.prob else self.t2(image, tgt_dict)
+
+        return image, tgt_dict
 
 
 class ToTensor(object):
-    def __call__(self, image, target):
-        image = F.to_tensor(image)
+    """
+    Class implementing the ToTensor transform.
+    """
 
-        return image, target
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the ToTensor transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be converted to tensor.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with image tensor instead of PIL Image.
+            tgt_dict (Dict): Unchanged target dictionary corresponding to the image.
+        """
+
+        image.to_tensor()
+
+        return image, tgt_dict
 
 
 class Compose(object):
+    """
+    Class implementing the Compose transform.
+
+    Attributes:
+        transforms (List): List of transform objects of size [num_transforms].
+    """
+
     def __init__(self, transforms):
+        """
+        Initializes the Compose transform.
+
+        Args:
+            transforms (List): List of transform objects of size [num_transforms].
+        """
+
         self.transforms = transforms
 
-    def __call__(self, image, target):
-        for transform in self.transforms:
-            image, target = transform(image, target)
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the Compose transform.
 
-        return image, target
+        Args:
+            image (Images): Images structure with PIL Image to be transformed.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with transformed image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the transformed image.
+        """
+
+        for transform in self.transforms:
+            image, tgt_dict = transform(image, tgt_dict)
+
+        return image, tgt_dict
 
     def __repr__(self):
-        format_string = self.__class__.__name__ + "("
+        """
+        Implements the __repr__ method of the Compose transform.
 
-        for t in self.transforms:
-            format_string += "\n"
-            format_string += "    {0}".format(t)
+        Returns:
+            compose_string (str): String with information about the different sub-transforms of this transform.
+        """
 
-        format_string += "\n)"
+        compose_string = "Compose transform with:"
+        for i, transform in enumerate(self.transforms):
+            compose_string += f"\n    {i}: {transform}"
 
-        return format_string
+        return compose_string

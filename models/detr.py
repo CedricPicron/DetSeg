@@ -14,7 +14,7 @@ from .decoder import build_decoder, GlobalDecoder
 from .encoder import build_encoder
 from .position import build_position_encoder
 from .utils import MLP
-from utils.box_ops import box_cxcywh_to_xywh, box_xyxy_to_cxcywh
+from utils.boxes import Boxes
 
 
 class DETR(nn.Module):
@@ -211,40 +211,32 @@ class DETR(nn.Module):
 
         return sizes
 
-    def make_predictions(self, out_dict, image_sizes):
+    def make_predictions(self, out_dict):
         """
         Make classified bounding box predictions based on given DETR decoder layer output dictionary.
 
         Args:
             out_dict (Dict): Output dictionary containing at least following keys:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): axis-aligned bounding boxes of size [num_slots_total];
                 - batch_ids (LongTensor): batch indices of slots (in ascending order) of shape [num_slots_total].
-
-            - image_sizes (LongTensor): Original image sizes (before data augmentation) of shape [batch_size, 2].
 
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
-                - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
-                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+                - labels (LongTensor): predicted class indices of shape [num_slots_total];
+                - boxes (Boxes): axis-aligned bounding boxes of size [num_slots_total];
+                - scores (FloatTensor): normalized prediction scores of shape [num_slots_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_slots_total].
         """
 
         # Get predicted object scores and labels
         probs = F.softmax(out_dict['logits'], dim=-1)
         scores, labels = probs[:, :-1].max(dim=-1)
 
-        # Get predicted bounding boxes
-        boxes = box_cxcywh_to_xywh(out_dict['boxes'])
-        heights, widths = image_sizes[out_dict['batch_ids'], :].unbind(1)
-        scales = torch.stack([widths, heights, widths, heights], dim=1)
-        boxes = scales*boxes
-
         # Place predictions into prediction dictionary
         pred_dict = {}
         pred_dict['labels'] = labels
-        pred_dict['boxes'] = boxes
+        pred_dict['boxes'] = out_dict['boxes']
         pred_dict['scores'] = scores
         pred_dict['batch_ids'] = out_dict['batch_ids']
 
@@ -261,12 +253,12 @@ class DETR(nn.Module):
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
+                - boxes (Boxes): axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the DETR model parameters during training.
+
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
-                - image_sizes (LongTensor): original image sizes (before data augmentation) of shape [batch_size, 2];
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
 
         Returns:
@@ -276,10 +268,10 @@ class DETR(nn.Module):
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
                 pred_dict (Dict): Prediction dictionary from the last decoder layer containing following keys:
-                    - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                    - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
-                    - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+                    - labels (LongTensor): predicted class indices of shape [num_slots_total];
+                    - boxes (Boxes): axis-aligned bounding boxes of size [num_slots_total];
+                    - scores (FloatTensor): normalized prediction scores of shape [num_slots_total];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_slots_total].
 
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -309,11 +301,16 @@ class DETR(nn.Module):
 
         # Predict classification logits and bounding box coordinates
         slots = decoder_output_dict['slots']
-        class_logits = self.class_head(slots)
-        bbox_coord = self.bbox_head(slots).sigmoid()
+        logits_list = self.class_head(slots)
+
+        boxes_per_image = sizes[1:] - sizes[:-1]
+        kwargs = {'boxes_per_image': boxes_per_image, 'image_scales': 0, 'scales': 0}
+
+        boxes_list = self.bbox_head(slots).sigmoid()
+        boxes_list = [Boxes(boxes, format='cxcywh', **kwargs) for boxes in boxes_list]
 
         # Build list of output dictionaries
-        out_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(class_logits, bbox_coord)]
+        out_list = [{'logits': logits, 'boxes': boxes} for logits, boxes in zip(logits_list, boxes_list)]
         [out_dict.update({'batch_ids': batch_ids[i], 'sizes': sizes[i]}) for i, out_dict in enumerate(out_list)]
         [out_dict.update({'layer_id': self.decoder.num_layers-i}) for i, out_dict in enumerate(out_list)]
 

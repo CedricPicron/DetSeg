@@ -15,6 +15,8 @@ import torch
 from torchvision.datasets.vision import VisionDataset
 
 import datasets.transforms as T
+from structures.boxes import Boxes
+from structures.images import Images
 import utils.distributed as distributed
 
 
@@ -86,25 +88,22 @@ class CocoDataset(VisionDataset):
             index (int): Index selecting one of the dataset images.
 
         Returns:
-            image (FloatTensor): Tensor containing the image of shape [3, iH, iW].
+            image (Images): Structure containing the image tensor after data augmentation.
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets, 4] in (left, top, right, bottom) format;
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
-                - image_id (LongTensor): tensor of shape [1] containing the image id;
-                - image_size (LongTensor): tensor of shape [2] containing the image size (before data augmentation).
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
         """
 
-        # Load image
+        # Load image and place it into Images structure
         image_id = self.image_ids[index]
         image_path = self.root / self.coco.loadImgs(image_id)[0]['file_name']
         image = Image.open(image_path).convert('RGB')
+        image = Images(image, image_id)
 
-        # Load annotations
+        # Load annotations and remove crowd annotations
         annotation_ids = self.coco.getAnnIds(imgIds=image_id)
         annotations = self.coco.loadAnns(annotation_ids)
-
-        # Remove crowd annotations
         annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
         # Get object class labels (in contiguous id space)
@@ -115,34 +114,26 @@ class CocoDataset(VisionDataset):
         # Get object boxes in (left, top, width, height) format
         boxes = [annotation['bbox'] for annotation in annotations]
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        boxes = Boxes(boxes, format='xywh', image_size=image.size())
 
-        # Transform boxes to (left, top, right, bottom) format
-        boxes[:, 2:] += boxes[:, :2]
-
-        # Crop boxes such that they fit within the image
-        iW, iH = image.size
-        boxes[:, 0::2].clamp_(min=0, max=iW)
-        boxes[:, 1::2].clamp_(min=0, max=iH)
+        # Convert boxes to (left, top, right, bottom) format and clip
+        well_defined = boxes.to_format('xyxy').clip(image.size())
 
         # Only keep objects with well-defined boxes
-        keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
-        labels = labels[keep]
-        boxes = boxes[keep]
+        labels = labels[well_defined]
+        boxes = boxes[well_defined]
 
         # Place target properties into target dictionary
         tgt_dict = {'labels': labels, 'boxes': boxes}
 
         # Get segmentation masks if required and add to target dictionary
         if self.requires_masks:
+            iW, iH = image.size()
             masks = self.get_masks(annotations, iH, iW)
-            tgt_dict['masks'] = masks[keep]
+            tgt_dict['masks'] = masks[well_defined]
 
         # Perform image and bounding box transformations
         image, tgt_dict = self.transforms(image, tgt_dict)
-
-        # Add additional properties to target dictionary, useful during evaluation
-        tgt_dict['image_id'] = torch.tensor([image_id])
-        tgt_dict['image_size'] = torch.tensor([int(iH), int(iW)])
 
         return image, tgt_dict
 
