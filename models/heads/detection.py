@@ -354,13 +354,13 @@ class RetinaHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
+            feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary containing at least following keys:
                 - anchor_labels (LongTensor): tensor of class indices of shape [batch_size, num_anchors_total];
                 - anchor_deltas (FloatTensor): anchor to box deltas of shape [batch_size, num_anchors_total, 4].
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
                 - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
@@ -379,11 +379,6 @@ class RetinaHead(nn.Module):
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
-
-        # Assume no padded regions when feature masks are missing (trainval only)
-        if feat_masks is None and tgt_dict is not None:
-            tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-            feat_masks = [torch.zeros(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
 
         # Compute predicted logit and delta maps
         logit_maps, delta_maps = self.pred_head(feat_maps)
@@ -434,11 +429,16 @@ class RetinaHead(nn.Module):
         # Perform analyses (trainval only)
         with torch.no_grad():
 
+            # Assume no padded regions when feature masks are missing (trainval only)
+            if feat_masks is None:
+                tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
+                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+
             # Perform classification accuracy analyses (trainval only)
             num_anchors = self.anchor_generator.num_cell_anchors[0]
             feat_masks = [mask[:, :, :, None].expand(-1, -1, -1, num_anchors).flatten(1) for mask in feat_masks]
-            padding_mask = torch.cat(feat_masks, dim=1)
-            acc_mask = ~padding_mask & cls_mask
+            active_mask = torch.cat(feat_masks, dim=1)
+            acc_mask = active_mask & cls_mask
 
             class_preds = torch.argmax(logits, dim=-1)
             analysis_dict = self.perform_accuracy_analyses(class_preds[acc_mask], anchor_labels[acc_mask])

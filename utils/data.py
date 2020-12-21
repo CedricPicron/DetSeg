@@ -52,7 +52,7 @@ def collate_fn(batch):
 
     # Concatenate masks if provided and add to target dictionary
     if 'masks' in tgt_dicts[0]:
-        max_iH, max_iW = images.tensor.shape[-2:]
+        max_iW, max_iH = images.size()
         masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
         padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
         tgt_dict['masks'] = torch.cat(padded_masks, dim=0)

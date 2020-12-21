@@ -55,7 +55,7 @@ def get_parser():
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
 
     # BiViNet
-    parser.add_argument('--min_resolution_id', default=2, type=int, help='highest resolution downsampling exponent')
+    parser.add_argument('--min_resolution_id', default=3, type=int, help='highest resolution downsampling exponent')
     parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
 
     # * BiCore

@@ -148,12 +148,12 @@ class BinarySegHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
+            feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - binary_maps (List): binary (object + background) segmentation maps of shape [batch_size, fH, fW].
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
                 - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
@@ -179,11 +179,6 @@ class BinarySegHead(nn.Module):
         if tgt_dict is None:
             pred_dict = {'binary_maps': [torch.clamp(logit_map/4 + 0.5, 0.0, 1.0) for logit_map in logit_maps]}
             return pred_dict
-
-        # Assume no padded regions when feature masks are missing (trainval only)
-        if feat_masks is None:
-            device = feat_maps[0].device
-            feat_masks = [torch.zeros(*feat_map.shape[:-1], dtype=torch.bool, device=device) for feat_map in feat_maps]
 
         # Flatten and concatenate logit and target maps (trainval only)
         logits = torch.cat([logit_map.flatten() for logit_map in logit_maps])
@@ -223,20 +218,20 @@ class BinarySegHead(nn.Module):
             # Assume no padded regions when feature masks are missing (trainval only)
             if feat_masks is None:
                 tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-                feat_masks = [torch.zeros(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
 
-            # Flatten and concatenate feature masks to the so-called padding mask (trainval only)
-            padding_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
+            # Flatten and concatenate masks of active features (trainval only)
+            active_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
 
             # Get mask of entries that will be used during accuracy-related analyses (trainval only)
             acc_mask = torch.bitwise_or(bg_mask, obj_mask)
-            acc_mask = torch.bitwise_and(acc_mask, ~padding_mask)
+            acc_mask = torch.bitwise_and(acc_mask, active_mask)
 
             # Perform accuracy-related analyses and place them in analysis dictionary (trainval only)
             analysis_dict = BinarySegHead.perform_accuracy_analyses(preds[acc_mask] > 0.5, targets[acc_mask] > 0.5)
 
             # Perform error analysis and place it in analysis dictionary (trainval only)
-            analysis_dict['bin_seg_error'] = torch.abs(preds[~padding_mask] - targets[~padding_mask]).mean()
+            analysis_dict['bin_seg_error'] = torch.abs(preds[active_mask] - targets[active_mask]).mean()
 
             # If requested, perform extended analyses (trainval only)
             if kwargs.setdefault('extended_analysis', False):
@@ -260,9 +255,7 @@ class BinarySegHead(nn.Module):
         Draws predicted and target binary segmentations on given full-resolution images.
 
         Args:
-            images (NestedTensor): NestedTensor consisting of:
-                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
+            images (Images): Images structure containing the batched images.
 
             pred_dict (Dict): Prediction dictionary containing at least following key:
                 - binary_maps (List): predicted binary segmentation maps of shape [batch_size, fH, fW].
@@ -274,29 +267,26 @@ class BinarySegHead(nn.Module):
             images_dict (Dict): Dictionary of images with drawn predicted and target binary segmentations.
         """
 
-        # Get padded images and corresponding image masks
-        images, img_masks = images.decompose()
-
         # Get desired keys and merge prediction and target binary maps into single list
         keys = [f'pred_f{i}' for i in range(len(pred_dict['binary_maps']))]
         keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['binary_maps']))])
         binary_maps_list = [*pred_dict['binary_maps'], *tgt_dict['binary_maps']]
 
-        # Get possible map sizes
-        map_size = tuple(images.shape[-2:])
-        map_sizes = [map_size]
+        # Get possible map sizes in (height, width) format
+        map_width, map_height = images.size()
+        map_sizes = [(map_height, map_width)]
 
-        while map_size != (1, 1):
-            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
-            map_sizes.append(map_size)
+        while (map_height, map_width) != (1, 1):
+            map_height = (map_height+1)//2
+            map_width = (map_width+1)//2
+            map_sizes.append((map_height, map_width))
 
-        # Convert images to desired visualization format
-        images = images.permute(0, 2, 3, 1)
-        images = (images * 255).to(torch.uint8)
-        images = images.cpu().numpy()
+        # Get image sizes without padding in (width, height) format
+        img_sizes = images.size(with_padding=False)
 
-        # Get image sizes without padding in (height, width) format
-        img_sizes = [(sum(~img_mask[:, 0]).item(), sum(~img_mask[0, :]).item()) for img_mask in img_masks]
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
 
         # Get interpolation kwargs and initialize dictionary of annotated images
         interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
@@ -327,7 +317,7 @@ class BinarySegHead(nn.Module):
                 visualizer.draw_binary_mask(binary_mask)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'bin_seg_{key}_{i}'] = annotated_image[:img_size[0], :img_size[1], :]
+                images_dict[f'bin_seg_{key}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
 
         return images_dict
 
@@ -374,6 +364,29 @@ class SemanticSegHead(nn.Module):
         metadata.stuff_classes = metadata.thing_classes
         metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
+
+    def _load_from_state_dict(self, state_dict, prefix, *args):
+        """
+        Copies parameters and buffers from given state dictionary into only this module, but not its descendants.
+
+        Additionally, it alters the projection heads if trained with COCO dataset ids instead of contiguous ids.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        prefix (str): String containing this module's prefix in the given state dictionary.
+        args (Tuple): Tuple containing additional arguments used by the default loading method.
+        """
+
+        # Alter projection heads if necessary
+        if getattr(self.metadata, 'name', '')[:4] == 'coco' and len(state_dict[f'{prefix}projs.0.bias']) == 92:
+            original_ids = [*self.metadata.thing_dataset_id_to_contiguous_id.keys(), 91]
+            state_dict[f'{prefix}class_weights'] = state_dict[f'{prefix}class_weights'][original_ids]
+
+            for i in range(len(self.projs)):
+                state_dict[f'{prefix}projs.{i}.weight'] = state_dict[f'{prefix}projs.{i}.weight'][original_ids]
+                state_dict[f'{prefix}projs.{i}.bias'] = state_dict[f'{prefix}projs.{i}.bias'][original_ids]
+
+        # Continue with default loading
+        super()._load_from_state_dict(state_dict, prefix, *args)
 
     @staticmethod
     def get_accuracy(preds, targets):
@@ -490,12 +503,12 @@ class SemanticSegHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): Optional list of size [num_maps] with padding masks of shape [batch_size, fH, fW].
+            feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
                 - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
                 - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
@@ -541,16 +554,13 @@ class SemanticSegHead(nn.Module):
             # Assume no padded regions when feature masks are missing (trainval only)
             if feat_masks is None:
                 tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-                feat_masks = [torch.zeros(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
 
-            # Flatten and concatenate feature masks to the so-called padding mask (trainval only)
-            padding_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
-
-            # Get mask of entries that will be used during accuracy-related analyses (trainval only)
-            acc_mask = ~padding_mask
+            # Flatten and concatenate masks of active features (trainval only)
+            active_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
 
             # Perform accuracy-related analyses and place them in analysis dictionary (trainval only)
-            analysis_dict = self.perform_accuracy_analyses(preds[acc_mask], targets[acc_mask])
+            analysis_dict = self.perform_accuracy_analyses(preds[active_mask], targets[active_mask])
 
             # If requested, perform extended analyses (trainval only)
             if kwargs.setdefault('extended_analysis', False):
@@ -560,7 +570,7 @@ class SemanticSegHead(nn.Module):
                 indices = torch.cumsum(torch.tensor([0, *map_sizes], device=targets.device), dim=0)
 
                 for i, i0, i1 in zip(range(len(tgt_maps)), indices[:-1], indices[1:]):
-                    map_acc_mask = acc_mask[i0:i1]
+                    map_acc_mask = active_mask[i0:i1]
                     map_preds = preds[i0:i1][map_acc_mask]
                     map_targets = targets[i0:i1][map_acc_mask]
 
@@ -574,9 +584,7 @@ class SemanticSegHead(nn.Module):
         Draws predicted and target semantic segmentations on given full-resolution images.
 
         Args:
-            images (NestedTensor): NestedTensor consisting of:
-                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
+            images (Images): Images structure containing the batched images.
 
             pred_dict (Dict): Prediction dictionary containing following key:
                 - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
@@ -588,29 +596,26 @@ class SemanticSegHead(nn.Module):
             images_dict (Dict): Dictionary of images with drawn predicted and target semantic segmentations.
         """
 
-        # Get padded images and corresponding image masks
-        images, img_masks = images.decompose()
-
         # Get desired keys and merge prediction and target semantic maps into single list
         keys = [f'pred_f{i}' for i in range(len(pred_dict['semantic_maps']))]
         keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['semantic_maps']))])
         semantic_maps_list = [*pred_dict['semantic_maps'], *tgt_dict['semantic_maps']]
 
-        # Get possible map sizes
-        map_size = tuple(images.shape[-2:])
-        map_sizes = [map_size]
+        # Get possible map sizes in (height, width) format
+        map_width, map_height = images.size()
+        map_sizes = [(map_height, map_width)]
 
-        while map_size != (1, 1):
-            map_size = ((map_size[0]+1)//2, (map_size[1]+1)//2)
-            map_sizes.append(map_size)
+        while (map_height, map_width) != (1, 1):
+            map_height = (map_height+1)//2
+            map_width = (map_width+1)//2
+            map_sizes.append((map_height, map_width))
 
-        # Convert images to desired visualization format
-        images = images.permute(0, 2, 3, 1)
-        images = (images * 255).to(torch.uint8)
-        images = images.cpu().numpy()
+        # Get image sizes without padding in (width, height) format
+        img_sizes = images.size(with_padding=False)
 
-        # Get image sizes without padding in (height, width) format
-        img_sizes = [(sum(~img_mask[:, 0]).item(), sum(~img_mask[0, :]).item()) for img_mask in img_masks]
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
 
         # Get interpolation kwargs and initialize dictionary of annotated images
         interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
@@ -644,7 +649,7 @@ class SemanticSegHead(nn.Module):
                 visualizer.draw_sem_seg(semantic_map)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'sem_seg_{key}_{i}'] = annotated_image[:img_size[0], :img_size[1], :]
+                images_dict[f'sem_seg_{key}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
 
         return images_dict
 

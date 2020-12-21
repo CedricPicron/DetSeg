@@ -21,7 +21,7 @@ def crop(image, tgt_dict, crop_region):
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
             - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
 
-        crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
+        crop_region (Tuple): Tuple delineating the cropped region in (left, top, right, bottom) format.
 
     Returns:
         image (Images): Updated Images structure with cropped PIL Image.
@@ -37,8 +37,8 @@ def crop(image, tgt_dict, crop_region):
 
     # Update segmentation masks and identify targets no longer in the image (if not already done)
     if 'masks' in tgt_dict:
-        left, top, width, height = crop_region
-        tgt_dict['masks'] = tgt_dict['masks'][:, top:top+height, left:left+width]
+        left, top, right, bottom = crop_region
+        tgt_dict['masks'] = tgt_dict['masks'][:, top:bottom, left:right]
         well_defined = tgt_dict['masks'].flatten(1).any(1) if 'boxes' not in tgt_dict else well_defined
 
     # Remove targets that no longer appear in the cropped image
@@ -82,10 +82,12 @@ class CenterCrop(object):
         """
 
         crop_height, crop_width = self.size
-        crop_top = int(round((image.height - crop_height) / 2.))
-        crop_left = int(round((image.width - crop_width) / 2.))
+        crop_left = int(round((image.images.width - crop_width) / 2.))
+        crop_top = int(round((image.images.height - crop_height) / 2.))
+        crop_right = crop_left + crop_width
+        crop_bottom = crop_top + crop_height
 
-        crop_region = (crop_left, crop_top, crop_width, crop_height)
+        crop_region = (crop_left, crop_top, crop_right, crop_bottom)
         image, tgt_dict = crop(image, tgt_dict, crop_region)
 
         return image, tgt_dict
@@ -122,8 +124,10 @@ class RandomCrop(object):
             tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
         """
 
-        crop_region = T.RandomCrop.get_params(image, self.crop_size)
-        crop_region = (crop_region[1], crop_region[0], crop_region[3], crop_region[2])
+        crop_top, crop_left, crop_height, crop_width = T.RandomCrop.get_params(image.images, self.crop_size)
+        crop_right, crop_bottom = (crop_left + crop_width, crop_top + crop_height)
+
+        crop_region = (crop_left, crop_top, crop_right, crop_bottom)
         image, tgt_dict = crop(image, tgt_dict, crop_region)
 
         return image, tgt_dict
@@ -163,11 +167,13 @@ class RandomSizeCrop(object):
             tgt_dict (Dict): Updated target dictionary corresponding to the new cropped image.
         """
 
-        crop_width = random.randint(self.min_crop_size, min(image.width, self.max_crop_size))
-        crop_height = random.randint(self.min_crop_size, min(image.height, self.max_crop_size))
+        crop_width = random.randint(self.min_crop_size, min(image.images.width, self.max_crop_size))
+        crop_height = random.randint(self.min_crop_size, min(image.images.height, self.max_crop_size))
 
-        crop_region = T.RandomCrop.get_params(image, [crop_height, crop_width])
-        crop_region = (crop_region[1], crop_region[0], crop_region[3], crop_region[2])
+        crop_top, crop_left, crop_height, crop_width = T.RandomCrop.get_params(image.images, [crop_height, crop_width])
+        crop_right, crop_bottom = (crop_left + crop_width, crop_top + crop_height)
+
+        crop_region = (crop_left, crop_top, crop_right, crop_bottom)
         image, tgt_dict = crop(image, tgt_dict, crop_region)
 
         return image, tgt_dict
@@ -194,7 +200,7 @@ def hflip(image, tgt_dict):
 
     # Update the bounding boxes
     if 'boxes' in tgt_dict:
-        tgt_dict['boxes'] = tgt_dict['boxes'].hflip(image.width)
+        tgt_dict['boxes'] = tgt_dict['boxes'].hflip(image.images.width)
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
@@ -329,9 +335,9 @@ def resize(image, tgt_dict, size, max_size=None):
 
         size: It can be one of following two possibilities:
             1) size (int): integer containing the minimum size (width or height) to resize to;
-            2) size (Tuple): tuple of size [2] containing respectively the width and height to resize to.
+            2) size (Tuple): tuple of size [2] containing the image size in (width, height) format to resize to.
 
-        max_size (int): Overrules above size whenever this value is exceded in width or height (defaults to None).
+        max_size (int): Overrules above size whenever this value is exceded in width or height (default=None).
 
     Returns:
         image (Images): Updated Images structure with resized PIL Image.
@@ -339,7 +345,7 @@ def resize(image, tgt_dict, size, max_size=None):
     """
 
     # Resize the image as specified by the size and max_size arguments
-    image, resize_ratio = image.resize(size, max_size)
+    image, size, resize_ratio = image.resize(size, max_size)
 
     # Update the bounding boxes
     if 'boxes' in tgt_dict:
@@ -347,7 +353,8 @@ def resize(image, tgt_dict, size, max_size=None):
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
-        tgt_dict['masks'] = interpolate(tgt_dict['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
+        kwargs = {'size': (size[1], size[0]), 'mode': 'nearest', 'align_corners': None}
+        tgt_dict['masks'] = interpolate(tgt_dict['masks'][:, None].float(), **kwargs)[:, 0] > 0.5
 
     return image, tgt_dict
 
@@ -358,7 +365,7 @@ class RandomResize(object):
 
     Attributes:
         sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
-        max_size (int): Overrules size whenever this value is exceded in width or height (defaults to None).
+        max_size (int): Overrules size whenever this value is exceded in width or height (default=None).
     """
 
     def __init__(self, sizes, max_size=None):
@@ -367,7 +374,7 @@ class RandomResize(object):
 
         Args:
             sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
-            max_size (int): Overrules size whenever this value is exceded in width or height (defaults to None).
+            max_size (int): Overrules size whenever this value is exceded in width or height (default=None).
         """
 
         assert isinstance(sizes, (list, tuple))
@@ -413,7 +420,7 @@ class RandomSelect(object):
         Args:
             t1 (object): Transform object chosen with probability 'prob'.
             t2 (object): Transform object chosen with probability '1-prob'.
-            prob (float): Probability (between 0 and 1) of choosing transforms1 (defaults to 0.5).
+            prob (float): Probability (between 0 and 1) of choosing transforms1 (default=0.5).
         """
 
         self.t1 = t1

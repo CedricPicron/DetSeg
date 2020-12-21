@@ -256,7 +256,7 @@ class DETR(nn.Module):
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the DETR model parameters during training.
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following keys:
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
 
         Returns:

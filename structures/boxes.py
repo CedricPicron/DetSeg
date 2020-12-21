@@ -223,7 +223,7 @@ class Boxes(object):
         Updates the bounding boxes w.r.t. the given crop operation.
 
         Args:
-            crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
+            crop_region (Tuple): Tuple delineating the cropped region in (left, top, right, bottom) format.
 
         Returns:
             self (Boxes): Boxes structure updated w.r.t. the crop operation.
@@ -231,7 +231,7 @@ class Boxes(object):
         """
 
         # Update bounding boxes w.r.t. the crop operation
-        left, top, width, height = crop_region
+        left, top, right, bottom = crop_region
 
         if self.format in ['cxcywh', 'xywh']:
             self.boxes[:, :2] = self.boxes[:, :2] - torch.tensor([left, top]).to(self.boxes)
@@ -240,7 +240,7 @@ class Boxes(object):
             self.boxes = self.boxes - torch.tensor([left, top, left, top]).to(self.boxes)
 
         # Clip boxes and find out which ones are well-defined
-        well_defined = self.clip((width, height))
+        self, well_defined = self.clip((right-left, bottom-top))
 
         return self, well_defined
 
@@ -445,6 +445,7 @@ class Boxes(object):
         """
 
         self.boxes = self.boxes.to(*args, **kwargs)
+        self.boxes_per_img = self.boxes_per_img.to(*args, **kwargs)
 
         return self
 
@@ -486,7 +487,7 @@ class Boxes(object):
         """
 
         # Scale if boxes are normalized
-        if not self.normalized:
+        if self.normalized:
 
             # Get image sizes without padding in (width, height) format
             img_sizes = images.size(with_padding=False)
@@ -523,14 +524,18 @@ class Boxes(object):
             boxes = self[i0:i1]
 
             if inverse:
-                transforms.inverse()
+                range_obj = range(len(transforms)-1, -1, -1)
+            else:
+                range_obj = range(len(transforms))
 
-            for transform in transforms:
+            for j in range_obj:
+                transform = transforms[j]
+
                 if transform[0] == 'crop':
                     if not inverse:
-                        boxes = boxes.crop(transform[1])
+                        boxes, _ = boxes.crop(transform[1])
                     else:
-                        boxes = boxes.pad(transform[1])
+                        boxes = boxes.pad(transform[2])
 
                 elif transform[0] == 'hflip':
                     boxes = boxes.hflip(transform[1])
@@ -539,10 +544,10 @@ class Boxes(object):
                     if not inverse:
                         boxes = boxes.pad(transform[1])
                     else:
-                        boxes = boxes.crop(transform[1])
+                        boxes, _ = boxes.crop(transform[2])
 
                 elif transform[0] == 'resize':
-                    resize_ratio = (1/x for x in transform[1]) if inverse else transform[1]
+                    resize_ratio = tuple(1/x for x in transform[1]) if inverse else transform[1]
                     boxes = boxes.resize(resize_ratio)
 
             self[i0:i1] = boxes

@@ -72,7 +72,7 @@ class BiViNet(nn.Module):
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
 
         Returns:
-            feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
+            feat_masks (List): List of size [num_maps] with masks of active features of shape [batch_size, fH, fW].
         """
 
         map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
@@ -90,7 +90,8 @@ class BiViNet(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_core_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
-            feat_masks (List): List of size [num_core_maps] with padding feature masks of shape [batch_size, fH, fW].
+            feat_masks (List): List of size [num_maps] with masks of active features of shape [batch_size, fH, fW].
+
             tgt_dict (Dict): Target dictionary containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
@@ -137,18 +138,17 @@ class BiViNet(nn.Module):
         Forward method of the BiViNet module.
 
         Args:
-            images (NestedTensor): NestedTensor consisting of:
-                - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-                - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
+            images (Images): Images structure containing the batched images.
 
             tgt_dict (Dict): Optional target dictionary used during training and validation containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following keys:
+
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following keys:
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger);
                 - visualize (bool): boolean indicating whether in visualization mode or not.
 
@@ -190,7 +190,7 @@ class BiViNet(nn.Module):
 
         # Get feature masks and train/evaluate initial core feature maps (trainval only)
         if tgt_dict is not None:
-            feat_masks = BiViNet.get_feat_masks(images.mask, feat_maps)
+            feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
             train_eval_args = (feat_masks, tgt_dict, optimizer)
             loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, layer_id=0, **kwargs)
 

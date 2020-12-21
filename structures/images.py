@@ -162,7 +162,7 @@ class Images(object):
             images_tensor[i0:i1, :, :iH, :iW].copy_(structure.images)
             masks_tensor[i0:i1, :iH, :iW] = structure.masks
 
-            padding_transform = ('pad', (0, 0, max_iW-iW, max_iH-iH))
+            padding_transform = ('pad', (0, 0, max_iW-iW, max_iH-iH), (0, 0, iW, iH))
             [transforms[i].append(padding_transform) for i in range(i0, i1)]
 
         # Get concatenated Images structure
@@ -188,20 +188,28 @@ class Images(object):
         Crops the images w.r.t. the given crop region.
 
         Args:
-            crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
+            crop_region (Tuple): Tuple delineating the cropped region in (left, top, right, bottom) format.
 
         Returns:
             self (Images): Updated Images structure with cropped images.
         """
 
+        # Get original image size
+        img_width, img_height = self.size()
+
         # Crop the images masks w.r.t. the given crop region
-        left, top, width, height = crop_region
+        left, top, right, bottom = crop_region
+        width, height = (right-left, bottom-top)
+
         self.images = F.crop(self.images, top, left, height, width)
         self.masks = F.crop(self.masks, top, left, height, width)
 
+        # Get crop deltas
+        crop_deltas = (left, top, img_width-right, img_height-bottom)
+
         # Add crop operation to list of transforms
         for img_transforms in self.transforms:
-            img_transforms.append(('crop', crop_region))
+            img_transforms.append(('crop', crop_region, crop_deltas))
 
         return self
 
@@ -248,7 +256,7 @@ class Images(object):
         Pads the images according to the given padding vector.
 
         Args:
-            padding (Tuple): Padding vector of size [4] with padding values in (left, top, right, bottom) format.7
+            padding (Tuple): Padding vector of size [4] with padding values in (left, top, right, bottom) format.
 
         Returns:
             self (Images): Updated Images structure with padded images.
@@ -258,9 +266,14 @@ class Images(object):
         self.images = F.pad(padding)
         self.masks = F.pad(padding)
 
+        # Get image region
+        left, top, right, bottom = padding
+        img_width, img_height = self.size()
+        img_region = (left, top, img_width-right, img_height-bottom)
+
         # Add padding operation to list of transforms
         for img_transforms in self.transforms:
-            img_transforms.append(('pad', padding))
+            img_transforms.append(('pad', padding, img_region))
 
         return self
 
@@ -271,12 +284,13 @@ class Images(object):
         Args:
             size: It can be one of following two possibilities:
                 1) size (int): integer containing the minimum size (width or height) to resize to;
-                2) size (Tuple): tuple of size [2] containing respectively the width and height to resize to.
+                2) size (Tuple): tuple of size [2] containing the image size in (width, height) format to resize to.
 
             max_size (int): Overrules above size whenever this value is exceded in width or height (defaults to None).
 
         Returns:
             self (Images): Updated Images structure with resized images.
+            size (Tuple): Tuple of size [2] containing the image size after resizing in (width, height) format.
             resize_ratio (Tuple): Tuple of size [2] containing the resize ratio as (width_ratio, height_ratio).
         """
 
@@ -302,7 +316,7 @@ class Images(object):
         for img_transforms in self.transforms:
             img_transforms.append(('resize', resize_ratio))
 
-        return self, resize_ratio
+        return self, size, resize_ratio
 
     def size(self, with_padding=True):
         """
@@ -332,16 +346,20 @@ class Images(object):
             return img_size
 
         # Get image sizes without padding if requested
-        img_sizes = [img_size for i in range(len(self))]
+        img_sizes = [list(img_size) for i in range(len(self))]
 
         for i, transforms in enumerate(self.transforms):
-            for transform in transforms.reverse():
+            for j in range(len(transforms)-1, -1, -1):
+                transform = transforms[j]
+
                 if transform[0] != 'pad':
                     break
 
                 padding = transform[1]
                 img_sizes[i][0] = img_sizes[i][0] - padding[0] - padding[2]
                 img_sizes[i][1] = img_sizes[i][1] - padding[1] - padding[3]
+
+        img_sizes = [tuple(img_size) for img_size in img_sizes]
 
         return img_sizes
 

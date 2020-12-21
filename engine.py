@@ -157,7 +157,7 @@ def visualize(model, dataloader, output_dir):
     logger_log_every_kwargs = {'print_freq': 1, 'header': 'Visualization:'}
 
     # Iterate over image batches to be visualized
-    for images, tgt_dict, eval_dict in metric_logger.log_every(dataloader, **logger_log_every_kwargs):
+    for images, tgt_dict in metric_logger.log_every(dataloader, **logger_log_every_kwargs):
 
         # Place images and target dictionary on correct device
         images = images.to(device)
@@ -166,13 +166,10 @@ def visualize(model, dataloader, output_dir):
         # Get images, loss and analysis dictionary
         images_dict, loss_dict, analysis_dict = model(images, tgt_dict, visualize=True)
 
-        # Get dataset image ids
-        image_ids = eval_dict['image_ids'].tolist()
-
         # Save images
         for key, image in images_dict.items():
             key_parts = key.split('_')
-            image_id = image_ids[int(key_parts[-1])]
+            image_id = images.image_ids[int(key_parts[-1])]
 
             filename = ('_').join([str(image_id), *key_parts[:-1]])
             Image.fromarray(image).save(f'{output_dir / filename}.png')
