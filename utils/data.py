@@ -11,6 +11,55 @@ from structures.boxes import Boxes
 from structures.images import Images
 
 
+def collate_fn(batch):
+    """
+    The collate function used during data loading.
+
+    Args:
+        batch (List): List of size [batch_size] containing tuples of:
+            - image (Images): Structure containing the image tensor after data augmentation;
+            - tgt_dict (Dict): Target dictionary containing following keys:
+                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
+                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
+
+    Returns:
+        images (Images): New Images structure containing the concatenated Images structures across batch entries.
+        tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
+            - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+            - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+            - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+    """
+
+    # Get batch images and target dictionaries
+    images, tgt_dicts = list(zip(*batch))
+
+    # Concatenate images across batch entries
+    images = Images.cat(images)
+
+    # Concatenate target labels and target boxes across batch entries
+    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts])
+    tgt_boxes = Boxes.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts])
+
+    # Compute cumulative target sizes of batch entries
+    tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
+    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int64)
+    tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
+
+    # Place target labels, boxes and sizes in new target dictionary
+    tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
+
+    # Concatenate masks if provided and add to target dictionary
+    if 'masks' in tgt_dicts[0]:
+        max_iH, max_iW = images.tensor.shape[-2:]
+        masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
+        padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
+        tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
+
+    return images, tgt_dict
+
+
 class SubsetSampler(Sampler):
     """
     Class implementing the SubsetSampler sampler.
@@ -57,116 +106,3 @@ class SubsetSampler(Sampler):
         """
 
         return self.subset_size
-
-
-def train_collate_fn(batch):
-    """
-    The collate function used during training data loading.
-
-    Args:
-        batch (List): List of size [batch_size] containing tuples of:
-            - image (Images): Structure containing the image tensor after data augmentation;
-            - tgt_dict (Dict): Target dictionary containing following keys:
-                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
-
-    Returns:
-        images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-            - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
-
-        tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
-            - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets_total];
-            - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
-    """
-
-    # Get batch images and target dictionaries
-    images, tgt_dicts = list(zip(*batch))
-
-    # Concatenate images across batch entries
-    images = Images.cat(images)
-
-    # Concatenate target labels and target boxes across batch entries
-    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts])
-    tgt_boxes = Boxes.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts])
-
-    # Compute cumulative target sizes of batch entries
-    tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
-    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int64)
-    tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
-
-    # Place target labels, boxes and sizes in new target dictionary
-    tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
-
-    # Concatenate masks if provided and add to target dictionary
-    if 'masks' in tgt_dicts[0]:
-        max_iH, max_iW = images.tensor.shape[-2:]
-        masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
-        padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
-        tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
-
-    return images, tgt_dict
-
-
-def val_collate_fn(batch):
-    """
-    The collate function used during validation data loading.
-
-    Args:
-        batch (List): List of size [batch_size] containing tuples of:
-            - image (FloatTensor): tensor containing the image of shape [3, iH, iW].
-            - tgt_dict (Dict): target dictionary containing following keys:
-                - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-                - boxes (Boxes): axis-aligned bounding boxes of size [num_targets];
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW];
-                - image_id (LongTensor): tensor of shape [1] containing the image id.
-
-    Returns:
-        images (NestedTensor): NestedTensor consisting of:
-            - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-            - images.mask (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
-
-         tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
-            - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets_total];
-            - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
-
-        eval_dict (Dict): Dictionary containing following key:
-            - image_ids (LongTensor): tensor of shape [batch_size] containing the dataset images ids.
-    """
-
-    # Get batch images and target dictionaries
-    images, tgt_dicts = list(zip(*batch))
-
-    # Concatenate images across batch entries
-    images = Images.cat(images)
-
-    # Concatenate target labels and target boxes across batch entries
-    tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts])
-    tgt_boxes = Boxes.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts])
-
-    # Compute cumulative target sizes of batch entries
-    tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]
-    tgt_sizes = torch.tensor(tgt_sizes, dtype=torch.int64)
-    tgt_sizes = torch.cumsum(tgt_sizes, dim=0)
-
-    # Place target labels, boxes and sizes in new target dictionary
-    tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes, 'sizes': tgt_sizes}
-
-    # Concatenate masks if provided and add to target dictionary
-    if 'masks' in tgt_dicts[0]:
-        max_iH, max_iW = images.tensor.shape[-2:]
-        masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
-        padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
-        tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
-
-    # Place image ids and image sizes in evaluation dictionary
-    image_ids = torch.cat([old_tgt_dict['image_id'] for old_tgt_dict in tgt_dicts], dim=0)
-    image_sizes = torch.stack([old_tgt_dict['image_size'] for old_tgt_dict in tgt_dicts], dim=0)
-    eval_dict = {'image_ids': image_ids, 'image_sizes': image_sizes}
-
-    return images, tgt_dict, eval_dict

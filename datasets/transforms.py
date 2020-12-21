@@ -18,7 +18,7 @@ def crop(image, tgt_dict, crop_region):
 
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
             - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
-            - boxes (Boxes): structure of axis-aligned bounding boxes of size [num_targets];
+            - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
             - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
 
         crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
@@ -29,11 +29,11 @@ def crop(image, tgt_dict, crop_region):
     """
 
     # Crop the image w.r.t. the given crop region
-    image.crop(crop_region)
+    image = image.crop(crop_region)
 
     # Update bounding boxes and identify targets no longer in the image
     if 'boxes' in tgt_dict:
-        well_defined = tgt_dict['boxes'].crop(crop_region)
+        tgt_dict['boxes'], well_defined = tgt_dict['boxes'].crop(crop_region)
 
     # Update segmentation masks and identify targets no longer in the image (if not already done)
     if 'masks' in tgt_dict:
@@ -181,7 +181,7 @@ def hflip(image, tgt_dict):
     Args:
         image (Images): Images structure with PIL Image to be flipped horizontally.
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
-            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets];
+            - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
             - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
 
     Returns:
@@ -190,11 +190,11 @@ def hflip(image, tgt_dict):
     """
 
     # Flip the image horizontally
-    image.hflip()
+    image = image.hflip()
 
     # Update the bounding boxes
     if 'boxes' in tgt_dict:
-        tgt_dict['boxes'].hflip(image.width)
+        tgt_dict['boxes'] = tgt_dict['boxes'].hflip(image.width)
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
@@ -259,7 +259,11 @@ def pad(image, tgt_dict, padding):
     """
 
     # Pad the image as specified by the padding vector
-    image.pad(padding)
+    image = image.pad(padding)
+
+    # Update the bounding boxes
+    if 'boxes' in tgt_dict:
+        tgt_dict['boxes'] = tgt_dict['boxes'].pad(padding)
 
     # Update the segmentation masks
     if 'masks' in tgt_dict:
@@ -320,7 +324,7 @@ def resize(image, tgt_dict, size, max_size=None):
         image (Images): Images structure with PIL Image to be resized.
 
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
-            - boxes (Boxes): axis-aligned bounding boxes of size [num_targets];
+            - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
             - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
 
         size: It can be one of following two possibilities:
@@ -335,13 +339,13 @@ def resize(image, tgt_dict, size, max_size=None):
     """
 
     # Resize the image as specified by the size and max_size arguments
-    resize_ratio = image.resize(size, max_size)
+    image, resize_ratio = image.resize(size, max_size)
 
-    # Update bounding boxes
+    # Update the bounding boxes
     if 'boxes' in tgt_dict:
-        tgt_dict['boxes'].resize(resize_ratio)
+        tgt_dict['boxes'] = tgt_dict['boxes'].resize(resize_ratio)
 
-    # Update segmentation masks
+    # Update the segmentation masks
     if 'masks' in tgt_dict:
         tgt_dict['masks'] = interpolate(tgt_dict['masks'][:, None].float(), size, mode="nearest")[:, 0] > 0.5
 
@@ -452,7 +456,7 @@ class ToTensor(object):
             tgt_dict (Dict): Unchanged target dictionary corresponding to the image.
         """
 
-        image.to_tensor()
+        image = image.to_tensor()
 
         return image, tgt_dict
 

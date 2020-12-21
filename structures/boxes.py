@@ -4,6 +4,8 @@ Boxes structure and bounding box utilities.
 
 import torch
 
+from utils.distributed import get_world_size, is_dist_avail_and_initialized
+
 
 class Boxes(object):
     """
@@ -13,16 +15,18 @@ class Boxes(object):
         boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
         format (str): String containing the format in which the bounding boxes are expressed.
         normalized (bool): Boolean indicating whether boxes are normalized or not.
+        boxes_per_img (LongTensor): Tensor of shape [num_images] containing the number of boxes per batched image.
     """
 
-    def __init__(self, boxes, format, normalized=False):
+    def __init__(self, boxes, format, normalized=False, boxes_per_img=None):
         """
         Initializes the Boxes structure.
 
         Args:
             boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
             format (str): String containing the format in which the bounding boxes are expressed.
-            normalized (bool): Boolean indicating whether boxes are normalized or not (defaults to False).
+            normalized (bool): Boolean indicating whether boxes are normalized or not (default=False).
+            boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
         """
 
         # Check whether input boxes tensor has valid shape
@@ -30,38 +34,42 @@ class Boxes(object):
         assert_msg = f"Tensor has incorrect shape {boxes.shape} to become Boxes structure."
         assert check, assert_msg
 
-        # Set attributes as specified by input arguments
+        # Set boxes, format and normalized attributes
         self.boxes = boxes
         self.format = format
         self.normalized = normalized
 
-    def __getitem__(self, item):
+        # Set boxes per image attribute
+        if boxes_per_img is None:
+            self.boxes_per_img = torch.tensor([len(boxes)], dtype=torch.int64, device=boxes.device)
+        else:
+            self.boxes_per_img = torch.as_tensor(boxes_per_img, dtype=torch.int64, device=boxes.device)
+
+    def __getitem__(self, key):
         """
         Implements the __getitem__ method of the Boxes structure.
 
         Args:
-            item: We support three possibilities:
-                1) item (int): integer containing the index of the bounding box to be returned;
-                2) item (slice): one-dimensional slice slicing a subset of bounding boxes;
-                3) item (BoolTensor): tensor of shape [num_boxes] containing boolean values of boxes to be selected.
+            key: We support three possibilities:
+                1) key (int): integer containing the index of the bounding box to be returned;
+                2) key (slice): one-dimensional slice slicing a subset of bounding boxes to be returned;
+                3) key (BoolTensor): tensor of shape [num_boxes] containing boolean values of boxes to be returned.
 
         Returns:
-            selected_boxes (Boxes): New Boxes structure containing the selected bounding boxes.
+            item (Boxes): New Boxes structure containing the selected bounding boxes.
         """
 
-        boxes_tensor = self.boxes[item].view(1, -1) if isinstance(item, int) else self.boxes[item]
-        selected_boxes = Boxes(boxes_tensor, self.format, self.normalized)
+        boxes_tensor = self.boxes[key].view(1, -1) if isinstance(key, int) else self.boxes[key]
+        item = Boxes(boxes_tensor, self.format, self.normalized)
 
-        return selected_boxes
+        return item
 
     def __len__(self):
         """
         Implements the __len__ method of the Boxes structure.
 
-        It is measured as the number of boxes within the structure.
-
         Returns:
-            num_boxes (int): Number of boxes within the structure.
+            num_boxes (int): Number of boxes within the Boxes structure.
         """
 
         num_boxes = len(self.boxes)
@@ -80,9 +88,36 @@ class Boxes(object):
         boxes_string += f"   Size: {len(self)}\n"
         boxes_string += f"   Format: {self.format}\n"
         boxes_string += f"   Normalized: {self.normalized}\n"
+        boxes_string += f"   Boxes per image: {self.boxes_per_img}\n"
         boxes_string += f"   Content: {self.boxes}"
 
         return boxes_string
+
+    def __setitem__(self, key, item):
+        """
+        Implements the __setitem__ method of the Boxes structure.
+
+        Args:
+            key: We support three possibilities:
+                1) key (int): integer containing the index of the bounding box to be set;
+                2) key (slice): one-dimensional slice slicing a subset of bounding boxes to be set;
+                3) key (BoolTensor): tensor of shape [num_boxes] containing boolean values of boxes to be set.
+
+            item (Boxes): Boxes structure containing the bounding boxes to be set.
+        """
+
+        # Check whether formats are consistent
+        check = self.format == item.format
+        assert_msg = f"Inconsistent formats between self '{self.format}' and item '{item.format}'."
+        assert check, assert_msg
+
+        # Check whether normalized attributes are consistent
+        check = self.normalized == item.normalized
+        assert_msg = f"Inconsistent normalizations between self '{self.normalized}' and item '{item.normalized}'."
+        assert check, assert_msg
+
+        # Set boxes attribute
+        self.boxes[key] = item.boxes
 
     def area(self):
         """
@@ -122,15 +157,20 @@ class Boxes(object):
         assert_msg = f"All Boxes structures must have the same normalized attribute (got {normalized_set})."
         assert len(normalized_set) == 1, assert_msg
 
+        # Check whether all Boxes structures reside on the same device
+        device_set = {s.boxes.device for s in boxes_list}
+        assert len(device_set) == 1, f"All boxes should reside on the same device (got {device_set})."
+
         # Concatenate Boxes structures into single Boxes structure
         boxes_tensor = torch.cat([structure.boxes for structure in boxes_list])
-        cat_boxes = Boxes(boxes_tensor, format_set[0], normalized_set[0])
+        boxes_per_img = torch.cat([structure.boxes_per_img for structure in boxes_list])
+        cat_boxes = Boxes(boxes_tensor, format_set.pop(), normalized_set.pop(), boxes_per_img)
 
         return cat_boxes
 
     def clip(self, clip_region):
         """
-        Clips bounding boxes to be within the given boundaries.
+        Clips bounding boxes to be within the given clip region.
 
         Args:
             clip_region (Tuple): Following two input formats are supported:
@@ -138,6 +178,7 @@ class Boxes(object):
                 2) tuple of size [4] containing the (left, top, right, bottom) clip boundaries.
 
         Returns:
+            self (Boxes): Updated Boxes structure with clipped bounding boxes.
             well_defined (BoolTensor): Tensor of shape [num_boxes] indicating well-defined boxes after clipping.
         """
 
@@ -163,7 +204,7 @@ class Boxes(object):
         # Find out which boxes are well-defined after clipping
         well_defined = self.well_defined()
 
-        return well_defined
+        return self, well_defined
 
     def clone(self):
         """
@@ -173,22 +214,23 @@ class Boxes(object):
             cloned_boxes (Boxes): Cloned Boxes structure.
         """
 
-        cloned_boxes = Boxes(self.boxes.clone(), self.format, self.normalized)
+        cloned_boxes = Boxes(self.boxes.clone(), self.format, self.normalized, self.boxes_per_img.clone())
 
         return cloned_boxes
 
     def crop(self, crop_region):
         """
-        Updates the bounding boxes w.r.t. to the given crop region.
+        Updates the bounding boxes w.r.t. the given crop operation.
 
         Args:
             crop_region (Tuple): Tuple delineating the cropped region in (left, top, width, height) format.
 
         Returns:
+            self (Boxes): Boxes structure updated w.r.t. the crop operation.
             well_defined (BoolTensor): Tensor of shape [num_boxes] indicating well-defined boxes after cropping.
         """
 
-        # Update bounding boxes w.r.t. the crop
+        # Update bounding boxes w.r.t. the crop operation
         left, top, width, height = crop_region
 
         if self.format in ['cxcywh', 'xywh']:
@@ -200,7 +242,113 @@ class Boxes(object):
         # Clip boxes and find out which ones are well-defined
         well_defined = self.clip((width, height))
 
-        return well_defined
+        return self, well_defined
+
+    def dist_len(self):
+        """
+        Gets the average number of boxes across Boxes structures from different processes.
+
+        Returns:
+            num_boxes (float): Average number of boxes across Boxes structures from different processes.
+        """
+
+        # Get number of boxes for structure from this process
+        num_boxes = len(self)
+
+        # Return if not in distributed mode
+        if not is_dist_avail_and_initialized():
+            return num_boxes
+
+        # Get average number of boxes across structures from different processes
+        num_boxes = torch.tensor([num_boxes], dtype=torch.float, device=self.boxes.device)
+        torch.distributed.all_reduce(num_boxes)
+        num_boxes = torch.clamp(num_boxes/get_world_size(), min=1).item()
+
+        return num_boxes
+
+    def fmt_cxcywh_to_xywh(self):
+        """
+        Function transforming boxes from (center_x, center_y, width, height) to (left, top, width, height) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (left, top, width, height) format.
+        """
+
+        cx, cy, w, h = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([cx-0.5*w, cy-0.5*h, w, h], dim=-1)
+        self.format = 'xywh'
+
+        return self
+
+    def fmt_cxcywh_to_xyxy(self):
+        """
+        Function transforming boxes from (center_x, center_y, width, height) to (left, top, right, bottom) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (left, top, right, bottom) format.
+        """
+
+        cx, cy, w, h = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([cx-0.5*w, cy-0.5*h, cx+0.5*w, cy+0.5*h], dim=-1)
+        self.format = 'xyxy'
+
+        return self
+
+    def fmt_xywh_to_cxcywh(self):
+        """
+        Function transforming boxes from (left, top, width, height) to (center_x, center_y, width, height) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (center_x, center_y, width, height) format.
+        """
+
+        x0, y0, w, h = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([x0+w/2, y0+h/2, w, h], dim=-1)
+        self.format = 'cxcywh'
+
+        return self
+
+    def fmt_xywh_to_xyxy(self):
+        """
+        Function transforming boxes from (left, top, width, height) to (left, top, right, bottom) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (left, top, right, bottom) format.
+        """
+
+        x0, y0, w, h = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([x0, y0, x0+w, y0+h], dim=-1)
+        self.format = 'xyxy'
+
+        return self
+
+    def fmt_xyxy_to_cxcywh(self):
+        """
+        Function transforming boxes from (left, top, right, bottom) to (center_x, center_y, width, height) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (center_x, center_y, width, height) format.
+        """
+
+        x0, y0, x1, y1 = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([(x0+x1)/2, (y0+y1)/2, x1-x0, y1-y0], dim=-1)
+        self.format = 'cxcywh'
+
+        return self
+
+    def fmt_xyxy_to_xywh(self):
+        """
+        Function transforming boxes from (left, top, right, bottom) to (left, top, width, height) format.
+
+        Returns:
+            self (Boxes): Updated Boxes structure in the (left, top, width, height) format.
+        """
+
+        x0, y0, x1, y1 = self.boxes.unbind(dim=-1)
+        self.boxes = torch.stack([x0, y0, x1-x0, y1-y0], dim=-1)
+        self.format = 'xywh'
+
+        return self
 
     def hflip(self, image_width):
         """
@@ -208,6 +356,9 @@ class Boxes(object):
 
         Args:
             image_width (int): Integer containing the image width.
+
+        Returns:
+            self (Boxes): Updated Boxes structure with horizontally flipped bounding boxes.
         """
 
         if self.format == 'cxcywh':
@@ -219,26 +370,81 @@ class Boxes(object):
         elif self.format == 'xyxy':
             self.boxes[:, [0, 2]] = image_width - self.boxes[:, [2, 0]]
 
+        return self
+
+    def normalize(self, images):
+        """
+        Normalizes bounding boxes w.r.t. the image sizes within the given Images structure.
+
+        It is the inverse operation of 'to_img_scale'.
+
+        Args:
+            images (Images): Images structure containing batched images with their entire transform history.
+
+        Returns:
+            self (Boxes): Updated Boxes structure with normalized bounding boxes.
+        """
+
+        # Normalize bounding box coordinates if necessary
+        if not self.normalized:
+
+            # Get image sizes without padding in (width, height) format
+            img_sizes = images.size(with_padding=False)
+
+            # Normalize bounding box coordinates w.r.t. the image sizes
+            scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
+            self.boxes = self.boxes / scales.repeat_interleave(self.boxes_per_img, dim=0)
+            self.normalized = True
+
+        return self
+
+    def pad(self, padding):
+        """
+        Updates the bounding boxes w.r.t. the given padding operation.
+
+        Args:
+            padding (Tuple): Padding vector of size [4] with padding values in (left, top, right, bottom) format.
+
+        Returns:
+            self (Boxes): Boxes structure updated w.r.t. the padding operation.
+        """
+
+        # Update bounding boxes w.r.t. the padding operation
+        left, top, width, height = padding
+
+        if self.format in ['cxcywh', 'xywh']:
+            self.boxes[:, :2] = self.boxes[:, :2] + torch.tensor([left, top]).to(self.boxes)
+
+        elif self.format == 'xyxy':
+            self.boxes = self.boxes + torch.tensor([left, top, left, top]).to(self.boxes)
+
+        return self
+
     def resize(self, resize_ratio):
         """
         Resizes the bounding boxes by the given resize ratio.
 
         Args:
             resize_ratio (Tuple): Tuple of size [2] containing the resize ratio as (width_ratio, height_ratio).
+
+        Returns:
+            self (Boxes): Boxes structure updated w.r.t. the resize operation.
         """
 
         resize_ratio = torch.tensor([*resize_ratio, *resize_ratio]).to(self.boxes)
         self.boxes = resize_ratio * self.boxes
+
+        return self
 
     def to(self, *args, **kwargs):
         """
         Performs type and/or device conversion for the tensors within the Boxes structure.
 
         Returns:
-            Updated Boxes structure with converted tensors.
+            self (Boxes): Updated Boxes structure with converted tensors.
         """
 
-        self.boxes.to(*args, **kwargs)
+        self.boxes = self.boxes.to(*args, **kwargs)
 
         return self
 
@@ -249,6 +455,9 @@ class Boxes(object):
         Args:
             format (str): String containing the bounding box format to convert to.
 
+        Returns:
+            self (Boxes): Boxes structure with bounding boxes in the specified format.
+
         Raises:
             ValueError: Raised when given format results in unknown format conversion.
         """
@@ -257,63 +466,91 @@ class Boxes(object):
             method_name = f'fmt_{self.format}_to_{format}'
 
             if hasattr(self, method_name):
-                getattr(self, method_name)()
+                self = getattr(self, method_name)()
             else:
                 raise ValueError(f"Unknown format conversion {method_name}.")
 
-    def fmt_cxcywh_to_xywh(self):
+        return self
+
+    def to_img_scale(self, images):
         """
-        Function transforming boxes from (center_x, center_y, width, height) to (left, top, width, height) format.
+        Scales normalized bounding boxes w.r.t. the image sizes within the given Images structure.
+
+        It is the inverse operation of 'normalize'.
+
+        Args:
+            images (Images): Images structure containing batched images with their entire transform history.
+
+        Returns:
+            self (Boxes): Updated Boxes structure with bounding boxes resized to image scale.
         """
 
-        cx, cy, w, h = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([cx-0.5*w, cy-0.5*h, w, h], dim=-1)
-        self.format = 'xywh'
+        # Scale if boxes are normalized
+        if not self.normalized:
 
-    def fmt_cxcywh_to_xyxy(self):
-        """
-        Function transforming boxes from (center_x, center_y, width, height) to (left, top, right, bottom) format.
-        """
+            # Get image sizes without padding in (width, height) format
+            img_sizes = images.size(with_padding=False)
 
-        cx, cy, w, h = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([cx-0.5*w, cy-0.5*h, cx+0.5*w, cy+0.5*h], dim=-1)
-        self.format = 'xyxy'
+            # Scale bounding box coordinates w.r.t. the image sizes
+            scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
+            self.boxes = self.boxes * scales.repeat_interleave(self.boxes_per_img, dim=0)
+            self.normalized = False
 
-    def fmt_xywh_to_cxcywh(self):
-        """
-        Function transforming boxes from (left, top, width, height) to (center_x, center_y, width, height) format.
-        """
+        return self
 
-        x0, y0, w, h = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([x0+w/2, y0+h/2, w, h], dim=-1)
-        self.format = 'cxcywh'
-
-    def fmt_xywh_to_xyxy(self):
+    def transform(self, images, inverse=False):
         """
-        Function transforming boxes from (left, top, width, height) to (left, top, right, bottom) format.
-        """
+        Applies transforms (recorded by the given Images structure) to each of the bounding boxes.
 
-        x0, y0, w, h = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([x0, y0, x0+w, y0+h], dim=-1)
-        self.format = 'xyxy'
+        Args:
+            images (Images): Images structure containing batched images with their entire transform history.
+            inverse (bool): Boolean indicating whether inverse transformation should be applied or not.
 
-    def fmt_xyxy_to_cxcywh(self):
-        """
-        Function transforming boxes from (left, top, right, bottom) to (center_x, center_y, width, height) format.
+        Returns:
+            self (Boxes): Boxes structure updated by the transforms from the Images structure.
+            well_defined (BoolTensor): Tensor of shape [num_boxes] indicating well-defined boxes after transformation.
         """
 
-        x0, y0, x1, y1 = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([(x0+x1)/2, (y0+y1)/2, x1-x0, y1-y0], dim=-1)
-        self.format = 'cxcywh'
+        # Scale if boxes are normalized
+        self = self.to_img_scale(images)
 
-    def fmt_xyxy_to_xywh(self):
-        """
-        Function transforming boxes from (left, top, right, bottom) to (left, top, width, height) format.
-        """
+        # Get image splits
+        img_splits = torch.cumsum(self.boxes_per_img, dim=0)
+        img_splits = [0] + img_splits.tolist()
 
-        x0, y0, x1, y1 = self.boxes.unbind(dim=-1)
-        self.boxes = torch.stack([x0, y0, x1-x0, y1-y0], dim=-1)
-        self.format = 'xywh'
+        # Apply transforms
+        for i0, i1, transforms in zip(img_splits[:-1], img_splits[1:], images.transforms):
+            boxes = self[i0:i1]
+
+            if inverse:
+                transforms.inverse()
+
+            for transform in transforms:
+                if transform[0] == 'crop':
+                    if not inverse:
+                        boxes = boxes.crop(transform[1])
+                    else:
+                        boxes = boxes.pad(transform[1])
+
+                elif transform[0] == 'hflip':
+                    boxes = boxes.hflip(transform[1])
+
+                elif transform[0] == 'pad':
+                    if not inverse:
+                        boxes = boxes.pad(transform[1])
+                    else:
+                        boxes = boxes.crop(transform[1])
+
+                elif transform[0] == 'resize':
+                    resize_ratio = (1/x for x in transform[1]) if inverse else transform[1]
+                    boxes = boxes.resize(resize_ratio)
+
+            self[i0:i1] = boxes
+
+        # Get well-defined boxes after transformation
+        well_defined = self.well_defined()
+
+        return self, well_defined
 
     def well_defined(self):
         """

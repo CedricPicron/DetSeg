@@ -71,7 +71,7 @@ class Encoder(nn.Module):
 
         Args:
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH, fW].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
@@ -147,7 +147,7 @@ class SelfAttentionEncoderLayer(nn.Module):
 
         Args:
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH*fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH*fW].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
@@ -159,7 +159,7 @@ class SelfAttentionEncoderLayer(nn.Module):
         keys = features + pos_encodings
         values = features
 
-        delta_features = self.self_attn(queries, keys, values, key_padding_mask=feature_masks, need_weights=False)[0]
+        delta_features = self.self_attn(queries, keys, values, key_padding_mask=~feature_masks, need_weights=False)[0]
         features = features + self.dropout1(delta_features)
         features = self.norm1(features)
 

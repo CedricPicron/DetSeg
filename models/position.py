@@ -46,15 +46,14 @@ class SinePositionEncoder(nn.Module):
 
         Args:
              features (FloatTensor): Features of shape [batch_size, feat_dim, fH, fW].
-             feature_masks (BoolTensor): Boolean masks encoding inactive pixels of shape [batch_size, fH, fW].
+             feature_masks (BoolTensor): Boolean masks encoding active pixels of shape [batch_size, fH, fW].
 
         Returns:
             pos (Tensor): Position encodings of shape [batch_size, feat_dim, fH, fW].
         """
 
-        not_mask = ~feature_masks
-        y_embed = not_mask.cumsum(1, dtype=torch.float32)
-        x_embed = not_mask.cumsum(2, dtype=torch.float32)
+        y_embed = feature_masks.cumsum(1, dtype=torch.float32)
+        x_embed = feature_masks.cumsum(2, dtype=torch.float32)
 
         if self.normalize:
             eps = 1e-6

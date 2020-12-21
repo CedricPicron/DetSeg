@@ -14,7 +14,7 @@ from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train, visualize
 from models.bivinet import build_bivinet
 from models.detr import build_detr
-from utils.data import SubsetSampler, train_collate_fn, val_collate_fn
+from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
 
 
@@ -210,11 +210,10 @@ def main(args):
 
     # Get training and validation dataloaders
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
-    train_dataloader_kwargs = {'collate_fn': train_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
-    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **train_dataloader_kwargs)
+    dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
 
-    val_dataloader_kwargs = {'collate_fn': val_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
-    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **val_dataloader_kwargs)
+    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
+    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
 
     # Build model and place it on correct device
     device = torch.device(args.device)
@@ -272,7 +271,6 @@ def main(args):
 
         # Get visualization dataloader
         subset_sampler = SubsetSampler(val_dataset, args.num_images, args.image_offset, args.random_offset)
-        dataloader_kwargs = {'collate_fn': val_collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
         dataloader = DataLoader(val_dataset, args.batch_size, sampler=subset_sampler, **dataloader_kwargs)
 
         # Compute and save annotated images and return

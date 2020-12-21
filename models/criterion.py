@@ -7,8 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.matcher import build_matcher
-from utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
-from utils.distributed import get_world_size, is_dist_avail_and_initialized
+from structures.boxes import box_giou
 
 
 class SetCriterion(nn.Module):
@@ -128,11 +127,11 @@ class SetCriterion(nn.Module):
 
         Args:
             out_dict (Dict): Output dictionary containing at least following keys:
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_slots_total];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions.
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format.
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_slots_total].
 
             match_idx (Tuple): Tuple of (pred_idx, tgt_idx) with:
                 - pred_idx (LongTensor): Chosen predictions of shape [sum(min(num_slots_batch, num_targets_batch))];
@@ -147,18 +146,20 @@ class SetCriterion(nn.Module):
 
         # Get the predicted and target boxes
         pred_idx, tgt_idx = match_idx
-        pred_boxes = out_dict['boxes'][pred_idx, :]
-        tgt_boxes = tgt_dict['boxes'][tgt_idx, :]
+        pred_boxes = out_dict['boxes'][pred_idx]
+        tgt_boxes = tgt_dict['boxes'][tgt_idx]
 
         # Compute the L1 and GIoU bounding box losses
-        loss_l1 = F.l1_loss(pred_boxes, tgt_boxes, reduction='sum')
-        loss_giou = 1 - torch.diag(generalized_box_iou(box_cxcywh_to_xyxy(pred_boxes), box_cxcywh_to_xyxy(tgt_boxes)))
+        pred_boxes = pred_boxes.to_format('cxcywh')
+        tgt_boxes = tgt_boxes.to_format('cxcywh')
+        loss_l1 = F.l1_loss(pred_boxes.boxes, tgt_boxes.boxes, reduction='sum')
+        loss_giou = (1 - torch.diag(box_giou(pred_boxes, tgt_boxes))).sum()
 
         # Place weighted bounding box losses in loss dictionary
         loss_dict = {}
         layer_id = out_dict['layer_id']
         loss_dict[f'loss_l1_{layer_id}'] = self.weight_dict['l1'] * (loss_l1 / num_boxes)
-        loss_dict[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou.sum() / num_boxes)
+        loss_dict[f'loss_giou_{layer_id}'] = self.weight_dict['giou'] * (loss_giou / num_boxes)
 
         # Perform bounding box related analyses
         with torch.no_grad():
@@ -166,46 +167,22 @@ class SetCriterion(nn.Module):
 
         return loss_dict, analysis_dict
 
-    @staticmethod
-    def get_num_boxes(tgt_dict):
-        """
-        Computes the average number of target boxes across all nodes, for normalization purposes.
-
-        Args:
-            tgt_dict (Dict): Target dictionary containing at least following key:
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format.
-
-        Returns:
-            num_boxes (float): Average number of target boxes across all nodes.
-        """
-
-        num_boxes = len(tgt_dict['boxes'])
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=tgt_dict['boxes'].device)
-
-        if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_boxes)
-
-        world_size = get_world_size()
-        num_boxes = torch.clamp(num_boxes/world_size, min=1).item()
-
-        return num_boxes
-
-    def forward(self, pred_list, tgt_dict):
+    def forward(self, out_list, tgt_dict):
         """
         Forward method of the SetCriterion module.
 
         Args:
-           pred_list (List): List of predictions, where each entry is a dict containing following keys:
+           out_list (List): List of output dictionaries, with each dictionary possibly containing following keys:
                 - logits (FloatTensor): class logits (with background) of shape [num_slots_total, (num_classes+1)];
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_slots_total];
                 - batch_ids (LongTensor): batch indices of slots (in ascending order) of shape [num_slots_total];
                 - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1];
                 - layer_id (int): integer corresponding to the decoder layer producing the predictions;
-                - curio_loss (FloatTensor): optional curiosity based loss value of shape [1] from a sample decoder.
+                - curio_loss (FloatTensor, optional): curiosity based loss value of shape [1] from a sample decoder.
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
@@ -216,12 +193,12 @@ class SetCriterion(nn.Module):
         loss_dict = {}
         analysis_dict = {}
 
-        for out_dict in pred_list:
+        for out_dict in out_list:
             match_idx = self.matcher(out_dict, tgt_dict)
-            num_boxes = self.get_num_boxes(tgt_dict)
+            num_tgt_boxes = tgt_dict['boxes'].dist_len()
 
             for loss_function in self.loss_functions:
-                layer_loss_dict, layer_analysis_dict = loss_function(out_dict, tgt_dict, match_idx, num_boxes)
+                layer_loss_dict, layer_analysis_dict = loss_function(out_dict, tgt_dict, match_idx, num_tgt_boxes)
                 loss_dict.update(layer_loss_dict)
                 analysis_dict.update(layer_analysis_dict)
 

@@ -94,13 +94,12 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     metric_logger = MetricLogger(delimiter="  ")
     header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
 
-    for images, tgt_dict, eval_dict in metric_logger.log_every(dataloader, print_freq, header):
+    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
-        eval_dict = {k: v.to(device) for k, v in eval_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        val_kwargs = {'extended_analysis': True, 'image_sizes': eval_dict['image_sizes']}
+        val_kwargs = {'extended_analysis': True}
         pred_dict, loss_dict, analysis_dict = model(images, tgt_dict, **val_kwargs)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
@@ -119,7 +118,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
 
         # Update evaluator
         if evaluator is not None:
-            evaluator.update(eval_dict['image_ids'], pred_dict)
+            evaluator.update(images, pred_dict)
 
     # Accumulate predictions from all images and summarize
     if evaluator is not None:

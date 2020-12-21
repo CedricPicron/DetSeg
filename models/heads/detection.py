@@ -13,7 +13,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from utils.box_ops import box_xyxy_to_xywh
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 

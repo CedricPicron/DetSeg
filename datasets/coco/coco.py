@@ -111,15 +111,13 @@ class CocoDataset(VisionDataset):
         labels = [id_dict[annotation['category_id']] for annotation in annotations]
         labels = torch.tensor(labels, dtype=torch.int64)
 
-        # Get object boxes in (left, top, width, height) format
+        # Get object boxes in (left, top, right, bottom) format
         boxes = [annotation['bbox'] for annotation in annotations]
         boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        boxes = Boxes(boxes, format='xywh', image_size=image.size())
+        boxes = Boxes(boxes, format='xywh').to_format('xyxy')
 
-        # Convert boxes to (left, top, right, bottom) format and clip
-        well_defined = boxes.to_format('xyxy').clip(image.size())
-
-        # Only keep objects with well-defined boxes
+        # Clip boxes and only keep targets with well-defined boxes
+        boxes, well_defined = boxes.clip(image.size())
         labels = labels[well_defined]
         boxes = boxes[well_defined]
 
@@ -187,31 +185,36 @@ class CocoEvaluator(object):
         self.image_ids = []
         self.image_evals = {metric: [] for metric in self.metrics}
 
-    def update(self, image_ids, pred_dict):
+    def update(self, images, pred_dict):
         """
         Updates the evaluator object with the given predictions for the images with the given image ids.
 
         Args:
-            image_ids (LongTensor): Tensor of shape [batch_size] containing the dataset images ids.
+            images (Images): Images structure containing the batched images.
+
             pred_dict (Dict): Prediction dictionary containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
         # Update the image_ids attribute
-        self.image_ids.extend(image_ids.tolist())
+        self.image_ids.extend(images.image_ids)
+
+        # Transform boxes to original image space and convert them to (left, top, width, height) format
+        boxes, well_defined = pred_dict['boxes'].transform(images, inverse=True)
+        boxes = boxes.to_format('xywh')
+
+        # Get well-defined predictions and convert them to lists
+        labels = pred_dict['labels'][well_defined].tolist()
+        boxes = boxes.boxes[well_defined].tolist()
+        scores = pred_dict['scores'][well_defined].tolist()
+        batch_ids = pred_dict['batch_ids'][well_defined].tolist()
 
         # Get image id for every prediction
-        batch_ids = pred_dict['batch_ids']
-        image_ids = image_ids[batch_ids]
-
-        # Go from tensors to lists
-        image_ids = image_ids.tolist()
-        labels = pred_dict['labels'].tolist()
-        boxes = pred_dict['boxes'].tolist()
-        scores = pred_dict['scores'].tolist()
+        image_ids = torch.as_tensor(images.image_ids)
+        image_ids = image_ids[batch_ids].tolist()
 
         # Get labels in original non-contiguous id space
         inv_id_dict = {v: k for k, v in self.metadata.thing_dataset_id_to_contiguous_id.items()}

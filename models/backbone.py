@@ -113,24 +113,22 @@ class Backbone(nn.Module):
         Forward method of Backbone module.
 
         Args:
-            images (NestedTensor): NestedTensor consisting of:
-               - images.tensor (FloatTensor): padded images of shape [batch_size, 3, max_iH, max_iW];
-               - images.mask (BoolTensor): masks encoding inactive pixels of shape [batch_size, max_iH, max_iW].
+            images (Images): Images structure containing the batched images.
 
         Returns:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-            masks (List): List of size [num_maps] with boolean masks of inactive pixels of shape [batch_size, fH, fW].
+            masks (List): List of size [num_maps] with boolean masks of active pixels of shape [batch_size, fH, fW].
         """
 
         # Normalize input images
-        images = images.normalize(self.in_norm_mean, self.in_norm_std)
+        norm_images = images.normalize(self.in_norm_mean, self.in_norm_std)
 
         # Compute backbone feature maps
-        feat_maps = list(self.body(images.tensor).values())
+        feat_maps = list(self.body(norm_images).values())
 
-        # Compute masks of inactive pixels
-        mask = images.mask[None].float()
-        masks = [F.interpolate(mask, size=feat_map.shape[-2:]).to(torch.bool)[0] for feat_map in feat_maps]
+        # Compute downsampled masks of active pixels
+        masks = images.masks[None].float()
+        masks = [F.interpolate(masks, size=feat_map.shape[-2:]).to(torch.bool)[0] for feat_map in feat_maps]
 
         return feat_maps, masks
 

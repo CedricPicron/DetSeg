@@ -19,7 +19,8 @@ from models.detr import build_detr
 from models.encoder import build_encoder
 from models.heads.detection import build_det_heads
 from models.heads.segmentation import build_seg_heads
-from utils.data import nested_tensor_from_image_list
+from structures.boxes import Boxes
+from structures.images import Images
 
 
 # Lists of model and sort choices
@@ -44,8 +45,7 @@ if profiling_args.model == 'backbone':
     main_args.lr_backbone = 1e-5
     model = build_backbone(main_args).to('cuda')
 
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
+    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
     inputs = [images]
 
     globals_dict = {'model': model, 'inputs': inputs}
@@ -108,8 +108,7 @@ elif profiling_args.model == 'bivinet_bin_seg':
     main_args.disputed_loss = True
     model = build_bivinet(main_args).to('cuda')
 
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
+    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
 
     num_targets_total = 20
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
@@ -126,12 +125,11 @@ elif profiling_args.model == 'bivinet_ret':
     main_args.meta_arch = 'BiViNet'
     main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
-    main_args.num_classes = 91
+    main_args.num_classes = 80
     main_args.ret_num_convs = 4
     model = build_bivinet(main_args).to('cuda')
 
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
+    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
 
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
@@ -149,13 +147,12 @@ elif profiling_args.model == 'bivinet_sem_seg':
     main_args.meta_arch = 'BiViNet'
     main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
-    main_args.num_classes = 91
+    main_args.num_classes = 80
     main_args.seg_heads = ['semantic']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_bivinet(main_args).to('cuda')
 
-    images = torch.randn(2, 3, 1024, 1024)
-    images = nested_tensor_from_image_list(images).to('cuda')
+    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
 
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, size=(num_targets_total,)).to('cuda')
@@ -169,46 +166,48 @@ elif profiling_args.model == 'bivinet_sem_seg':
     backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
 
 elif profiling_args.model == 'criterion':
-    main_args.num_classes = 91
+    batch_size = main_args.batch_size
+    main_args.num_classes = 80
     criterion = build_criterion(main_args).to('cuda')
 
-    def generate_pred_list():
-        num_slots_total = main_args.batch_size * main_args.num_init_slots
+    def generate_out_list():
+        num_slots_total = batch_size * main_args.num_init_slots
         logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-        boxes[:, 2:] += boxes[:, :2]
-        sizes = torch.tensor([i*main_args.num_init_slots for i in range(main_args.batch_size+1)], device='cuda')
-        pred_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
+        boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+        sizes = torch.tensor([i*main_args.num_init_slots for i in range(batch_size+1)], device='cuda')
+        out_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
 
-        return pred_list
+        return out_list
 
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes[:, 2:] += boxes[:, :2]
-    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+    sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    globals_dict = {'criterion': criterion, 'generate_pred_list': generate_pred_list, 'tgt_dict': tgt_dict}
-    forward_stmt = "criterion(generate_pred_list(), tgt_dict)"
-    backward_stmt = "torch.stack([v for v in criterion(generate_pred_list(), tgt_dict)[0].values()]).sum().backward()"
+    globals_dict = {'criterion': criterion, 'generate_out_list': generate_out_list, 'tgt_dict': tgt_dict}
+    forward_stmt = "criterion(generate_out_list(), tgt_dict)"
+    backward_stmt = "torch.stack([v for v in criterion(generate_out_list(), tgt_dict)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'detr':
     main_args.meta_arch = 'DETR'
     main_args.lr_backbone = 1e-5
     main_args.lr_encoder = 1e-4
     main_args.lr_decoder = 1e-4
-    main_args.num_classes = 91
+    main_args.num_classes = 80
+    main_args.train_metadata = MetadataCatalog.get('coco_2017_train')
     model = build_detr(main_args).to('cuda')
 
-    images = torch.randn(2, 3, 800, 800)
-    images = nested_tensor_from_image_list(images).to('cuda')
+    batch_size = main_args.batch_size
+    images = Images(torch.randn(batch_size, 3, 800, 800)).to('cuda')
 
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes[:, 2:] += boxes[:, :2]
-    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+    sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     optimizer = torch.optim.AdamW(model.parameters())
@@ -250,7 +249,7 @@ elif profiling_args.model == 'global_decoder':
 elif profiling_args.model == 'ret_head':
     main_args.det_heads = ['retina']
     main_args.min_resolution_id = 3
-    main_args.num_classes = 91
+    main_args.num_classes = 80
     main_args.ret_num_convs = 4
     model = build_det_heads(main_args)[0].to('cuda')
 
@@ -291,7 +290,7 @@ elif profiling_args.model == 'sample_decoder':
 
 elif profiling_args.model == 'sem_seg_head':
     main_args.min_resolution_id = 3
-    main_args.num_classes = 91
+    main_args.num_classes = 80
     main_args.seg_heads = ['semantic']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_seg_heads(main_args)[0].to('cuda')

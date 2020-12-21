@@ -5,7 +5,7 @@ from scipy.optimize import linear_sum_assignment as lsa
 import torch
 from torch import nn
 
-from utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from structures.boxes import box_giou
 
 
 class HungarianMatcher(nn.Module):
@@ -51,12 +51,12 @@ class HungarianMatcher(nn.Module):
         Args:
             out_dict (Dict): Output dictionary containing at least following keys:
                 - logits (FloatTensor): classification logits of shape [num_slots_total, num_classes];
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_slots_total];
                 - sizes (LongTensor): cumulative number of predictions across batch entries of shape [batch_size+1].
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes [num_targets_total, 4] in normalized (cx, cy, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_slots_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
@@ -76,11 +76,13 @@ class HungarianMatcher(nn.Module):
         # by 1 - probability[target class]. The 1 is omitted, as the constant doesn't change the matching.
         cost_class = -pred_probs[:, tgt_labels]
 
-        # Compute the L1 cost between boxes
-        cost_l1 = torch.cdist(pred_boxes, tgt_boxes, p=1)
+        # Compute the L1 cost between boxes in (center_x, center_y, width, height) format
+        pred_boxes = pred_boxes.to_format('cxcywh')
+        tgt_boxes = tgt_boxes.to_format('cxcywh')
+        cost_l1 = torch.cdist(pred_boxes.boxes, tgt_boxes.boxes, p=1)
 
         # Compute the GIoU cost between boxes
-        cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(pred_boxes), box_cxcywh_to_xyxy(tgt_boxes))
+        cost_giou = -box_giou(pred_boxes, tgt_boxes)
 
         # Weighted cost matrix
         C = (self.cost_class*cost_class + self.cost_l1*cost_l1 + self.cost_giou*cost_giou).cpu()

@@ -86,7 +86,7 @@ class GlobalDecoder(nn.Module):
 
         Args:
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH, fW].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
        Returns:
@@ -188,7 +188,7 @@ class GlobalDecoderLayer(nn.Module):
             slots (FloatTensor): Object slots of shape [num_slots, batch_size, feat_dim].
             slot_embeds (FloatTensor): Slot embeddings of shape [num_slots, batch_size, feat_dim].
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH, fW].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
@@ -209,7 +209,7 @@ class GlobalDecoderLayer(nn.Module):
         keys = features + pos_encodings
         values = features
 
-        delta_slots = self.multihead_attn(queries, keys, values, key_padding_mask=feature_masks)[0]
+        delta_slots = self.multihead_attn(queries, keys, values, key_padding_mask=~feature_masks)[0]
         slots = slots + self.dropout2(delta_slots)
         slots = self.norm2(slots)
 
@@ -349,7 +349,7 @@ class SampleDecoder(nn.Module):
         Initializes slots, segmentation/curiosity maps and other useful stuff.
 
         Args:
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH, fW].
             pos_encodings (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
             mask_fill (float): Initial curiosity map values at masked entries before layer normalization.
 
@@ -358,7 +358,7 @@ class SampleDecoder(nn.Module):
             batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Initial segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Initial curiosity maps of shape [num_slots_total, fH, fW].
-            max_mask_entries (int): Maximum masked entries of mask from feature_masks.
+            max_mask_entries (int): Maximum number of padded entries in mask from feature_masks.
         """
 
         batch_size, fH, fW = feature_masks.shape
@@ -367,7 +367,7 @@ class SampleDecoder(nn.Module):
 
         # Uniform sampling of initial slots within non-padded regions
         batch_ids = torch.arange(num_slots_total, device=device) // self.num_init_slots
-        modified_masks = ~feature_masks.view(batch_size, fH*fW)
+        modified_masks = feature_masks.view(batch_size, fH*fW)
         modified_masks = modified_masks * torch.randint(9, size=(batch_size, fH*fW), device=device)
         _, sorted_idx = torch.sort(modified_masks, dim=1, descending=True)
         flat_pos_idx = sorted_idx[:, :self.num_init_slots].flatten()
@@ -388,12 +388,12 @@ class SampleDecoder(nn.Module):
 
         curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+fH, pos_idx[1, :]+xy_grid[1]+fW] = gauss_kernel
         curio_maps = curio_maps[:, fH:2*fH, fW:2*fW].contiguous()
-        curio_maps.masked_fill_(feature_masks[batch_ids], mask_fill)
+        curio_maps.masked_fill_(~feature_masks[batch_ids], mask_fill)
         curio_maps = self.curio_init_weight * curio_maps
         curio_maps = F.layer_norm(curio_maps, [fH, fW])
 
-        # Compute maximum masked entries of mask from feature_masks
-        max_mask_entries = torch.max(torch.sum(feature_masks.view(batch_size, fH*fW), dim=1)).item()
+        # Compute maximum padded entries of mask from feature_masks
+        max_mask_entries = torch.max(torch.sum(~feature_masks.view(batch_size, fH*fW), dim=1)).item()
 
         return slots, batch_ids, seg_maps, curio_maps, max_mask_entries
 
@@ -403,7 +403,7 @@ class SampleDecoder(nn.Module):
 
         Args:
             features (FloatTensor): Features of shape [fH*fW, batch_size, feat_dim].
-            feature_masks (BoolTensor): Boolean masks encoding inactive features of shape [batch_size, fH, fW].
+            feature_masks (BoolTensor): Boolean masks encoding active features of shape [batch_size, fH, fW].
             pos (FloatTensor): Position encodings of shape [fH*fW, batch_size, feat_dim].
 
         Returns:
@@ -495,7 +495,7 @@ class SampleDecoderLayer(nn.Module):
             batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
-            max_mask_entries (int): Maximum number of masked entries in mask from feature_masks.
+            max_mask_entries (int): Maximum number of padded entries in mask from feature_masks.
             shared_items (Dict): Dictionary containing modules and parameters shared across decoder layers.
 
         Returns:
@@ -839,7 +839,7 @@ class SampleCrossAttention(nn.Module):
             batch_ids (LongTensor): Batch indices corresponding to the slots of shape [num_slots_total].
             seg_maps (FloatTensor): Segmentation maps of shape [num_slots_total, fH, fW].
             curio_maps (FloatTensor): Curiosity maps of shape [num_slots_total, fH, fW].
-            max_mask_entries (int): Maximum masked entries of mask from feature_masks.
+            max_mask_entries (int): Maximum number of padded entries in mask from feature_masks.
             cross_shared_items (Dict): Dictionary containing cross-attention related shared modules and parameters.
 
         Returns:
