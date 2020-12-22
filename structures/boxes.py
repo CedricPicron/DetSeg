@@ -1,6 +1,7 @@
 """
 Boxes structure and bounding box utilities.
 """
+import math
 
 import torch
 
@@ -50,10 +51,7 @@ class Boxes(object):
         Implements the __getitem__ method of the Boxes structure.
 
         Args:
-            key: We support three possibilities:
-                1) key (int): integer containing the index of the bounding box to be returned;
-                2) key (slice): one-dimensional slice slicing a subset of bounding boxes to be returned;
-                3) key (BoolTensor): tensor of shape [num_boxes] containing boolean values of boxes to be returned.
+            key: Object of any type also supported by Tensor determining the selected bounding boxes.
 
         Returns:
             item (Boxes): New Boxes structure containing the selected bounding boxes.
@@ -98,11 +96,7 @@ class Boxes(object):
         Implements the __setitem__ method of the Boxes structure.
 
         Args:
-            key: We support three possibilities:
-                1) key (int): integer containing the index of the bounding box to be set;
-                2) key (slice): one-dimensional slice slicing a subset of bounding boxes to be set;
-                3) key (BoolTensor): tensor of shape [num_boxes] containing boolean values of boxes to be set.
-
+            key: Object of any type also supported by Tensor determining the bounding boxes to be set.
             item (Boxes): Boxes structure containing the bounding boxes to be set.
         """
 
@@ -136,12 +130,13 @@ class Boxes(object):
         return areas
 
     @staticmethod
-    def cat(boxes_list):
+    def cat(boxes_list, same_image=False):
         """
         Concatenate list of Boxes structures into single Boxes structure.
 
         Args:
             boxes_list (List): List of size [num_structures] with Boxes structures to be concatenated.
+            same_image (boolean): Boolean indicating whether Boxes structures belong to the same image or not.
 
         Returns:
             cat_boxes (Boxes): Boxes structure containing the concatenated input Boxes structures.
@@ -163,7 +158,7 @@ class Boxes(object):
 
         # Concatenate Boxes structures into single Boxes structure
         boxes_tensor = torch.cat([structure.boxes for structure in boxes_list])
-        boxes_per_img = torch.cat([structure.boxes_per_img for structure in boxes_list])
+        boxes_per_img = torch.cat([structure.boxes_per_img for structure in boxes_list]) if not same_image else None
         cat_boxes = Boxes(boxes_tensor, format_set.pop(), normalized_set.pop(), boxes_per_img)
 
         return cat_boxes
@@ -574,33 +569,58 @@ class Boxes(object):
         return well_defined
 
 
+def apply_box_deltas(box_deltas, in_boxes, scale_clamp=math.log(1000.0/16)):
+    """
+    Function applying box deltas to the given Boxes structure.
+
+    Args:
+        box_deltas (FloatTensor): Tensor of shape [num_boxes, 4] encoding the box transformation to be applied.
+        in_boxes (Boxes): Boxes structure of axis-aligned bounding boxes of size [num_boxes] to be transformed.
+        scale_clamp (float): Optional threshold indicating the maximum allowed relative change in width or height.
+
+    Returns:
+        out_boxes (Boxes): Boxes structure of transformed axis-aligned bounding boxes of size [num_boxes].
+    """
+
+    # Check whether both inputs have same length
+    check = len(box_deltas) == len(in_boxes)
+    assert_msg = f"Both deltas and boxes inputs should have same length (got {len(box_deltas)} and {len(in_boxes)})."
+    assert check, assert_msg
+
+    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
+    assert in_boxes.well_defined().all(), "in_boxes input contains degenerate boxes"
+
+    # Get transformed bounding boxes
+    out_boxes = in_boxes.clone().to_format('cxcywh')
+    out_boxes.boxes[:, :2] += box_deltas[:, :2] * out_boxes.boxes[:, 2:]
+    out_boxes.boxes[:, 2:] *= torch.exp(box_deltas[:, 2:].clamp(max=scale_clamp))
+
+    return out_boxes
+
+
 def box_giou(boxes1, boxes2):
     """
     Function computing the 2D GIoU's between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
-        boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M]
+        boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
 
     Returns:
         gious (FloatTensor): The 2D GIoU's between every pair of boxes of shape [N, M].
     """
 
-    # Check for degenerate boxes (i.e. boxes with negative width or height)
+    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
     assert boxes1.well_defined().all(), "boxes2 input contains degenerate boxes"
 
-    # Convert bounding boxes to (left, top, right, bottom) format
-    boxes1 = boxes1.clone().to_format('xyxy')
-    boxes2 = boxes2.clone().to_format('xyxy')
-
-    # Get bounding box tensors
-    tensors1 = boxes1.boxes
-    tensors2 = boxes2.boxes
+    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
+    boxes1 = boxes1.clone().to_format('xyxy').boxes
+    boxes2 = boxes2.clone().to_format('xyxy').boxes
 
     # Compute areas of smallest axis-aligned box containing the union
-    lt = torch.min(tensors1[:, None, :2], tensors2[:, :2])  # [N,M,2]
-    rb = torch.max(tensors1[:, None, 2:], tensors2[:, 2:])  # [N,M,2]
+    lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
+    rb = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
     wh = (rb - lt).clamp(min=0)  # [N,M,2]
     areas = wh[:, :, 0] * wh[:, :, 1]  # [N, M]
 
@@ -628,17 +648,13 @@ def box_iou(boxes1, boxes2):
     areas1 = boxes1.area()
     areas2 = boxes2.area()
 
-    # Convert bounding boxes to (left, top, right, bottom) format
-    boxes1 = boxes1.clone().to_format('xyxy')
-    boxes2 = boxes2.clone().to_format('xyxy')
-
-    # Get bounding box tensors
-    tensors1 = boxes1.boxes
-    tensors2 = boxes2.boxes
+    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
+    boxes1 = boxes1.clone().to_format('xyxy').boxes
+    boxes2 = boxes2.clone().to_format('xyxy').boxes
 
     # Get intersection areas
-    lt = torch.max(tensors1[:, None, :2], tensors2[:, :2])  # [N,M,2]
-    rb = torch.min(tensors1[:, None, 2:], tensors2[:, 2:])  # [N,M,2]
+    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
+    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
     wh = (rb - lt).clamp(min=0)  # [N,M,2]
     inters = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
@@ -647,3 +663,41 @@ def box_iou(boxes1, boxes2):
     ious = inters / unions
 
     return ious, unions
+
+
+def get_box_deltas(boxes1, boxes2):
+    """
+    Function computing box deltas encoding the transformation from one Boxes structure to a second one.
+
+    Args:
+        boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [num_boxes] to transform from.
+        boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [num_boxes] to transform to.
+
+    Returns:
+        box_deltas (FloatTensor): Tensor of shape [num_boxes, 4] encoding the transformation between both Boxes inputs.
+    """
+
+    # Check whether both inputs contain the same amount of boxes
+    check = len(boxes1) == len(boxes2)
+    assert_msg = f"Both Boxes inputs should contain the same amount of boxes (got {len(boxes1)} and {len(boxes2)})."
+    assert check, assert_msg
+
+    # Check whether normalized attributes are consistent
+    check = boxes1.normalized == boxes2.normalized
+    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
+    assert check, assert_msg
+
+    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
+    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
+    assert boxes1.well_defined().all(), "boxes2 input contains degenerate boxes"
+
+    # Convert boxes to (center_x, center_y, width, height) format and get box tensors
+    boxes1 = boxes1.clone().to_format('cxcywh').boxes
+    boxes2 = boxes2.clone().to_format('cxcywh').boxes
+
+    # Get box deltas
+    box_deltas = torch.zeros_like(boxes1)
+    box_deltas[:, :2] = (boxes2[:, :2] - boxes1[:, :2]) / boxes1[:, 2:]
+    box_deltas[:, 2:] = torch.log(boxes2[:, 2:] / boxes1[:, 2:])
+
+    return box_deltas

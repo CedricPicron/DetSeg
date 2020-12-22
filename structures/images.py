@@ -62,10 +62,7 @@ class Images(object):
         Implements the __getitem__ method of the Images structure.
 
         Args:
-            key: We support three possibilities:
-                1) key (int): integer containing the index of the image to be returned;
-                2) key (slice): one-dimensional slice slicing a subset of images to be returned;
-                3) key (BoolTensor): tensor of shape [num_images] containing boolean values of images to be returned.
+            key: Object of any type also supported by Tensor determining the selected images.
 
         Returns:
             item (Images): New Images structure containing the selected images.

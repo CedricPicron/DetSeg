@@ -5,15 +5,14 @@ import math
 
 from detectron2.layers import batched_nms
 from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
-from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.modeling.matcher import Matcher
-from detectron2.structures.boxes import Boxes, pairwise_iou
 from fvcore.nn import sigmoid_focal_loss, smooth_l1_loss
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from utils.distributed import get_world_size, is_dist_avail_and_initialized
+from structures.boxes import Boxes, apply_box_deltas, box_iou, get_box_deltas
+from utils.distributed import is_dist_avail_and_initialized, get_world_size
 
 
 class RetinaHead(nn.Module):
@@ -25,7 +24,6 @@ class RetinaHead(nn.Module):
 
         anchor_generator (DefaultAnchorGenerator): Module generating anchors for a given list of feature maps.
         anchor_matcher (Matcher): Module matching target boxes with anchors via their pairwise IoU-matrix.
-        box_to_box (Box2BoxTransform): Object capable of computing deltas from two set of boxes and back.
         pred_head (RetinaPredHead): Module computing logits and box deltas for every anchor-position combination.
 
         focal_alpha (float): Alpha value of the sigmoid focal loss used during classification.
@@ -93,9 +91,6 @@ class RetinaHead(nn.Module):
         matcher_labels = [0, -1, 1]
         self.anchor_matcher = Matcher(matcher_thresholds, matcher_labels, allow_low_quality_matches=True)
 
-        # Initialization of box to box transform object
-        self.box_to_box = Box2BoxTransform(weights=(1.0, 1.0, 1.0, 1.0))
-
         # Initialization of prediction head module
         input_dict = {'in_projs': pred_head_dict['in_projs'], 'in_feat_sizes': in_feat_sizes}
         conv_dict = {'feat_size': pred_head_dict['feat_size'], 'num_convs': pred_head_dict['num_convs']}
@@ -127,9 +122,10 @@ class RetinaHead(nn.Module):
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (FloatTensor): boxes of shape [num_targets_total, 4] in (left, top, right, bottom) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
@@ -153,9 +149,11 @@ class RetinaHead(nn.Module):
                 buffer_dict (Dict): Empty dictionary.
         """
 
-        # Generate anchors and place into attribute dictionary
+        # Generate anchors and place them into attribute dictionary
         feat_map_views = [feat_map.permute(0, 3, 1, 2) for feat_map in feat_maps]
         anchors = self.anchor_generator(feat_map_views)
+
+        anchors = [Boxes(map_anchors.tensor, format='xyxy') for map_anchors in anchors]
         attr_dict = {'anchors': anchors}
 
         # Return when no target dictionary is provided (validation/testing only)
@@ -163,9 +161,8 @@ class RetinaHead(nn.Module):
             return None, attr_dict, {}
 
         # Some preparation before anchor labeling (trainval only)
-        map_sizes = [0] + [anchor.tensor.shape[0] for anchor in anchors]
-        map_sizes = torch.tensor(map_sizes, dtype=torch.int, device=anchors[0].device)
-        map_sizes = torch.cumsum(map_sizes, dim=0)
+        map_sizes = [0] + [len(map_anchors) for map_anchors in anchors]
+        map_sizes = torch.tensor(map_sizes).cumsum(dim=0)
 
         anchors = Boxes.cat(anchors)
         tgt_sizes = tgt_dict['sizes']
@@ -176,8 +173,8 @@ class RetinaHead(nn.Module):
         # Label anchors for every batch entry (trainval only)
         for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
             tgt_labels = tgt_dict['labels'][i0:i1]
-            tgt_boxes = Boxes(tgt_dict['boxes'][i0:i1])
-            matched_ids, match_labels = self.anchor_matcher(pairwise_iou(tgt_boxes, anchors))
+            tgt_boxes = tgt_dict['boxes'][i0:i1]
+            matched_ids, match_labels = self.anchor_matcher(box_iou(tgt_boxes, anchors)[0])
 
             if len(tgt_labels) > 0:
                 anchor_labels = tgt_labels[matched_ids]
@@ -185,19 +182,19 @@ class RetinaHead(nn.Module):
                 anchor_labels[match_labels == -1] = -1
                 anchor_labels_list.append(anchor_labels)
 
-                anchor_deltas = self.box_to_box.get_deltas(anchors.tensor, tgt_boxes.tensor[matched_ids])
+                anchor_deltas = get_box_deltas(anchors, tgt_boxes[matched_ids])
                 anchor_deltas_list.append(anchor_deltas)
 
             else:
                 anchor_labels_list.append(torch.full_like(matched_ids, self.num_classes))
-                anchor_deltas_list.append(torch.zeros_like(anchors.tensor))
+                anchor_deltas_list.append(torch.zeros_like(anchors.boxes))
 
         # Get batched anchor labels and deltas (trainval only)
         anchor_labels = torch.stack(anchor_labels_list)
         anchor_deltas = torch.stack(anchor_deltas_list)
 
-        # Get updated loss normalizers and place it in buffer dictionary (trainval only)
-        num_pos_anchors = torch.zeros(len(feat_maps)).to(map_sizes)
+        # Get updated loss normalizers and place them into buffer dictionary (trainval only)
+        num_pos_anchors = torch.zeros(len(feat_maps), device=feat_maps[0].device)
 
         for i, i0, i1 in zip(range(len(feat_maps)), map_sizes[:-1], map_sizes[1:]):
             map_anchor_labels = anchor_labels[:, i0:i1]
@@ -228,7 +225,7 @@ class RetinaHead(nn.Module):
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
@@ -266,8 +263,8 @@ class RetinaHead(nn.Module):
                 # Get boxes of top predictions
                 anchor_ids = top_ids // self.num_classes
                 top_deltas = img_delta_map[anchor_ids]
-                top_anchors = map_anchors.tensor[anchor_ids]
-                top_boxes = self.box_to_box.apply_deltas(top_deltas, top_anchors)
+                top_anchors = map_anchors[anchor_ids]
+                top_boxes = apply_box_deltas(top_deltas, top_anchors)
 
                 # Add labels, boxes and scores of top predictions to their respective lists
                 pred_labels[i].append(top_labels)
@@ -285,22 +282,24 @@ class RetinaHead(nn.Module):
         for i in range(batch_size):
 
             # Concatenate predictions from different feature maps
-            labels = torch.cat(pred_labels[i], dim=0)
-            boxes = torch.cat(pred_boxes[i], dim=0)
-            scores = torch.cat(pred_scores[i], dim=0)
+            labels = torch.cat(pred_labels[i])
+            boxes = Boxes.cat(pred_boxes[i], same_image=True)
+            scores = torch.cat(pred_scores[i])
 
             # Keep best predictions after non-maxima suppression (NMS)
-            keep = batched_nms(boxes, scores, labels, iou_threshold=self.test_nms_threshold)
+            boxes = boxes.to_format('xyxy')
+            keep = batched_nms(boxes.boxes, scores, labels, iou_threshold=self.test_nms_threshold)
             keep = keep[:self.test_max_detections]
 
             # Add final predictions to the prediction dictionary
             pred_dict['labels'].append(labels[keep])
-            pred_dict['boxes'].append(box_xyxy_to_xywh(boxes[keep]))
+            pred_dict['boxes'].append(boxes[keep])
             pred_dict['scores'].append(scores[keep])
-            pred_dict['batch_ids'].append(torch.full((len(keep),), i, device=labels.device))
+            pred_dict['batch_ids'].append(torch.full_like(keep, i, dtype=torch.int64))
 
-        # Concatenate different image predictions into single tensor
-        pred_dict = {k: torch.cat(v, dim=0) for k, v in pred_dict.items()}
+        # Concatenate different image predictions
+        pred_dict = {k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'}
+        pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
 
         return pred_dict
 
@@ -375,7 +374,7 @@ class RetinaHead(nn.Module):
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                    - boxes (FloatTensor): boxes of shape [num_preds_total, 4] in (left, top, width, height) format;
+                    - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
@@ -390,6 +389,10 @@ class RetinaHead(nn.Module):
             pred_dict = self.make_predictions(logit_maps, delta_maps)
             return pred_dict
 
+        # Get map ids
+        map_ids = [torch.full_like(logit_map[:, :, 0], i, dtype=torch.uint8) for i, logit_map in enumerate(logit_maps)]
+        map_ids = torch.cat(map_ids, dim=1)
+
         # Compute weighted classification loss (trainval only)
         anchor_labels = tgt_dict['anchor_labels']
         cls_mask = anchor_labels >= 0
@@ -403,12 +406,9 @@ class RetinaHead(nn.Module):
         cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'none'}
         cls_losses = sigmoid_focal_loss(cls_logits, cls_targets, **cls_kwargs)
 
-        map_sizes = [0] + [logit_map.shape[1] for logit_map in logit_maps]
-        cls_map_sizes = [cls_mask[i0:i1].sum() for i0, i1 in zip(map_sizes[:-1], map_sizes[1:])]
-
-        cls_map_losses = torch.cat([map_losses.sum()[None] for map_losses in cls_losses.split(cls_map_sizes, dim=0)])
-        cls_map_losses = cls_map_losses / self.loss_normalizers
-        cls_loss = self.cls_loss_weight * cls_map_losses.sum()
+        cls_map_ids = map_ids[cls_mask]
+        cls_map_losses = [cls_losses[cls_map_ids == i].sum() / self.loss_normalizers[i] for i in range(len(feat_maps))]
+        cls_loss = self.cls_loss_weight * sum(cls_map_losses)
 
         # Compute weighted bounding box regression loss (trainval only)
         box_mask = cls_mask & (anchor_labels != self.num_classes)
@@ -418,10 +418,9 @@ class RetinaHead(nn.Module):
         box_kwargs = {'beta': self.smooth_l1_beta, 'reduction': 'none'}
         box_losses = smooth_l1_loss(box_preds, box_targets, **box_kwargs)
 
-        box_map_sizes = [box_mask[i0:i1].sum() for i0, i1 in zip(map_sizes[:-1], map_sizes[1:])]
-        box_map_losses = torch.cat([map_losses.sum()[None] for map_losses in box_losses.split(box_map_sizes, dim=0)])
-        box_map_losses = box_map_losses / self.loss_normalizers
-        box_loss = self.box_loss_weight * box_map_losses.sum()
+        box_map_ids = map_ids[box_mask]
+        box_map_losses = [box_losses[box_map_ids == i].sum() / self.loss_normalizers[i] for i in range(len(feat_maps))]
+        box_loss = self.box_loss_weight * sum(box_map_losses)
 
         # Place weighted losses into loss dictionary (trainval only)
         loss_dict = {'ret_cls_loss': cls_loss, 'ret_box_loss': box_loss}

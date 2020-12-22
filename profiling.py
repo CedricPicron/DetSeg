@@ -129,12 +129,13 @@ elif profiling_args.model == 'bivinet_ret':
     main_args.ret_num_convs = 4
     model = build_bivinet(main_args).to('cuda')
 
-    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
+    batch_size = main_args.batch_size
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes[:, 2:] += boxes[:, :2]
+    boxes = Boxes(boxes, 'cxcywh', False, [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
