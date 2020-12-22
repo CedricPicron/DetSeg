@@ -6,6 +6,8 @@ import math
 from detectron2.layers import batched_nms
 from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 from detectron2.modeling.matcher import Matcher
+from detectron2.structures.instances import Instances
+from detectron2.utils.visualizer import Visualizer
 from fvcore.nn import sigmoid_focal_loss, smooth_l1_loss
 import torch
 from torch import nn
@@ -40,9 +42,11 @@ class RetinaHead(nn.Module):
         test_max_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
         test_nms_threshold (float): Threshold used during NMS to remove duplicate detections.
         test_max_detections (int): Maximum number of detections to keep per image after NMS.
+
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict):
+    def __init__(self, num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata):
         """
         Initializes the RetinaHead module.
 
@@ -70,6 +74,8 @@ class RetinaHead(nn.Module):
                 - max_candidates (int): maximum number of candidate detections to keep per map of an image for NMS;
                 - nms_threshold (float): threshold used during NMS to remove duplicate detections;
                 - max_detections (int): maximum number of detections to keep per image after NMS.
+
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -114,6 +120,9 @@ class RetinaHead(nn.Module):
         self.test_max_candidates = test_dict['max_candidates']
         self.test_nms_threshold = test_dict['nms_threshold']
         self.test_max_detections = test_dict['max_detections']
+
+        # Initialization of metadata attribute
+        self.metadata = metadata
 
     @torch.no_grad()
     def forward_init(self, feat_maps, tgt_dict=None):
@@ -298,7 +307,7 @@ class RetinaHead(nn.Module):
             pred_dict['batch_ids'].append(torch.full_like(keep, i, dtype=torch.int64))
 
         # Concatenate different image predictions
-        pred_dict = {k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'}
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
         pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
 
         return pred_dict
@@ -459,6 +468,81 @@ class RetinaHead(nn.Module):
 
         return loss_dict, analysis_dict
 
+    def visualize(self, images, pred_dict, tgt_dict):
+        """
+        Draws predicted and target bounding boxes on given full-resolution images.
+
+        Args:
+            images (Images): Images structure containing the batched images.
+
+            pred_dict (Dict): Prediction dictionary containing at least following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+
+        Returns:
+            images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
+        """
+
+        # Prepare predictions
+        pred_boxes = pred_dict['boxes'].to_format('xyxy')
+        well_defined = pred_boxes.well_defined()
+        pred_boxes = pred_boxes.boxes[well_defined]
+
+        pred_labels = pred_dict['labels'][well_defined]
+        pred_scores = pred_dict['scores'][well_defined]
+        pred_batch_ids = pred_dict['batch_ids'][well_defined]
+
+        # Prepare targets
+        tgt_boxes = tgt_dict['boxes'].to_format('xyxy').boxes
+
+        # Concatenate predictions and targets
+        labels = torch.cat([pred_labels, tgt_dict['labels']])
+        boxes = torch.cat([pred_boxes, tgt_boxes])
+        scores = torch.cat([pred_scores, torch.ones_like(tgt_dict['labels'], dtype=torch.float)])
+
+        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+        pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
+        sizes = torch.cat([pred_sizes, pred_sizes[-1] + tgt_dict['sizes'][1:]])
+
+        # Get image sizes without padding in (width, height) format
+        img_sizes = images.size(with_padding=False)
+
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
+
+        # Get number of images and initialize images dictionary
+        num_images = len(images)
+        images_dict = {}
+
+        # Draw bounding boxes on images and add them to images dictionary
+        for i, i0, i1 in zip(range(2*num_images), sizes[:-1], sizes[1:]):
+            image_id = i % num_images
+            visualizer = Visualizer(images[image_id], metadata=self.metadata)
+
+            img_size = img_sizes[image_id]
+            img_size = (img_size[1], img_size[0])
+
+            img_labels = labels[i0:i1].cpu().numpy()
+            img_boxes = boxes[i0:i1].cpu().numpy()
+            img_scores = scores[i0:i1].cpu().numpy()
+
+            instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+            visualizer.draw_instance_predictions(instances)
+
+            annotated_image = visualizer.output.get_image()
+            key = f'pred_{image_id}' if (i // num_images) == 0 else f'tgt_{image_id}'
+            images_dict[f'ret_det_{key}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict
+
 
 class RetinaPredHead(nn.Module):
     """
@@ -599,7 +683,10 @@ def build_det_heads(args):
             test_dict = {**test_dict, 'nms_threshold': args.ret_nms_threshold}
             test_dict = {**test_dict, 'max_detections': args.ret_max_detections}
 
-            retina_head = RetinaHead(args.num_classes, map_ids, feat_sizes, pred_head_dict, loss_dict, test_dict)
+            num_classes = args.num_classes
+            metadata = args.val_metadata
+
+            retina_head = RetinaHead(num_classes, map_ids, feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
             det_heads.append(retina_head)
 
         else:

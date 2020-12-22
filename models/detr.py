@@ -373,7 +373,7 @@ def build_detr(args):
     train_bbox_head = args.lr_bbox_head > 0
 
     train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
-    metadata = args.train_metadata if args.dataset == 'coco' else None
+    metadata = args.val_metadata if args.dataset == 'coco' else None
     detr = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
 
     return detr

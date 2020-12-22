@@ -586,7 +586,7 @@ class SemanticSegHead(nn.Module):
         Args:
             images (Images): Images structure containing the batched images.
 
-            pred_dict (Dict): Prediction dictionary containing following key:
+            pred_dict (Dict): Prediction dictionary containing at least following key:
                 - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
