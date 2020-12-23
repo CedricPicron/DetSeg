@@ -149,13 +149,11 @@ def build_backbone(args):
 
     # Build desired backbone module
     if args.meta_arch == 'BiViNet':
-        assert_msg = f"only '--min_resolution >= 2' ({args.min_resolution_id} given) is currently supported"
-        assert args.min_resolution_id >= 2, assert_msg
-        assert_msg = f"only '--max_resolution <= 6' ({args.max_resolution_id} given) is currently supported"
-        assert args.max_resolution_id <= 6, assert_msg
+        assert_msg = f"only '--min_downsampling >= 2' (got {args.min_downsampling}) is currently supported"
+        assert args.min_downsampling >= 2, assert_msg
         assert not args.dilation, "'--dilation' is not allowed for meta-architecture BiViNet"
 
-        map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
+        map_ids = range(args.min_downsampling, args.max_downsampling+1)
         return_layers = {f'layer{i-1}': str(i) for i in map_ids if i >= 2 and i <= 5}
         backbone = Backbone(args.backbone, args.dilation, return_layers, train_backbone)
 

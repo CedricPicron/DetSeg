@@ -55,19 +55,29 @@ def get_parser():
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
 
     # BiViNet
-    parser.add_argument('--min_resolution_id', default=3, type=int, help='highest resolution downsampling exponent')
-    parser.add_argument('--max_resolution_id', default=6, type=int, help='lowest resolution downsampling exponent')
+    parser.add_argument('--bvn_multi_step', action='store_true', help='whether to use multi-step parameter updates')
+    parser.add_argument('--min_downsampling', default=3, type=int, help='minumum downsampling exponent')
+    parser.add_argument('--max_downsampling', default=6, type=int, help='maximum downsampling exponent')
 
-    # * BiCore
-    parser.add_argument('--num_core_layers', default=4, type=int, help='number of core layers of BiViNet module')
-    parser.add_argument('--bicore_type', default='BiAttnConv', type=str, help='type of BiCore module')
-    parser.add_argument('--base_feat_size', default=8, type=int, help='feature size of highest resolution map')
-    parser.add_argument('--base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
-    parser.add_argument('--max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
-    parser.add_argument('--max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
-    parser.add_argument('--no_pos_feats', action='store_true', help='whether to disable local position features')
-    parser.add_argument('--bicore_dropout', default=0.1, type=float, help='dropout value used with BiCore modules')
-    parser.add_argument('--ffn_size_multiplier', default=8, type=int, help='size multiplier used during BiCore FFN')
+    # * Core
+    parser.add_argument('--core_type', default='BLA', choices=['BLA', 'FPN'], help='type of core module to be used')
+
+    # ** BLA (Bidirectional Local Attention)
+    parser.add_argument('--bla_num_layers', default=4, type=int, help='number of consecutive BLA core layers')
+
+    parser.add_argument('--bla_base_feat_size', default=8, type=int, help='feature size of highest resolution map')
+    parser.add_argument('--bla_base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
+    parser.add_argument('--bla_max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
+    parser.add_argument('--bla_max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
+
+    parser.add_argument('--bla_no_pos_feats', action='store_true', help='whether to disable local position features')
+    parser.add_argument('--bla_dropout', default=0.1, type=float, help='dropout value used with BLA core modules')
+    parser.add_argument('--bla_ffn_size_multiplier', default=8, type=int, help='size multiplier used during BLA FFN')
+
+    # ** FPN (Feature Pyramid Network)
+    parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
+    parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')
+    parser.add_argument('--fpn_bottom_up_layers', default=2, type=int, help='number of FPN bottom-up layers')
 
     # * Heads
     # ** Detection heads
@@ -167,7 +177,6 @@ def get_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
     # * Learning rates (BiViNet)
-    parser.add_argument('--lr_projs', default=1e-4, type=float, help='BiViNet projectors learning rate')
     parser.add_argument('--lr_core', default=1e-4, type=float, help='BiVeNet core learning rate')
     parser.add_argument('--lr_heads', default=1e-4, type=float, help='BiViNet heads learning rate')
 

@@ -1,5 +1,5 @@
 """
-Bidirectional core modules and build function.
+BLA module and build function.
 """
 
 import torch
@@ -7,10 +7,12 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+from models.projector import Projector
 
-class BiAttnConv(nn.Module):
+
+class BLA(nn.Module):
     """
-    Class implementing the bidirectional attention-based convolution module.
+    Class implementing the BLA (Bidirectional Local Attention) module.
 
     Attributes:
         feat_sizes (List): List of size [num_maps] containing the feature size of each map.
@@ -33,13 +35,14 @@ class BiAttnConv(nn.Module):
         ffn_layernorms (nn.ModuleList): List of size [num_maps] with FFN layernorm modules.
     """
 
-    def __init__(self, feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier):
+    def __init__(self, in_feat_sizes, out_feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier):
         """
-        Initializes the BiAttnConv module.
+        Initializes the BLA module.
 
         Args:
-            feat_sizes (List): List of size [num_maps] containing the feature size of each map.
-            num_heads_list (List): List of size [num_maps] containing the number of heads for each map.
+            in_feat_sizes (List): List of size [num_in_maps] containing the feature size of each input map.
+            out_feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
+            num_heads_list (List): List of size [num_out_maps] containing the number of heads for each output map.
             with_pos_feats (bool): Boolean indicating whether local position features are used and learned.
             dropout (float): Dropout probability used throughout the module.
             ffn_size_multiplier (int): Feature size multiplier used for FFN hidden layer feature sizes.
@@ -49,53 +52,72 @@ class BiAttnConv(nn.Module):
         super().__init__()
 
         # Check inputs
-        check = len(feat_sizes) == len(num_heads_list)
-        msg = f"Inconsistent lengths between 'feat_sizes' ({len(feat_sizes)}) and 'num_heads' ({len(num_heads_list)})"
+        num_maps_delta = len(out_feat_sizes) - len(in_feat_sizes)
+        msg = f"Fewer output maps than inputs map are not allowed (got {abs(num_maps_delta)} fewer)."
+        assert num_maps_delta >= 0, msg
+
+        msg = f"Only one more output map than input map is allowed (got {num_maps_delta} more)."
+        assert num_maps_delta <= 1, msg
+
+        check = all([feat_size % num_heads == 0 for feat_size, num_heads in zip(out_feat_sizes, num_heads_list)])
+        msg = f"Feature sizes ({out_feat_sizes}) should be divisible by their number of heads ({num_heads_list})."
         assert check, msg
 
-        check = all([feat_size % num_heads == 0 for feat_size, num_heads in zip(feat_sizes, num_heads_list)])
-        msg = f"Feature sizes ({feat_sizes}) should be divisible by their number of heads ({num_heads_list})"
-        assert check, msg
+        # Initialize input projector
+        fixed_settings = {'proj_type': 'conv1', 'conv_stride': 1}
+        proj_dicts = []
+
+        for in_map_id, out_feat_size in enumerate(out_feat_sizes):
+            proj_dict = {'in_map_id': in_map_id, 'out_feat_size': out_feat_size, **fixed_settings}
+            proj_dicts.append(proj_dict)
+
+        if num_maps_delta == 1:
+            fixed_settings = {'proj_type': 'conv3', 'conv_stride': 2}
+            proj_dict = {'in_map_id': len(in_feat_sizes)-1, 'out_feat_size': out_feat_sizes[-1]}
+
+        self.in_proj = Projector(in_feat_sizes, proj_dicts)
 
         # Set feature sizes, number of heads and attention scalings attributes
-        self.feat_sizes = feat_sizes
+        self.feat_sizes = out_feat_sizes
         self.num_heads_list = num_heads_list
-        self.attn_scalings = [float(f//num_heads)**-0.25 for f, num_heads in zip(feat_sizes, num_heads_list)]
+        self.attn_scalings = [float(f//num_heads)**-0.25 for f, num_heads in zip(out_feat_sizes, num_heads_list)]
 
-        # Initializing input projection parameters
-        bot_proj_size = 4*feat_sizes[0] + 2*feat_sizes[1]
-        mid_proj_sizes = [2*i + 5*j + 2*k for i, j, k in zip(feat_sizes[:-2], feat_sizes[1:-1], feat_sizes[2:])]
-        top_proj_size = 2*feat_sizes[-2] + 4*feat_sizes[-1]
+        # Initialize input projection parameters
+        fs = out_feat_sizes
+        bot_proj_size = 4*fs[0] + 2*fs[1]
+        mid_proj_sizes = [2*f0 + 5*f1 + 2*f2 for f0, f1, f2 in zip(fs[:-2], fs[1:-1], fs[2:])]
+        top_proj_size = 2*fs[-2] + 4*fs[-1]
         proj_sizes = [bot_proj_size, *mid_proj_sizes, top_proj_size]
 
-        self.in_proj_weights = nn.ParameterList([Parameter(torch.empty(p, f)) for p, f in zip(proj_sizes, feat_sizes)])
-        self.in_proj_biases = nn.ParameterList([Parameter(torch.empty(p)) for p in proj_sizes])
+        self.attn_in_weights = nn.ParameterList([Parameter(torch.empty(p, f)) for p, f in zip(proj_sizes, fs)])
+        self.attn_in_biases = nn.ParameterList([Parameter(torch.empty(p)) for p in proj_sizes])
 
         # Set attribute determining whether position features are used and learned
         self.with_pos_feats = with_pos_feats
 
-        # Initializing position features, if desired
+        # Initialize position features if requested
         if with_pos_feats:
-            bot_pos_size = 2*feat_sizes[0]
-            mid_pos_size = [3*f for f in feat_sizes[1:-1]]
-            top_pos_size = 2*feat_sizes[-1]
+            bot_pos_size = 2*fs[0]
+            mid_pos_size = [3*f for f in fs[1:-1]]
+            top_pos_size = 2*fs[-1]
+
             pos_sizes = [bot_pos_size, *mid_pos_size, top_pos_size]
-            self.pos_feats = nn.ParameterList([Parameter(torch.empty(pos_size, 9)) for pos_size in pos_sizes])
+            self.pos_feats = nn.ParameterList([Parameter(torch.empty(p, 9)) for p in pos_sizes])
 
-        # Initializing output projection parameters
-        self.out_proj_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in feat_sizes])
-        self.out_proj_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in feat_sizes])
+        # Initialize output projection parameters
+        self.attn_out_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in fs])
+        self.attn_out_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in fs])
 
-        # Initializing attention dropout and layernorm modules
-        self.attn_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in feat_sizes])
-        self.attn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in feat_sizes])
+        # Initialize attention dropout and layernorm modules
+        self.attn_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
+        self.attn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in fs])
 
-        # Initializing feedforward network linear, dropout and layernorm modules
-        self.ffn_in_projs = nn.ModuleList([nn.Linear(f, ffn_size_multiplier*f) for f in feat_sizes])
-        self.ffn_out_projs = nn.ModuleList([nn.Linear(ffn_size_multiplier*f, f) for f in feat_sizes])
-        self.ffn_in_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in feat_sizes])
-        self.ffn_out_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in feat_sizes])
-        self.ffn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in feat_sizes])
+        # Initialize feedforward network linear, dropout and layernorm modules
+        self.ffn_in_projs = nn.ModuleList([nn.Linear(f, ffn_size_multiplier*f) for f in fs])
+        self.ffn_out_projs = nn.ModuleList([nn.Linear(ffn_size_multiplier*f, f) for f in fs])
+        self.ffn_in_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
+        self.ffn_out_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
+        self.ffn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in fs])
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -111,7 +133,7 @@ class BiAttnConv(nn.Module):
 
     def forward(self, feat_maps):
         """
-        Forward method of the BiAttnConv module.
+        Forward method of the BLA module.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
@@ -263,30 +285,32 @@ class BiAttnConv(nn.Module):
         return feat_maps
 
 
-def build_bicore(args):
+def build_bla(args):
     """
-    Build BiCore module from command-line arguments.
+    Build BLA module from command-line arguments.
 
     Args:
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        bicore (nn.Module): The specified BiCore module.
-
-    Raises:
-        ValueError: Error when unknown BiCore type was provided.
+        bla (nn.Module): The specified BLA module.
     """
 
-    # Get feature sizes and number of heads list
-    map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
-    feat_sizes = [min((args.base_feat_size * 2**i, args.max_feat_size)) for i in map_ids]
-    num_heads_list = [min((args.base_num_heads * 2**i, args.max_num_heads)) for i in map_ids]
+    # Check command-line arguments
+    min_id, max_id = (args.bla_min_downsampling, args.bla_max_downsampling)
+    assert_msg = "'--bla_max_downsampling' ({max_id}) should be larger than '--bla_min_downsampling' ({min_id})"
+    assert max_id > min_id, assert_msg
 
-    # Build desired BiCore module
-    if args.bicore_type == 'BiAttnConv':
-        with_pos_feats = not args.no_pos_feats
-        bicore = BiAttnConv(feat_sizes, num_heads_list, with_pos_feats, args.bicore_dropout, args.ffn_size_multiplier)
-    else:
-        raise ValueError(f"Unknown BiCore type '{args.bicore_type}' was provided.")
+    # Get input arguments
+    in_feat_sizes = args.backbone.feat_sizes
+    out_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in range(min_id, max_id+1)]
+    num_heads_list = [min((args.bla_base_num_heads * 2**i, args.bla_max_num_heads)) for i in range(min_id, max_id+1)]
 
-    return bicore
+    with_pos_feats = not args.bla_no_pos_feats
+    dropout = args.bla_dropout
+    ffn_size_multiplier = args.bla_ffn_size_multiplier
+
+    # Build BLA module
+    bla = BLA(in_feat_sizes, out_feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier)
+
+    return bla
