@@ -149,8 +149,6 @@ def build_backbone(args):
 
     # Build desired backbone module
     if args.meta_arch == 'BiViNet':
-        assert_msg = f"only '--min_downsampling >= 2' (got {args.min_downsampling}) is currently supported"
-        assert args.min_downsampling >= 2, assert_msg
         assert not args.dilation, "'--dilation' is not allowed for meta-architecture BiViNet"
 
         map_ids = range(args.min_downsampling, args.max_downsampling+1)

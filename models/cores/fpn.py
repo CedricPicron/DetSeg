@@ -67,14 +67,11 @@ class FPN(nn.Module):
         if bottom_up_dict:
             feat_sizes = [in_feat_sizes[-1], *bottom_up_dict['feat_sizes']]
             conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
-            bottom_up_layers = []
+            self.bottom_up = nn.ModuleList([nn.Conv2d(feat_sizes[0], feat_sizes[1], **conv_kwargs)])
 
-            for in_size, out_size in zip(feat_sizes[:-2], feat_sizes[1:-1]):
-                bottom_up_layers.append(nn.Conv2d(in_size, out_size, **conv_kwargs))
-                bottom_up_layers.append(nn.ReLU())
-
-            bottom_up_layers.append(nn.Conv2d(feat_sizes[-2], feat_sizes[-1], **conv_kwargs))
-            self.bottom_up = nn.Sequential(*bottom_up_layers)
+            for in_size, out_size in zip(feat_sizes[1:-1], feat_sizes[2:]):
+                layers = [nn.ReLU(), nn.Conv2d(in_size, out_size, **conv_kwargs)]
+                self.bottom_up.append(nn.Sequential(*layers))
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -121,8 +118,11 @@ class FPN(nn.Module):
 
         # Get additional bottom-up output maps
         if hasattr(self, 'bottom_up'):
-            bottom_up_feat_maps = self.bottom_up(in_feat_maps[-1])
-            out_feat_maps.extend(bottom_up_feat_maps)
+            bottom_up_feat_map = in_feat_maps[-1]
+
+            for module in self.bottom_up:
+                bottom_up_feat_map = module(bottom_up_feat_map)
+                out_feat_maps.append(bottom_up_feat_map)
 
         return out_feat_maps
 

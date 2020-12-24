@@ -1,6 +1,7 @@
 """
 BLA module and build function.
 """
+from copy import deepcopy
 
 import torch
 from torch import nn
@@ -15,37 +16,47 @@ class BLA(nn.Module):
     Class implementing the BLA (Bidirectional Local Attention) module.
 
     Attributes:
-        feat_sizes (List): List of size [num_maps] containing the feature size of each map.
-        num_heads_list (List): List of size [num_maps] containing the number of heads for each map.
-        attn_scalings (List): List of size [num_maps] containing attention scale factors.
+        num_layers (int): Integer containing the number of BLA update layers.
+        in_proj (Projector): Module computing the initial output feature maps from input feature maps.
 
-        in_proj_weights (nn.ParameterList): List of size [num_maps] with input projection matrices.
-        in_proj_biases (nn.ParameterList): List of size [num_maps] with input projection biases.
-        with_pos_feats (bool): Boolean indicating whether local position features are used and learned.
-        pos_feats (nn.ParameterList, optional): List of size [num_maps] with local position features.
-        out_proj_weights (nn.ParameterList): List of size [num_maps] with output projection matrices.
-        out_proj_biases (nn.ParameterList): List of size [num_maps] with output projection biases.
-        attn_dropouts (nn.ModuleList): List of size [num_maps] with attention dropout modules.
-        attn_layernorms (nn.ModuleList): List of size [num_maps] with attention layernorm modules.
+        feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
+        num_heads_list (List): List of size [num_out_maps] containing the number of heads for each out map.
+        attn_scalings (List): List of size [num_out_maps] containing attention scale factors.7
 
-        ffn_in_projs (nn.ModuleList): List of size [num_maps] with FFN input projection modules.
-        ffn_out_projs (nn.ModuleList): List of size [num_maps] with FFN output projection modules.
-        ffn_in_dropouts (nn.ModuleList): List of size [num_maps] with FFN input dropout modules.
-        ffn_out_dropouts (nn.ModuleList): List of size [num_maps] with FFN output dropout modules.
-        ffn_layernorms (nn.ModuleList): List of size [num_maps] with FFN layernorm modules.
+        attn_dropout (float): Dropout probability (between 0 and 1) used during attention computation.
+        ffn_dropout (float): Dropout probability (between 0 and 1) used during FFN computation.
+
+        attn_in_weights (nn.ModuleList): List [num_layers] with lists [num_out_maps] of input projection matrices.
+        attn_in_biases (nn.ModuleList): List [num_layers] with lists [num_out_maps] of input projection biases.
+        attn_out_weights (nn.ModuleList): List [num_layers] with lists [num_out_maps] of output projection matrices.
+        attn_out_biases (nn.ModuleList): List [num_layers] with lists [num_out_maps] of output projection biases.
+        attn_layernorms (nn.ModuleList): List [num_layers] with lists [num_out_maps] of attention layernorm modules.
+
+        pos_attn (bool): Boolean indicating whether local position features are used and learned.
+        pos_feats (nn.ModuleList): Optional List [num_layers] with lists [num_out_maps] of local position features.
+
+        ffn_in_projs (nn.ModuleList): List [num_layers] with lists [num_out_maps] of FFN input projection modules.
+        ffn_out_projs (nn.ModuleList): List [num_layers] with lists [num_out_maps] of FFN output projection modules.
+        ffn_layernorms (nn.ModuleList): List [num_layers] with lists [num_out_maps] of FFN layernorm modules.
     """
 
-    def __init__(self, in_feat_sizes, out_feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier):
+    def __init__(self, num_layers, in_feat_sizes, out_feat_sizes, attn_dict, ffn_dict):
         """
         Initializes the BLA module.
 
         Args:
+            num_layers (int): Integer containing the number of BLA update layers.
             in_feat_sizes (List): List of size [num_in_maps] containing the feature size of each input map.
             out_feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
-            num_heads_list (List): List of size [num_out_maps] containing the number of heads for each output map.
-            with_pos_feats (bool): Boolean indicating whether local position features are used and learned.
-            dropout (float): Dropout probability used throughout the module.
-            ffn_size_multiplier (int): Feature size multiplier used for FFN hidden layer feature sizes.
+
+            attn_dict (Dict): Attention dictionary containing following keys:
+                - num_heads_list (List): list of size [num_out_maps] containing the number of heads per output map;
+                - pos_attn (bool): boolean indicating whether local position features are used and learned;
+                - dropout (float): dropout probability (between 0 and 1) used during attention computation.
+
+            ffn_dict (Dict): FFN (feed-forward network) dictionary containing following keys:
+                - size_multiplier (int): feature size multiplier used for FFN hidden layer feature sizes;
+                - dropout (float): dropout probability (between 0 and 1) used during FFN computation.
         """
 
         # Initialization of default nn.Module
@@ -59,21 +70,26 @@ class BLA(nn.Module):
         msg = f"Only one more output map than input map is allowed (got {num_maps_delta} more)."
         assert num_maps_delta <= 1, msg
 
+        num_heads_list = attn_dict['num_heads_list']
         check = all([feat_size % num_heads == 0 for feat_size, num_heads in zip(out_feat_sizes, num_heads_list)])
         msg = f"Feature sizes ({out_feat_sizes}) should be divisible by their number of heads ({num_heads_list})."
         assert check, msg
+
+        # Set number of layers attribute
+        self.num_layers = num_layers
 
         # Initialize input projector
         fixed_settings = {'proj_type': 'conv1', 'conv_stride': 1}
         proj_dicts = []
 
-        for in_map_id, out_feat_size in enumerate(out_feat_sizes):
-            proj_dict = {'in_map_id': in_map_id, 'out_feat_size': out_feat_size, **fixed_settings}
+        for i in range(len(in_feat_sizes)):
+            proj_dict = {'in_map_id': i, 'out_feat_size': out_feat_sizes[i], **fixed_settings}
             proj_dicts.append(proj_dict)
 
         if num_maps_delta == 1:
-            fixed_settings = {'proj_type': 'conv3', 'conv_stride': 2}
             proj_dict = {'in_map_id': len(in_feat_sizes)-1, 'out_feat_size': out_feat_sizes[-1]}
+            proj_dict = {**proj_dict, 'proj_type': 'conv3', 'conv_stride': 2}
+            proj_dicts.append(proj_dict)
 
         self.in_proj = Projector(in_feat_sizes, proj_dicts)
 
@@ -81,6 +97,10 @@ class BLA(nn.Module):
         self.feat_sizes = out_feat_sizes
         self.num_heads_list = num_heads_list
         self.attn_scalings = [float(f//num_heads)**-0.25 for f, num_heads in zip(out_feat_sizes, num_heads_list)]
+
+        # Set dropout attributes
+        self.attn_dropout = attn_dict['dropout']
+        self.ffn_dropout = ffn_dict['dropout']
 
         # Initialize input projection parameters
         fs = out_feat_sizes
@@ -92,11 +112,18 @@ class BLA(nn.Module):
         self.attn_in_weights = nn.ParameterList([Parameter(torch.empty(p, f)) for p, f in zip(proj_sizes, fs)])
         self.attn_in_biases = nn.ParameterList([Parameter(torch.empty(p)) for p in proj_sizes])
 
+        # Initialize output projection parameters
+        self.attn_out_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in fs])
+        self.attn_out_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in fs])
+
+        # Initialize attention layernorm modules
+        self.attn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in fs])
+
         # Set attribute determining whether position features are used and learned
-        self.with_pos_feats = with_pos_feats
+        self.pos_attn = attn_dict['pos_attn']
 
         # Initialize position features if requested
-        if with_pos_feats:
+        if self.pos_attn:
             bot_pos_size = 2*fs[0]
             mid_pos_size = [3*f for f in fs[1:-1]]
             top_pos_size = 2*fs[-1]
@@ -104,20 +131,18 @@ class BLA(nn.Module):
             pos_sizes = [bot_pos_size, *mid_pos_size, top_pos_size]
             self.pos_feats = nn.ParameterList([Parameter(torch.empty(p, 9)) for p in pos_sizes])
 
-        # Initialize output projection parameters
-        self.attn_out_weights = nn.ParameterList([Parameter(torch.empty(f, 3*f)) for f in fs])
-        self.attn_out_biases = nn.ParameterList([Parameter(torch.empty(3*f)) for f in fs])
-
-        # Initialize attention dropout and layernorm modules
-        self.attn_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
-        self.attn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in fs])
-
-        # Initialize feedforward network linear, dropout and layernorm modules
-        self.ffn_in_projs = nn.ModuleList([nn.Linear(f, ffn_size_multiplier*f) for f in fs])
-        self.ffn_out_projs = nn.ModuleList([nn.Linear(ffn_size_multiplier*f, f) for f in fs])
-        self.ffn_in_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
-        self.ffn_out_dropouts = nn.ModuleList([nn.Dropout(dropout) for _ in fs])
+        # Initialize FFN projection and layernorm modules
+        size_multiplier = ffn_dict['size_multiplier']
+        self.ffn_in_projs = nn.ModuleList([nn.Linear(f, size_multiplier*f) for f in fs])
+        self.ffn_out_projs = nn.ModuleList([nn.Linear(size_multiplier*f, f) for f in fs])
         self.ffn_layernorms = nn.ModuleList([nn.LayerNorm(f) for f in fs])
+
+        # Initialize separate update layers
+        for attr_name in dir(self):
+            module = getattr(self, attr_name)
+
+            if isinstance(module, nn.ModuleList) or isinstance(module, nn.ParameterList):
+                setattr(self, attr_name, nn.ModuleList([deepcopy(module) for _ in range(num_layers)]))
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -127,35 +152,59 @@ class BLA(nn.Module):
         Resets module parameters to default initial values.
         """
 
-        [nn.init.xavier_uniform_(param) for param in self.parameters() if param.dim() > 1]
-        [nn.init.constant_(bias, 0.0) for bias in self.in_proj_biases]
-        [nn.init.constant_(bias, 0.0) for bias in self.out_proj_biases]
+        [nn.init.xavier_uniform_(layer_weight) for weights in self.attn_in_weights for layer_weight in weights]
+        [nn.init.xavier_uniform_(layer_weight) for weights in self.attn_out_weights for layer_weight in weights]
+        [nn.init.zeros_(layer_bias) for biases in self.attn_in_biases for layer_bias in biases]
+        [nn.init.zeros_(layer_bias) for biases in self.attn_out_biases for layer_bias in biases]
+        [nn.init.zeros_(layer_pos_feats) for pos_feats in self.pos_feats for layer_pos_feats in pos_feats]
 
-    def forward(self, feat_maps):
+    def forward_init(self, in_feat_maps, **kwargs):
         """
-        Forward method of the BLA module.
+        Forward initialization method of the BLA module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            in_feat_maps (List): Input feature maps [num_in_maps] of shape [batch_size, feat_size, fH, fW].
 
         Returns:
-            feat_maps (List): List of size [num_maps] of updated feature maps of shape [batch_size, fH, fW, feat_size].
+            out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
         """
 
-        # Project feature maps
+        # Get output feature maps
+        out_feat_maps = self.in_proj(in_feat_maps)
+
+        return out_feat_maps
+
+    def forward_update(self, in_feat_maps, layer_id, **kwargs):
+        """
+        Forward update method of the BLA module.
+
+        Args:
+            in_feat_maps (List): Input feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
+
+        Returns:
+            out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
+        """
+
+        # Get number of maps and batch size
+        num_maps = len(in_feat_maps)
+        batch_size = len(in_feat_maps[0])
+
+        # Permute input feature maps
+        in_feat_maps = [in_feat_map.permute(0, 2, 3, 1) for in_feat_map in in_feat_maps]
+
+        # Project input feature maps
         proj_maps = []
-        for feat_map, in_proj_weight, in_proj_bias in zip(feat_maps, self.in_proj_weights, self.in_proj_biases):
-            proj_map = F.linear(feat_map, in_proj_weight, in_proj_bias)
+        zip_list = [in_feat_maps, self.attn_in_weights[layer_id], self.attn_in_biases[layer_id]]
+
+        for in_feat_map, in_weight, in_bias in zip(*zip_list):
+            proj_map = F.linear(in_feat_map, in_weight, in_bias)
             proj_maps.append(proj_map)
 
-        # Get batch size
-        batch_size = feat_maps[0].shape[0]
-
         # Perform self-attention
-        zip_list = [range(len(feat_maps)), proj_maps, self.feat_sizes, self.attn_scalings]
-        zip_list = [*zip_list, self.num_heads_list, self.out_proj_weights, self.out_proj_biases]
-
         self_attn_maps = []
+        zip_list = [range(num_maps), proj_maps, self.feat_sizes, self.attn_scalings]
+        zip_list = [*zip_list, self.num_heads_list, self.attn_out_weights[layer_id], self.attn_out_biases[layer_id]]
+
         for i, proj_map, f, scale, num_heads, out_weight, out_bias in zip(*zip_list):
             H, W = proj_map.shape[1:-1]
 
@@ -168,7 +217,7 @@ class BLA(nn.Module):
             sizes = [batch_size, H, W, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H, W, f, 9)
-            key_map = key_map + self.pos_feats[i][:f, :] if self.with_pos_feats else key_map
+            key_map = key_map + self.pos_feats[layer_id][i][:f, :] if self.pos_attn else key_map
             key_map = key_map.view(batch_size, H, W, num_heads, -1, 9)
 
             value_map = proj_map[:, :, :, 2*f:3*f]
@@ -182,14 +231,14 @@ class BLA(nn.Module):
             self_attn_maps.append(self_attn_map)
 
         # Perform top-down cross-attention
-        last_map_bools = [i == len(feat_maps)-1 for i in range(len(feat_maps))]
+        last_map_bools = [i == num_maps-1 for i in range(num_maps)]
         interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
-
-        zip_list = [range(len(feat_maps)-1), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
-        zip_list = [*zip_list, self.attn_scalings[:-1], last_map_bools[1:], self.num_heads_list[:-1]]
-        zip_list = [*zip_list, self.out_proj_weights[:-1], self.out_proj_biases[:-1]]
-
         top_down_attn_maps = []
+
+        zip_list = [range(num_maps-1), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
+        zip_list = [*zip_list, self.attn_scalings[:-1], last_map_bools[1:], self.num_heads_list[:-1]]
+        zip_list = [*zip_list, self.attn_out_weights[layer_id][:-1], self.attn_out_biases[layer_id][:-1]]
+
         for i, proj_map1, proj_map2, f, g, scale, last_map, num_heads, out_weight, out_bias in zip(*zip_list):
             H1, W1 = proj_map1.shape[1:-1]
             H2, W2 = proj_map2.shape[1:-1]
@@ -203,7 +252,7 @@ class BLA(nn.Module):
             sizes = [batch_size, H2, W2, f, 3, 3]
             strides = [*key_map.stride(), key_map.stride()[1], key_map.stride()[2]]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H2, W2, f, 9)
-            key_map = key_map + self.pos_feats[i][f:2*f, :] if self.with_pos_feats else key_map
+            key_map = key_map + self.pos_feats[layer_id][i][f:2*f, :] if self.pos_attn else key_map
             key_map = key_map.view(batch_size, H2, W2, num_heads, -1, 9)
 
             value_map = proj_map2[:, :, :, 3*g+f:3*g+2*f] if last_map else proj_map2[:, :, :, 4*g+f:4*g+2*f]
@@ -222,16 +271,16 @@ class BLA(nn.Module):
             top_down_attn_map = top_down_attn_map[:, :, :H1, :W1].permute(0, 2, 3, 1)
             top_down_attn_maps.append(top_down_attn_map)
 
-        top_down_attn_maps.append(torch.zeros_like(feat_maps[-1]))
+        top_down_attn_maps.append(torch.zeros_like(in_feat_maps[-1]))
 
         # Perform bottom-up cross-attention
-        first_map_bools = [i == 0 for i in range(len(feat_maps))]
+        first_map_bools = [i == 0 for i in range(num_maps)]
+        bottom_up_attn_maps = [torch.zeros_like(in_feat_maps[0])]
 
-        zip_list = [range(1, len(feat_maps)), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
+        zip_list = [range(1, num_maps), proj_maps[:-1], proj_maps[1:], self.feat_sizes[:-1], self.feat_sizes[1:]]
         zip_list = [*zip_list, self.attn_scalings[1:], first_map_bools[:-1], self.num_heads_list[1:]]
-        zip_list = [*zip_list, self.out_proj_weights[1:], self.out_proj_biases[1:]]
+        zip_list = [*zip_list, self.attn_out_weights[layer_id][1:], self.attn_out_biases[layer_id][1:]]
 
-        bottom_up_attn_maps = [torch.zeros_like(feat_maps[0])]
         for i, proj_map0, proj_map1, e, f, scale, first_map, num_heads, out_weight, out_bias in zip(*zip_list):
             H0, W0 = proj_map0.shape[1:-1]
             H1, W1 = proj_map1.shape[1:-1]
@@ -247,7 +296,7 @@ class BLA(nn.Module):
             s0, s1, s2, s3 = key_map.stride()
             strides = [s0, 2*s1, 2*s2, s3, s1, s2]
             key_map = key_map.as_strided(sizes, strides).reshape(batch_size, H1, W1, f, 9)
-            key_map = key_map + self.pos_feats[i][-f:, :] if self.with_pos_feats else key_map
+            key_map = key_map + self.pos_feats[layer_id][i][-f:, :] if self.pos_attn else key_map
             key_map = key_map.view(batch_size, H1, W1, num_heads, -1, 9)
 
             value_map = proj_map0[:, :, :, -f:] if first_map else proj_map0[:, :, :, -e-f:-e]
@@ -261,28 +310,66 @@ class BLA(nn.Module):
             bottom_up_attn_maps.append(bottom_up_attn_map)
 
         # Add attention maps together and update feature maps with additional dropout and layernorm
-        zip_list = [feat_maps, self_attn_maps, top_down_attn_maps, bottom_up_attn_maps]
-        zip_list = [*zip_list, self.attn_dropouts, self.attn_layernorms]
-
+        zip_list = [in_feat_maps, self_attn_maps, top_down_attn_maps, bottom_up_attn_maps]
+        zip_list = [*zip_list,  self.attn_layernorms[layer_id]]
         feat_maps = []
-        for feat_map, attn_map1, attn_map2, attn_map3, dropout, layernorm in zip(*zip_list):
+
+        for in_feat_map, attn_map1, attn_map2, attn_map3, attn_layernorm in zip(*zip_list):
             delta_feat_map = attn_map1 + attn_map2 + attn_map3
-            feat_map = feat_map + dropout(delta_feat_map)
-            feat_map = layernorm(feat_map)
+            feat_map = in_feat_map + F.dropout(delta_feat_map, self.attn_dropout, self.training)
+            feat_map = attn_layernorm(feat_map)
             feat_maps.append(feat_map)
 
         # Update feature maps with feedforward network (FFN)
-        zip_list = [feat_maps, self.ffn_in_projs, self.ffn_in_dropouts, self.ffn_out_projs]
-        zip_list = [*zip_list, self.ffn_out_dropouts, self.ffn_layernorms]
+        out_feat_maps = []
+        zip_list = [feat_maps, self.ffn_in_projs[layer_id], self.ffn_out_projs[layer_id]]
+        zip_list = [*zip_list, self.ffn_layernorms[layer_id]]
 
-        feat_maps = []
-        for feat_map, in_proj, in_dropout, out_proj, out_dropout, layernorm in zip(*zip_list):
-            delta_feat_map = out_proj(in_dropout(F.relu(in_proj(feat_map))))
-            feat_map = feat_map + out_dropout(delta_feat_map)
-            feat_map = layernorm(feat_map)
-            feat_maps.append(feat_map)
+        for feat_map, in_proj, out_proj, ffn_layernorm in zip(*zip_list):
+            hidden_feat_map = F.dropout(F.relu(in_proj(feat_map)), self.ffn_dropout, self.training)
+            out_feat_map = feat_map + F.dropout(out_proj(hidden_feat_map), self.ffn_dropout, self.training)
+            out_feat_map = ffn_layernorm(out_feat_map)
+            out_feat_maps.append(out_feat_map.permute(0, 3, 1, 2))
 
-        return feat_maps
+        return out_feat_maps
+
+    def forward(self, in_feat_maps, step_id=None, **kwargs):
+        """
+        Forward method of the BLA module.
+
+        Args:
+            If step_id is None:
+                in_feat_maps (List): Input feature maps [num_in_maps] of shape [batch_size, feat_size, fH, fW].
+                step_id (None): Indicates full forward pass in a single step with initialization followed by updates.
+
+            If step_id = 0:
+                in_feat_maps (List): Input feature maps [num_in_maps] of shape [batch_size, feat_size, fH, fW].
+                step_id (int): Zero integer indicating output feature maps initialization.
+
+            If step_id > 0:
+                in_feat_maps (List): Input feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
+                step_id (int): Positive integer indicating output feature maps update with layer 'step_id-1'.
+
+        Returns:
+            out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
+        """
+
+        # Initializes and updates output feature maps
+        if step_id is None:
+            out_feat_maps = self.forward_init(in_feat_maps, **kwargs)
+
+            for layer_id in range(self.num_layers):
+                out_feat_maps = self.forward_update(out_feat_maps, layer_id=layer_id, **kwargs)
+
+        # Initializes output feature maps
+        elif step_id == 0:
+            out_feat_maps = self.forward_init(in_feat_maps, **kwargs)
+
+        # Updates output feature maps
+        elif step_id > 0:
+            out_feat_maps = self.forward_update(in_feat_maps, layer_id=step_id-1, **kwargs)
+
+        return out_feat_maps
 
 
 def build_bla(args):
@@ -296,21 +383,23 @@ def build_bla(args):
         bla (nn.Module): The specified BLA module.
     """
 
-    # Check command-line arguments
-    min_id, max_id = (args.bla_min_downsampling, args.bla_max_downsampling)
-    assert_msg = "'--bla_max_downsampling' ({max_id}) should be larger than '--bla_min_downsampling' ({min_id})"
-    assert max_id > min_id, assert_msg
-
     # Get input arguments
-    in_feat_sizes = args.backbone.feat_sizes
-    out_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in range(min_id, max_id+1)]
-    num_heads_list = [min((args.bla_base_num_heads * 2**i, args.bla_max_num_heads)) for i in range(min_id, max_id+1)]
+    num_layers = args.bla_num_layers
+    in_feat_sizes = args.backbone_feat_sizes
 
-    with_pos_feats = not args.bla_no_pos_feats
-    dropout = args.bla_dropout
+    min_id, max_id = (args.min_downsampling, args.max_downsampling)
+    out_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in range(min_id, max_id+1)]
+
+    num_heads_list = [min((args.bla_base_num_heads * 2**i, args.bla_max_num_heads)) for i in range(min_id, max_id+1)]
+    pos_attn = not args.bla_no_pos_attn
+    attn_dropout = args.bla_attn_dropout
+    attn_dict = {'num_heads_list': num_heads_list, 'pos_attn': pos_attn, 'dropout': attn_dropout}
+
     ffn_size_multiplier = args.bla_ffn_size_multiplier
+    ffn_dropout = args.bla_ffn_dropout
+    ffn_dict = {'size_multiplier': ffn_size_multiplier, 'dropout': ffn_dropout}
 
     # Build BLA module
-    bla = BLA(in_feat_sizes, out_feat_sizes, num_heads_list, with_pos_feats, dropout, ffn_size_multiplier)
+    bla = BLA(num_layers, in_feat_sizes, out_feat_sizes, attn_dict, ffn_dict)
 
     return bla

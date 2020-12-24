@@ -11,8 +11,9 @@ from torch.utils.benchmark import Timer
 
 from main import get_parser
 from models.backbone import build_backbone
-from models.bicore import build_bicore
 from models.bivinet import build_bivinet
+from models.cores.bla import build_bla
+from models.cores.fpn import build_fpn
 from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
@@ -24,9 +25,9 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'bicore', 'bin_seg_head', 'bivinet_bin_seg', 'bivinet_ret', 'bivinet_sem_seg']
-model_choices = [*model_choices, 'criterion', 'detr', 'encoder', 'global_decoder', 'ret_head', 'sample_decoder']
-model_choices = [*model_choices, 'sem_seg_head']
+model_choices = ['backbone', 'bla_init', 'bla_update', 'bin_seg_head', 'bivinet_bin_seg', 'bivinet_bla_ret']
+model_choices = [*model_choices, 'bivinet_fpn_ret' 'bivinet_sem_seg', 'criterion', 'detr', 'encoder', 'fpn']
+model_choices = [*model_choices, 'global_decoder', 'ret_head', 'sample_decoder', 'sem_seg_head']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -52,37 +53,51 @@ if profiling_args.model == 'backbone':
     forward_stmt = "model(*inputs)"
     backward_stmt = "model(*inputs)[0][-1].sum().backward()"
 
-elif profiling_args.model == 'bicore':
-    main_args.min_resolution_id = 3
-    model = build_bicore(main_args).to('cuda')
+elif profiling_args.model == 'bla_init':
+    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    model = build_bla(main_args).to('cuda')
 
-    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5]
+    inputs = [feat_maps, 0]
+
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(*inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
+
+elif profiling_args.model == 'bla_update':
+    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    model = build_bla(main_args).to('cuda')
+
+    feat_map0 = torch.randn(2, 8, 1024, 1024).to('cuda')
+    feat_map1 = torch.randn(2, 16, 512, 512).to('cuda')
+    feat_map2 = torch.randn(2, 32, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 64, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 128, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 512, 16, 16).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
-    inputs = [feat_maps]
+    inputs = [feat_maps, 1]
 
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(*inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
 
 elif profiling_args.model == 'bin_seg_head':
-    main_args.min_resolution_id = 3
     main_args.seg_heads = ['binary']
     main_args.disputed_loss = True
     model = build_seg_heads(main_args)[0].to('cuda')
 
-    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_map0 = torch.randn(2, 8, 1024, 1024).to('cuda')
+    feat_map1 = torch.randn(2, 16, 512, 512).to('cuda')
+    feat_map2 = torch.randn(2, 32, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 64, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 128, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 512, 16, 16).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
 
     tgt_map0 = torch.randn(2, 1024, 1024).to('cuda').clamp(-0.5, 0.5) + 0.5
@@ -102,8 +117,9 @@ elif profiling_args.model == 'bin_seg_head':
 
 elif profiling_args.model == 'bivinet_bin_seg':
     main_args.meta_arch = 'BiViNet'
-    main_args.min_resolution_id = 3
-    main_args.num_core_layers = 4
+    main_args.bvn_step_mode = 'multi'
+    main_args.core_type = 'BLA'
+    main_args.bla_num_layers = 4
     main_args.seg_heads = ['binary']
     main_args.disputed_loss = True
     model = build_bivinet(main_args).to('cuda')
@@ -123,7 +139,6 @@ elif profiling_args.model == 'bivinet_bin_seg':
 elif profiling_args.model == 'bivinet_ret':
     main_args.det_heads = ['retina']
     main_args.meta_arch = 'BiViNet'
-    main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
     main_args.num_classes = 80
     main_args.ret_num_convs = 4
@@ -146,7 +161,6 @@ elif profiling_args.model == 'bivinet_ret':
 
 elif profiling_args.model == 'bivinet_sem_seg':
     main_args.meta_arch = 'BiViNet'
-    main_args.min_resolution_id = 3
     main_args.num_core_layers = 4
     main_args.num_classes = 80
     main_args.seg_heads = ['semantic']
@@ -249,21 +263,20 @@ elif profiling_args.model == 'global_decoder':
 
 elif profiling_args.model == 'ret_head':
     main_args.det_heads = ['retina']
-    main_args.min_resolution_id = 3
     main_args.num_classes = 80
     main_args.ret_num_convs = 4
     model = build_det_heads(main_args)[0].to('cuda')
 
-    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_map0 = torch.randn(2, 8, 1024, 1024).to('cuda')
+    feat_map1 = torch.randn(2, 16, 512, 512).to('cuda')
+    feat_map2 = torch.randn(2, 32, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 64, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 128, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 512, 16, 16).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
 
-    num_anchors_total = sum(9 * 4**(10-i) for i in range(main_args.min_resolution_id, main_args.max_resolution_id+1))
+    num_anchors_total = sum(9 * 4**(10-i) for i in range(main_args.min_downsampling, main_args.max_downsampling+1))
     anchor_labels = torch.randint(model.num_classes, size=(2, num_anchors_total)).to('cuda')
     anchor_deltas = torch.abs(torch.randn(2, num_anchors_total, 4)).to('cuda')
     tgt_dict = {'anchor_labels': anchor_labels, 'anchor_deltas': anchor_deltas}
@@ -290,19 +303,18 @@ elif profiling_args.model == 'sample_decoder':
     backward_stmt = "model(*inputs)['slots'].sum().backward()"
 
 elif profiling_args.model == 'sem_seg_head':
-    main_args.min_resolution_id = 3
     main_args.num_classes = 80
     main_args.seg_heads = ['semantic']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_seg_heads(main_args)[0].to('cuda')
 
-    feat_map0 = torch.randn(2, 1024, 1024, 8).to('cuda')
-    feat_map1 = torch.randn(2, 512, 512, 16).to('cuda')
-    feat_map2 = torch.randn(2, 256, 256, 32).to('cuda')
-    feat_map3 = torch.randn(2, 128, 128, 64).to('cuda')
-    feat_map4 = torch.randn(2, 64, 64, 128).to('cuda')
-    feat_map5 = torch.randn(2, 32, 32, 256).to('cuda')
-    feat_map6 = torch.randn(2, 16, 16, 512).to('cuda')
+    feat_map0 = torch.randn(2, 8, 1024, 1024).to('cuda')
+    feat_map1 = torch.randn(2, 16, 512, 512).to('cuda')
+    feat_map2 = torch.randn(2, 32, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 64, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 128, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 512, 16, 16).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
 
     tgt_map0 = torch.randint(model.num_classes+1, size=(2, 1024, 1024)).to('cuda')

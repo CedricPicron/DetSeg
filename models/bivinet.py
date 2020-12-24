@@ -22,10 +22,10 @@ class BiViNet(nn.Module):
         backbone (nn.Module): Module implementing the BiViNet backbone.
         core (nn.Module): Module implementing the BiViNet core.
         heads (nn.ModuleList): List of size [num_head_copies] containing copied lists of BiViNet head modules.
-        multi_step (bool): Boolean indicating whether to use multi-step parameter updates with gradient blocking.
+        step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
     """
 
-    def __init__(self, backbone, core, heads, multi_step):
+    def __init__(self, backbone, core, heads, step_mode):
         """
         Initializes the BiViNet module.
 
@@ -33,7 +33,7 @@ class BiViNet(nn.Module):
             backbone (nn.Module): Module implementing the BiViNet backbone.
             core (nn.Module): Module implementing the BiViNet core.
             heads (List): List of size [num_heads] with BiViNet head modules.
-            multi_step (bool): Boolean indicating whether to use multi-step parameter updates with gradient blocking.
+            step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
         """
 
         # Initialization of default nn.Module
@@ -42,11 +42,11 @@ class BiViNet(nn.Module):
         # Set backbone, core and multi step attributes
         self.backbone = backbone
         self.core = core
-        self.multi_step = multi_step
+        self.step_mode = step_mode
 
         # Set number of core layers and heads attributes
         self.num_core_layers = getattr(core, 'num_layers', 1)
-        num_head_copies = self.num_core_layers + 1 if multi_step else 1
+        num_head_copies = self.num_core_layers + 1 if step_mode == 'multi' else 1
         self.heads = nn.ModuleList([deepcopy(nn.ModuleList(heads)) for _ in range(num_head_copies)])
 
     @staticmethod
@@ -67,19 +67,19 @@ class BiViNet(nn.Module):
 
         Args:
             img_masks (BoolTensor): masks encoding padded pixels of shape [batch_size, max_iH, max_iW].
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
         Returns:
             feat_masks (List): List of size [num_maps] with masks of active features of shape [batch_size, fH, fW].
         """
 
-        map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+        map_sizes = [tuple(feat_map.shape[2:]) for feat_map in feat_maps]
         padding_maps = downsample_masks(img_masks, map_sizes)
         feat_masks = [padding_map > 0.5 for padding_map in padding_maps]
 
         return feat_masks
 
-    def train_evaluate(self, feat_maps, feat_masks, tgt_dict, optimizer, step_id=None, **kwargs):
+    def train_evaluate(self, feat_maps, feat_masks, tgt_dict, optimizer, step_id=0, **kwargs):
         """
         Method performing the training/evaluation step for the given feature maps.
 
@@ -91,7 +91,7 @@ class BiViNet(nn.Module):
             feat_masks (List): List of size [num_maps] with masks of active features of shape [batch_size, fH, fW].
             tgt_dict (Dict): Target dictionary with ground-truth information used for loss computation and evaluation.
             optimizer (torch.optim.Optimizer): Optimizer updating the BiViNet parameters during training.
-            step_id (int): Optional integer indicating the core step in multi-step mode.
+            step_id (int): Optional integer indicating the core step in multi-step mode (default=0).
 
             kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
                 - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
@@ -105,20 +105,21 @@ class BiViNet(nn.Module):
         loss_dict = {}
         analysis_dict = {}
 
-        # Get head copies id
-        head_copies_id = step_id if self.multi_step else 0
-
         # Populate loss and analysis dictionaries from head outputs
-        for head in self.heads[head_copies_id]:
+        for head in self.heads[step_id]:
             head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks, tgt_dict, **kwargs)
 
-            if self.multi_step:
+            if self.step_mode == 'multi':
                 loss_dict.update({f'{k}_{step_id}': v for k, v in head_loss_dict.items()})
                 analysis_dict.update({f'{k}_{step_id}': v for k, v in head_analysis_dict.items()})
 
+            elif self.step_mode == 'single':
+                loss_dict.update(head_loss_dict)
+                analysis_dict.update(head_analysis_dict)
+
         # Add total step loss to analysis dictionary in multi-step mode
         with torch.no_grad():
-            if self.multi_step:
+            if self.step_mode == 'multi':
                 analysis_dict[f'loss_{step_id}'] = sum(loss_dict.values())
 
         # Return loss and analysis dictionaries (validation only)
@@ -170,43 +171,57 @@ class BiViNet(nn.Module):
         # Get backbone feature maps
         feat_maps, _ = self.backbone(images)
 
-        # Prepare heads and target dictionary for current forward pass
-        for head_copies in zip(*self.heads):
-            tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
-            [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
-            [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
+        # 1) Multi-step mode
+        if self.step_mode == 'multi':
 
-        # Get feature masks (trainval only)
-        if tgt_dict is not None:
-            feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
-            train_eval_args = (feat_masks, tgt_dict, optimizer)
-
-        # Train/evaluate initial core feature maps in multi-step mode (trainval only)
-        if self.multi_step and tgt_dict is not None:
+            # Get initial core feature maps
             feat_maps = self.core(feat_maps, step_id=0)
-            loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, step_id=0, **kwargs)
 
-        # Get or update core feature maps
-        for i in enumerate(self.num_core_layers, 1):
+            # Prepare heads and target dictionary for current forward pass
+            for head_copies in zip(*self.heads):
+                tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
+                [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
+                [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
 
-            # Detach core feature maps in multi-step mode (training only)
-            if self.multi_step and optimizer is not None:
-                feat_maps = [feat_map.detach() for feat_map in feat_maps]
+            # Train/evaluate initial core feature maps (trainval only)
+            if tgt_dict is not None:
+                feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
+                train_eval_args = (feat_masks, tgt_dict, optimizer)
+                loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, step_id=0, **kwargs)
 
-            # Get or update core feature maps
-            feat_maps = self.core(feat_maps, step_id=i)
+            # Iterate over core layers
+            for i in range(1, self.num_core_layers+1):
 
-            # Train/evaluate updated core feature maps in multi-step mode (trainval only)
-            if self.multi_step and tgt_dict is not None:
-                layer_dicts = self.train_evaluate(feat_maps, *train_eval_args, step_id=i, **kwargs)
-                loss_dict.update(layer_dicts[0])
-                analysis_dict.update(layer_dicts[1])
+                # Detach core feature maps (training only)
+                if optimizer is not None:
+                    feat_maps = [feat_map.detach() for feat_map in feat_maps]
 
-        # Train/evaluate core feature maps if not in multi-step mode (trainval only)
-        if not self.multi_step and tgt_dict is not None:
-            layer_dicts = self.train_evaluate(feat_maps, *train_eval_args, **kwargs)
-            loss_dict = layer_dicts[0]
-            analysis_dict = layer_dicts[1]
+                # Update core feature maps
+                feat_maps = self.core(feat_maps, step_id=i)
+
+                # Train/evaluate updated core feature maps (trainval only)
+                if tgt_dict is not None:
+                    layer_dicts = self.train_evaluate(feat_maps, *train_eval_args, step_id=i, **kwargs)
+                    loss_dict.update(layer_dicts[0])
+                    analysis_dict.update(layer_dicts[1])
+
+        # 2) Single-step mode
+        if self.step_mode == 'single':
+
+            # Get core feature maps
+            feat_maps = self.core(feat_maps)
+
+            # Prepare heads and target dictionary for current forward pass
+            for head_copies in zip(*self.heads):
+                tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
+                [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
+                [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
+
+            # Train/evaluate core feature maps (trainval only)
+            if tgt_dict is not None:
+                feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
+                train_eval_args = (feat_masks, tgt_dict, optimizer)
+                loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, **kwargs)
 
         # Get prediction dictionary (validation/testing only)
         if optimizer is None:
@@ -238,7 +253,7 @@ class BiViNet(nn.Module):
         optimizer.step()
 
         # Average and synchronize head copies in multi-step mode (training only)
-        if self.multi_step:
+        if self.step_mode == 'multi':
             avg_heads_state_dict = {}
 
             for key_values in zip(*[heads.state_dict().items() for heads in self.heads]):
@@ -261,6 +276,14 @@ def build_bivinet(args):
         bivinet (BiViNet): The specified BiViNet module.
     """
 
+    # Check command-line arguments
+    min_id, max_id = (args.min_downsampling, args.max_downsampling)
+    assert_msg = f"'--max_downsampling' ({max_id}) should be larger than '--min_downsampling' ({min_id})"
+    assert max_id > min_id, assert_msg
+
+    assert_msg = f"only '--min_downsampling >= 2' (got {min_id}) is currently supported"
+    assert min_id >= 2, assert_msg
+
     # Build backbone
     backbone = build_backbone(args)
     args.backbone_feat_sizes = backbone.feat_sizes
@@ -272,6 +295,6 @@ def build_bivinet(args):
     heads = [*build_det_heads(args), *build_seg_heads(args)]
 
     # Build BiViNet module
-    bivinet = BiViNet(backbone, core, heads, args.bvn_multi_step)
+    bivinet = BiViNet(backbone, core, heads, args.bvn_step_mode)
 
     return bivinet

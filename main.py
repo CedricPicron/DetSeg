@@ -55,7 +55,7 @@ def get_parser():
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
 
     # BiViNet
-    parser.add_argument('--bvn_multi_step', action='store_true', help='whether to use multi-step parameter updates')
+    parser.add_argument('--bvn_step_mode', default='multi', choices=['multi', 'single'], help='BiViNet step mode')
     parser.add_argument('--min_downsampling', default=3, type=int, help='minumum downsampling exponent')
     parser.add_argument('--max_downsampling', default=6, type=int, help='maximum downsampling exponent')
 
@@ -70,9 +70,11 @@ def get_parser():
     parser.add_argument('--bla_max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
     parser.add_argument('--bla_max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
 
-    parser.add_argument('--bla_no_pos_feats', action='store_true', help='whether to disable local position features')
-    parser.add_argument('--bla_dropout', default=0.1, type=float, help='dropout value used with BLA core modules')
+    parser.add_argument('--bla_no_pos_attn', action='store_true', help='disables locally position dependent attention')
+    parser.add_argument('--bla_attn_dropout', default=0.1, type=float, help='dropout value used with BLA attention')
+
     parser.add_argument('--bla_ffn_size_multiplier', default=8, type=int, help='size multiplier used during BLA FFN')
+    parser.add_argument('--bla_ffn_dropout', default=0.1, type=float, help='dropout value used during BLA FFN')
 
     # ** FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
@@ -86,6 +88,7 @@ def get_parser():
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')
+    parser.add_argument('--ret_pred_type', default='conv1', choices=['conv1', 'conv3'], help='last prediction module')
 
     parser.add_argument('--ret_focal_alpha', default=0.25, type=float, help='retina head focal alpha value')
     parser.add_argument('--ret_focal_gamma', default=2.0, type=float, help='retina head focal gamma value')

@@ -13,6 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.projector import Projector
 from structures.boxes import Boxes, apply_box_deltas, box_iou, get_box_deltas
 from utils.distributed import is_dist_avail_and_initialized, get_world_size
 
@@ -56,9 +57,10 @@ class RetinaHead(nn.Module):
             in_feat_sizes (List): List of size [num_maps] containing the feature sizes of each input feature map.
 
             pred_head_dict (Dict): Dictionary containing prediction head hyperparameters:
-                - in_projs (bool): boolean indicating whether to perform linear projections on the input feature maps;
+                - in_proj (bool): boolean indicating whether to project input feature maps to a common feature space.
                 - feat_size (int): the feature size used internally by the prediction head;
-                - num_convs (int): the number of internal convolutions in the prediction head before prediction.
+                - num_convs (int): the number of internal convolutions in the prediction head before prediction;
+                - pred_type (str): module type for final prediction computation chosen from {conv1, conv3}.
 
             loss_dict (Dict): Dictionary containing hyperparameters related the head's loss:
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
@@ -98,8 +100,8 @@ class RetinaHead(nn.Module):
         self.anchor_matcher = Matcher(matcher_thresholds, matcher_labels, allow_low_quality_matches=True)
 
         # Initialization of prediction head module
-        input_dict = {'in_projs': pred_head_dict['in_projs'], 'in_feat_sizes': in_feat_sizes}
-        conv_dict = {'feat_size': pred_head_dict['feat_size'], 'num_convs': pred_head_dict['num_convs']}
+        input_dict = {'in_feat_sizes': in_feat_sizes, 'in_proj': pred_head_dict['in_proj']}
+        conv_dict = {k: v for k, v in pred_head_dict.items() if k in ['feat_size', 'num_convs', 'pred_type']}
         num_anchors = self.anchor_generator.num_cell_anchors[0]
         self.pred_head = RetinaPredHead(input_dict, conv_dict, num_anchors, num_classes)
 
@@ -130,7 +132,7 @@ class RetinaHead(nn.Module):
         Forward initialization method of the RetinaHead module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -159,9 +161,7 @@ class RetinaHead(nn.Module):
         """
 
         # Generate anchors and place them into attribute dictionary
-        feat_map_views = [feat_map.permute(0, 3, 1, 2) for feat_map in feat_maps]
-        anchors = self.anchor_generator(feat_map_views)
-
+        anchors = self.anchor_generator(feat_maps)
         anchors = [Boxes(map_anchors.tensor, format='xyxy') for map_anchors in anchors]
         attr_dict = {'anchors': anchors}
 
@@ -203,9 +203,10 @@ class RetinaHead(nn.Module):
         anchor_deltas = torch.stack(anchor_deltas_list)
 
         # Get updated loss normalizers and place them into buffer dictionary (trainval only)
-        num_pos_anchors = torch.zeros(len(feat_maps), device=feat_maps[0].device)
+        num_maps = len(feat_maps)
+        num_pos_anchors = torch.zeros(num_maps, device=feat_maps[0].device)
 
-        for i, i0, i1 in zip(range(len(feat_maps)), map_sizes[:-1], map_sizes[1:]):
+        for i, i0, i1 in zip(range(num_maps), map_sizes[:-1], map_sizes[1:]):
             map_anchor_labels = anchor_labels[:, i0:i1]
             num_pos_anchors[i] = ((map_anchor_labels >= 0) & (map_anchor_labels != self.num_classes)).sum()
 
@@ -361,7 +362,7 @@ class RetinaHead(nn.Module):
         Forward method of the RetinaHead module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary containing at least following keys:
@@ -440,7 +441,7 @@ class RetinaHead(nn.Module):
             # Assume no padded regions when feature masks are missing (trainval only)
             if feat_masks is None:
                 tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+                feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
 
             # Perform classification accuracy analyses (trainval only)
             num_anchors = self.anchor_generator.num_cell_anchors[0]
@@ -549,11 +550,11 @@ class RetinaPredHead(nn.Module):
     Class implementing the RetinaPredHead module.
 
     Attributes:
-        in_projs (nn.ModuleList, optional): List of size [num_maps] with input projection modules.
-        cls_subnet (nn.Sequential): Sequence of modules computing the final features before classification.
-        bbox_subnet (nn.Sequential): Sequence of modules computing the final features before bounding box regression.
-        cls_score (nn.Linear): Linear module computing the classification logits from its final features.
-        bbox_pred (nn.Linear): Linear module computing the anchor to box deltas from its final features.
+        in_proj (Projector): Optional module projecting input feature maps to a common feature space.
+        cls_subnet (nn.Sequential): Sequence of modules computing the final feature maps before classification.
+        bbox_subnet (nn.Sequential): Sequence of modules computing the final feature maps before box regression.
+        cls_score (nn.Module): Module computing the classification logits from its final features.
+        bbox_pred (nn.Module): Module computing the anchor to box deltas from its final features.
     """
 
     def __init__(self, input_dict, conv_dict, num_anchors, num_classes):
@@ -562,26 +563,37 @@ class RetinaPredHead(nn.Module):
 
         Args:
             input_dict (Dict): Dictionary with information for a possible input projection containing following keys:
-                - in_projs (bool): boolean indicating whether to perform linear projections on the input feature maps;
-                - in_feat_sizes (List): list of size [num_maps] containing the feature sizes of each input feature map.
+                - in_feat_sizes (List): list of size [num_maps] containing the feature sizes of each input feature map;
+                - in_proj (bool): boolean indicating whether to project input feature maps to a common feature space.
 
-            conv_dict (Dict): Dictionary with subnet convolutions information containing following keys:
+            conv_dict (Dict): Dictionary with convolution information containing following keys:
                 - feat_size (int): the feature size used internally by the subnet convolution layers;
-                - num_convs (int): integer containing the number of subnet convolution layers.
+                - num_convs (int): integer containing the number of subnet convolution layers;
+                - pred_type (str): module type for final prediction computation chosen from {conv1, conv3}.
 
             num_anchors (int): Integer containing the number of different anchors per spatial position.
             num_classes (int): Integer containing the number of object classes (without background).
         """
 
+        # Check inputs
+        in_feat_sizes = input_dict['in_feat_sizes']
+        in_proj = input_dict['in_proj']
+
+        check = all(feat_size == in_feat_sizes[0] for feat_size in in_feat_sizes) or in_proj
+        assert check, f"Without input projection, all input feature sizes must be equal, but got {in_feat_sizes}."
+
         # Initialization of default nn.Module
         super().__init__()
 
-        # Initialization of linear input projection modules (if requested)
-        if input_dict['in_projs']:
-            self.in_projs = nn.ModuleList(nn.Linear(f, conv_dict['feat_size']) for f in input_dict['in_feat_sizes'])
+        # Initialize input projector (if requested)
+        if in_proj:
+            out_feat_size = conv_dict['feat_size']
+            fixed_settings = {'out_feat_size': out_feat_size, 'proj_type': 'conv1', 'conv_stride': 1}
+            proj_dicts = [{'in_map_id': i, **fixed_settings} for i in range(len(in_feat_sizes))]
+            self.in_proj = Projector(in_feat_sizes, proj_dicts)
 
         # Initialize classification and bounding box subnets
-        in_size = conv_dict['feat_size'] if input_dict['in_projs'] else input_dict['in_feat_sizes'][0]
+        in_size = conv_dict['feat_size'] if input_dict['in_proj'] else input_dict['in_feat_sizes'][0]
         conv_sizes = [in_size] + [conv_dict['feat_size']] * conv_dict['num_convs']
 
         cls_subnet = []
@@ -597,9 +609,19 @@ class RetinaPredHead(nn.Module):
         self.cls_subnet = nn.Sequential(*cls_subnet)
         self.bbox_subnet = nn.Sequential(*bbox_subnet)
 
-        # Initialize final linear classification and bounding box layers
-        self.cls_score = nn.Linear(conv_sizes[-1], num_anchors * num_classes)
-        self.bbox_pred = nn.Linear(conv_sizes[-1], num_anchors * 4)
+        # Initialize final classification and bounding box layers
+        if conv_dict['pred_type'] == 'conv1':
+            self.cls_score = nn.Conv2d(conv_sizes[-1], num_anchors * num_classes, kernel_size=1)
+            self.bbox_pred = nn.Conv2d(conv_sizes[-1], num_anchors * 4, kernel_size=1)
+
+        elif conv_dict['pred_type'] == 'conv3':
+            self.cls_score = nn.Conv2d(conv_sizes[-1], num_anchors * num_classes, kernel_size=3, padding=1)
+            self.bbox_pred = nn.Conv2d(conv_sizes[-1], num_anchors * 4, kernel_size=3, padding=1)
+
+        else:
+            allowed_proj_types = {'conv1', 'conv3'}
+            pred_type = conv_dict['pred_type']
+            raise ValueError(f"We support {allowed_proj_types} as prediction types, but got {pred_type}.")
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -628,22 +650,20 @@ class RetinaPredHead(nn.Module):
         Forward method of the RetinaPredHead module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
         Returns:
             logit_maps (List): Maps [num_maps] of class logits of shape [batch_size, fH, fW, num_anchors*num_classes].
             delta_maps (List): Maps [num_maps] of anchor to box deltas of shape [batch_size, fH, fW, num_anchors*4].
         """
 
-        # Project feature maps to common feature space (if requested) and permute to convolution format
-        if hasattr(self, 'in_projs'):
-            feat_maps = [in_proj(feat_map).permute(0, 3, 1, 2) for feat_map, in_proj in zip(feat_maps, self.in_projs)]
-        else:
-            feat_maps = [feat_map.permute(0, 3, 1, 2) for feat_map in feat_maps]
+        # Project feature maps to common feature space (if requested)
+        if hasattr(self, 'in_proj'):
+            feat_maps = self.in_proj(feat_maps)
 
         # Get logit and delta maps
-        logit_maps = [self.cls_score(self.cls_subnet(feat_map).permute(0, 2, 3, 1)) for feat_map in feat_maps]
-        delta_maps = [self.bbox_pred(self.bbox_subnet(feat_map).permute(0, 2, 3, 1)) for feat_map in feat_maps]
+        logit_maps = [self.cls_score(self.cls_subnet(feat_map)).permute(0, 2, 3, 1) for feat_map in feat_maps]
+        delta_maps = [self.bbox_pred(self.bbox_subnet(feat_map)).permute(0, 2, 3, 1) for feat_map in feat_maps]
 
         return logit_maps, delta_maps
 
@@ -662,9 +682,17 @@ def build_det_heads(args):
         ValueError: Error when unknown detection head type was provided.
     """
 
-    # Get dictionary of feature sizes
-    map_ids = list(range(args.min_resolution_id, args.max_resolution_id+1))
-    feat_sizes = [min(args.base_feat_size * 2**i, args.max_feat_size) for i in map_ids]
+    # Get map ids (i.e. map downsampling exponents)
+    map_ids = list(range(args.min_downsampling, args.max_downsampling+1))
+
+    # Get feature sizes of input maps and whether input projection is needed
+    if args.core_type == 'BLA':
+        in_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in map_ids]
+        in_proj = True
+
+    elif args.core_type == 'FPN':
+        in_feat_sizes = [args.fpn_feat_size] * len(map_ids)
+        in_proj = False
 
     # Initialize empty list of detection head modules
     det_heads = []
@@ -672,7 +700,8 @@ def build_det_heads(args):
     # Build desired detection head modules
     for det_head_type in args.det_heads:
         if det_head_type == 'retina':
-            pred_head_dict = {'in_projs': True, 'feat_size': args.ret_feat_size, 'num_convs': args.ret_num_convs}
+            pred_head_dict = {'in_proj': in_proj, 'feat_size': args.ret_feat_size, 'num_convs': args.ret_num_convs}
+            pred_head_dict = {**pred_head_dict, 'pred_type': args.ret_pred_type}
 
             loss_dict = {'focal_alpha': args.ret_focal_alpha, 'focal_gamma': args.ret_focal_gamma}
             loss_dict = {**loss_dict, 'smooth_l1_beta': args.ret_smooth_l1_beta, 'normalizer': args.ret_normalizer}
@@ -686,8 +715,8 @@ def build_det_heads(args):
             num_classes = args.num_classes
             metadata = args.val_metadata
 
-            retina_head = RetinaHead(num_classes, map_ids, feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
-            det_heads.append(retina_head)
+            ret_head = RetinaHead(num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
+            det_heads.append(ret_head)
 
         else:
             raise ValueError(f"Unknown detection head type '{det_head_type}' was provided.")

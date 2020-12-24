@@ -7,7 +7,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from ..utils import downsample_index_maps, downsample_masks
+from models.projector import Projector
+from models.utils import downsample_index_maps, downsample_masks
 
 
 class BinarySegHead(nn.Module):
@@ -15,7 +16,7 @@ class BinarySegHead(nn.Module):
     Class implementing the BinarySegHead module, segmenting objects from background.
 
     Attributes:
-        projs (ModuleList): List of size [num_maps] with linear projection modules.
+        proj (Projector): Module projecting feature maps to logit maps from which predictions are made.
         disputed_loss (bool): Bool indicating if loss should be applied at disputed ground-truth positions.
         disputed_beta (float): Threshold value at which disputed smooth L1 loss changes from L1 to L2 loss.
         loss_weight (float): Weight factor used to scale the binary segmentation loss.
@@ -35,8 +36,10 @@ class BinarySegHead(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Initialization of linear projection modules
-        self.projs = nn.ModuleList([nn.Linear(f, 1) for f in feat_sizes])
+        # Initialization of projector module
+        fixed_settings = {'out_feat_size': 1, 'proj_type': 'conv1', 'conv_stride': 1}
+        proj_dicts = [{'in_map_id': i, **fixed_settings} for i in range(len(feat_sizes))]
+        self.proj = Projector(feat_sizes, proj_dicts)
 
         # Set remaining attributes as specified by the input arguments
         self.disputed_loss = disputed_loss
@@ -108,7 +111,8 @@ class BinarySegHead(nn.Module):
             2) Downsample the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
@@ -137,7 +141,7 @@ class BinarySegHead(nn.Module):
         binary_masks = torch.stack([tgt_masks[i0:i1].any(dim=0) for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])])
 
         # Compute and place downsampled binary maps into target dictionary (trainval only)
-        map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+        map_sizes = [tuple(feat_map.shape[2:]) for feat_map in feat_maps]
         tgt_dict['binary_maps'] = downsample_masks(binary_masks, map_sizes)
 
         return tgt_dict, {}, {}
@@ -147,7 +151,7 @@ class BinarySegHead(nn.Module):
         Forward method of the BinarySegHead module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
@@ -173,7 +177,8 @@ class BinarySegHead(nn.Module):
         """
 
         # Compute logit maps
-        logit_maps = [proj(feat_map).squeeze(-1) for feat_map, proj in zip(feat_maps, self.projs)]
+        logit_maps = self.proj(feat_maps)
+        logit_maps = [logit_map.squeeze(1) for logit_map in logit_maps]
 
         # Compute and return dictionary with predicted binary segmentation maps (validation/testing only)
         if tgt_dict is None:
@@ -218,7 +223,7 @@ class BinarySegHead(nn.Module):
             # Assume no padded regions when feature masks are missing (trainval only)
             if feat_masks is None:
                 tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+                feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
 
             # Flatten and concatenate masks of active features (trainval only)
             active_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
@@ -327,7 +332,7 @@ class SemanticSegHead(nn.Module):
     Class implementing the SemanticSegHead module, performing semantic segmentation.
 
     Attributes:
-        projs (ModuleList): List of size [num_maps] with linear projection modules.
+        proj (Projector): Module projecting feature maps to logit maps from which predictions are made.
         num_classes (int): Integer containing the number of object classes (without background).
         class_weights (FloatTensor): Tensor of shape [num_classes+1] containing class-specific loss weights.
         loss_weight (float): Weight factor used to scale the semantic segmentation loss as a whole.
@@ -349,8 +354,10 @@ class SemanticSegHead(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Initialization of linear projection modules
-        self.projs = nn.ModuleList([nn.Linear(f, num_classes+1) for f in feat_sizes])
+        # Initialization of projector module
+        fixed_settings = {'out_feat_size': num_classes+1, 'proj_type': 'conv1', 'conv_stride': 1}
+        proj_dicts = [{'in_map_id': i, **fixed_settings} for i in range(len(feat_sizes))]
+        self.proj = Projector(feat_sizes, proj_dicts)
 
         # Register buffer of cross-entropy class weights
         self.register_buffer('class_weights', torch.ones(num_classes+1))
@@ -452,7 +459,7 @@ class SemanticSegHead(nn.Module):
             2) Downsample the full-resolution masks to maps with the same resolutions as found in 'feat_maps'.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
@@ -492,7 +499,7 @@ class SemanticSegHead(nn.Module):
                 semantic_maps[i].masked_fill_(tgt_mask, tgt_label)
 
         # Compute and place downsampled semantic masks into target dictionary
-        map_sizes = [tuple(feat_map.shape[1:-1]) for feat_map in feat_maps]
+        map_sizes = [tuple(feat_map.shape[2:]) for feat_map in feat_maps]
         tgt_dict['semantic_maps'] = downsample_index_maps(semantic_maps, map_sizes)
 
         return tgt_dict, {}, {}
@@ -502,7 +509,7 @@ class SemanticSegHead(nn.Module):
         Forward method of the SemanticSegHead module.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary during training and validation with at least following key:
@@ -527,7 +534,7 @@ class SemanticSegHead(nn.Module):
         """
 
         # Compute logit maps
-        logit_maps = [proj(feat_map).permute(0, 3, 1, 2) for feat_map, proj in zip(feat_maps, self.projs)]
+        logit_maps = self.proj(feat_maps)
 
         # Compute and return dictionary with predicted semantic segmentation maps (validation/testing only)
         if tgt_dict is None:
@@ -668,9 +675,14 @@ def build_seg_heads(args):
         ValueError: Error when unknown segmentation head type was provided.
     """
 
-    # Get feature sizes
-    map_ids = range(args.min_resolution_id, args.max_resolution_id+1)
-    feat_sizes = [min((args.base_feat_size * 2**i, args.max_feat_size)) for i in map_ids]
+    # Get feature sizes of input maps and whether input projection is needed
+    if args.core_type == 'BLA':
+        map_ids = range(args.min_downsampling, args.max_downsampling+1)
+        feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in map_ids]
+
+    elif args.core_type == 'FPN':
+        num_maps = args.max_downsampling - args.min_downsampling + 1
+        feat_sizes = [args.fpn_feat_size] * len(num_maps)
 
     # Initialize empty list of segmentation head modules
     seg_heads = []
