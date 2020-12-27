@@ -79,7 +79,6 @@ def get_parser():
     # ** FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
     parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')
-    parser.add_argument('--fpn_bottom_up_layers', default=2, type=int, help='number of FPN bottom-up layers')
 
     # * Heads
     # ** Detection heads

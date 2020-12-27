@@ -21,19 +21,25 @@ class BiViNet(nn.Module):
     Attributes:
         backbone (nn.Module): Module implementing the BiViNet backbone.
         core (nn.Module): Module implementing the BiViNet core.
-        heads (nn.ModuleList): List of size [num_head_copies] containing copied lists of BiViNet head modules.
         step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
+        num_core_layers (int): Integer containing the number of consecutive core layers.
+
+        If step mode is 'multi':
+            heads (nn.ModuleList): List of size [num_head_copies] containing copied lists of BiViNet head modules.
+
+        If step mode is 'single':
+            heads (nn.ModuleList): List of size [num_heads] with BiViNet head modules.
     """
 
-    def __init__(self, backbone, core, heads, step_mode):
+    def __init__(self, backbone, core, step_mode, heads):
         """
         Initializes the BiViNet module.
 
         Args:
             backbone (nn.Module): Module implementing the BiViNet backbone.
             core (nn.Module): Module implementing the BiViNet core.
-            heads (List): List of size [num_heads] with BiViNet head modules.
             step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
+            heads (List): List of size [num_heads] with BiViNet head modules.
         """
 
         # Initialization of default nn.Module
@@ -44,10 +50,16 @@ class BiViNet(nn.Module):
         self.core = core
         self.step_mode = step_mode
 
-        # Set number of core layers and heads attributes
-        self.num_core_layers = getattr(core, 'num_layers', 1)
-        num_head_copies = self.num_core_layers + 1 if step_mode == 'multi' else 1
-        self.heads = nn.ModuleList([deepcopy(nn.ModuleList(heads)) for _ in range(num_head_copies)])
+        # Set number of core layers attribute
+        self.num_core_layers = getattr(core, 'num_layers', 0)
+
+        # Set heads attribute
+        if step_mode == 'multi':
+            num_head_copies = self.num_core_layers + 1
+            self.heads = nn.ModuleList([deepcopy(nn.ModuleList(heads)) for _ in range(num_head_copies)])
+
+        elif step_mode == 'single':
+            self.heads = nn.ModuleList(heads)
 
     @staticmethod
     def get_param_families():
@@ -105,8 +117,11 @@ class BiViNet(nn.Module):
         loss_dict = {}
         analysis_dict = {}
 
+        # Get heads
+        heads = self.heads[step_id] if self.step_mode == 'multi' else self.heads
+
         # Populate loss and analysis dictionaries from head outputs
-        for head in self.heads[step_id]:
+        for head in heads:
             head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks, tgt_dict, **kwargs)
 
             if self.step_mode == 'multi':
@@ -212,10 +227,10 @@ class BiViNet(nn.Module):
             feat_maps = self.core(feat_maps)
 
             # Prepare heads and target dictionary for current forward pass
-            for head_copies in zip(*self.heads):
-                tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
-                [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
-                [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
+            for head in self.heads:
+                tgt_dict, attr_dict, buffer_dict = head.forward_init(feat_maps, tgt_dict)
+                [setattr(head, k, v) for k, v in attr_dict.items()]
+                [getattr(head, k).copy_(v) for k, v in buffer_dict.items()]
 
             # Train/evaluate core feature maps (trainval only)
             if tgt_dict is not None:
@@ -295,6 +310,6 @@ def build_bivinet(args):
     heads = [*build_det_heads(args), *build_seg_heads(args)]
 
     # Build BiViNet module
-    bivinet = BiViNet(backbone, core, heads, args.bvn_step_mode)
+    bivinet = BiViNet(backbone, core, args.bvn_step_mode, heads)
 
     return bivinet

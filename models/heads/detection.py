@@ -211,7 +211,8 @@ class RetinaHead(nn.Module):
             num_pos_anchors[i] = ((map_anchor_labels >= 0) & (map_anchor_labels != self.num_classes)).sum()
 
         if is_dist_avail_and_initialized():
-            num_pos_anchors = torch.distributed.all_reduce(num_pos_anchors) / get_world_size()
+            torch.distributed.all_reduce(num_pos_anchors)
+            num_pos_anchors = num_pos_anchors / get_world_size()
 
         num_pos_anchors = num_pos_anchors.clamp(min=1)
         loss_normalizers = self.loss_momentum * self.loss_normalizers
@@ -391,8 +392,8 @@ class RetinaHead(nn.Module):
 
         # Compute predicted logit and delta maps
         logit_maps, delta_maps = self.pred_head(feat_maps)
-        logit_maps = [logit_map.view(len(logit_map), -1, self.num_classes) for logit_map in logit_maps]
-        delta_maps = [delta_map.view(len(delta_map), -1, 4) for delta_map in delta_maps]
+        logit_maps = [logit_map.reshape(len(logit_map), -1, self.num_classes) for logit_map in logit_maps]
+        delta_maps = [delta_map.reshape(len(delta_map), -1, 4) for delta_map in delta_maps]
 
         # Compute and return prediction dictionary (validation/testing only)
         if tgt_dict is None:

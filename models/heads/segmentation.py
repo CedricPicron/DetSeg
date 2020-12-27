@@ -372,29 +372,6 @@ class SemanticSegHead(nn.Module):
         metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
-    def _load_from_state_dict(self, state_dict, prefix, *args):
-        """
-        Copies parameters and buffers from given state dictionary into only this module, but not its descendants.
-
-        Additionally, it alters the projection heads if trained with COCO dataset ids instead of contiguous ids.
-
-        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
-        prefix (str): String containing this module's prefix in the given state dictionary.
-        args (Tuple): Tuple containing additional arguments used by the default loading method.
-        """
-
-        # Alter projection heads if necessary
-        if getattr(self.metadata, 'name', '')[:4] == 'coco' and len(state_dict[f'{prefix}projs.0.bias']) == 92:
-            original_ids = [*self.metadata.thing_dataset_id_to_contiguous_id.keys(), 91]
-            state_dict[f'{prefix}class_weights'] = state_dict[f'{prefix}class_weights'][original_ids]
-
-            for i in range(len(self.projs)):
-                state_dict[f'{prefix}projs.{i}.weight'] = state_dict[f'{prefix}projs.{i}.weight'][original_ids]
-                state_dict[f'{prefix}projs.{i}.bias'] = state_dict[f'{prefix}projs.{i}.bias'][original_ids]
-
-        # Continue with default loading
-        super()._load_from_state_dict(state_dict, prefix, *args)
-
     @staticmethod
     def get_accuracy(preds, targets):
         """
@@ -561,7 +538,7 @@ class SemanticSegHead(nn.Module):
             # Assume no padded regions when feature masks are missing (trainval only)
             if feat_masks is None:
                 tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-                feat_masks = [torch.ones(*feat_map.shape[:-1], **tensor_kwargs) for feat_map in feat_maps]
+                feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
 
             # Flatten and concatenate masks of active features (trainval only)
             active_mask = torch.cat([feat_mask.flatten() for feat_mask in feat_masks])
@@ -682,7 +659,7 @@ def build_seg_heads(args):
 
     elif args.core_type == 'FPN':
         num_maps = args.max_downsampling - args.min_downsampling + 1
-        feat_sizes = [args.fpn_feat_size] * len(num_maps)
+        feat_sizes = [args.fpn_feat_size] * num_maps
 
     # Initialize empty list of segmentation head modules
     seg_heads = []

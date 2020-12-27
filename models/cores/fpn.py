@@ -103,12 +103,12 @@ class FPN(nn.Module):
         lat_feat_maps = self.lat_proj(in_feat_maps)
 
         # Get fused feature maps
-        interpolation_kwargs = {'scale_factor': 2.0, 'mode': 'nearest'}
+        interpolation_kwargs = {'mode': 'nearest'}
         fused_feat_map = lat_feat_maps[-1]
         fused_feat_maps = [fused_feat_map]
 
         for lat_feat_map in lat_feat_maps[:-1][::-1]:
-            fused_feat_map = F.interpolate(fused_feat_map, **interpolation_kwargs)
+            fused_feat_map = F.interpolate(fused_feat_map, size=lat_feat_map.shape[-2:], **interpolation_kwargs)
             fused_feat_map = fused_feat_map + lat_feat_map
             fused_feat_map = fused_feat_map / 2 if self.fuse_type == 'avg' else fused_feat_map
             fused_feat_maps.insert(0, fused_feat_map)
@@ -141,7 +141,9 @@ def build_fpn(args):
     # Get input arguments
     in_feat_sizes = args.backbone_feat_sizes
     out_feat_sizes = [args.fpn_feat_size] * len(in_feat_sizes)
-    bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * args.fpn_bottom_up_layers}
+
+    num_bottom_up_layers = args.max_downsampling - args.min_downsampling - len(in_feat_sizes) + 1
+    bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * num_bottom_up_layers}
 
     # Build BLA module
     fpn = FPN(in_feat_sizes, out_feat_sizes, args.fpn_fuse_type, bottom_up_dict)
