@@ -240,7 +240,8 @@ class BiViNet(nn.Module):
 
         # Get prediction dictionary (validation/testing only)
         if optimizer is None:
-            pred_dict = {k: v for head in self.heads[0] for k, v in head(feat_maps).items()}
+            pred_heads = self.heads[0] if self.step_mode == 'multi' else self.heads
+            pred_dict = {k: v for head in pred_heads for k, v in head(feat_maps).items()}
 
         # Return prediction dictionary (testing only)
         if tgt_dict is None:
@@ -255,7 +256,7 @@ class BiViNet(nn.Module):
 
             # Get and return annotated images, loss and analysis dictionaries (visualization only)
             images_dict = {}
-            for head in self.heads[0]:
+            for head in pred_heads:
                 images_dict = {**images_dict, **head.visualize(images, pred_dict, tgt_dict)}
 
             return images_dict, loss_dict, analysis_dict

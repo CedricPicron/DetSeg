@@ -612,7 +612,7 @@ def box_giou(boxes1, boxes2):
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes1.well_defined().all(), "boxes2 input contains degenerate boxes"
+    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
 
     # Compute 2D IoU's and union areas
     ious, unions = box_iou(boxes1, boxes2)
@@ -691,7 +691,7 @@ def get_box_deltas(boxes1, boxes2):
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes1.well_defined().all(), "boxes2 input contains degenerate boxes"
+    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
 
     # Convert boxes to (center_x, center_y, width, height) format and get box tensors
     boxes1 = boxes1.clone().to_format('cxcywh').boxes
