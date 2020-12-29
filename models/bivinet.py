@@ -29,9 +29,11 @@ class BiViNet(nn.Module):
 
         If step mode is 'single':
             heads (nn.ModuleList): List of size [num_heads] with BiViNet head modules.
+
+        sync_heads: Boolean indicating whether to synchronize heads copies in multi-step mode.
     """
 
-    def __init__(self, backbone, core, step_mode, heads):
+    def __init__(self, backbone, core, step_mode, heads, sync_heads):
         """
         Initializes the BiViNet module.
 
@@ -40,6 +42,7 @@ class BiViNet(nn.Module):
             core (nn.Module): Module implementing the BiViNet core.
             step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
             heads (List): List of size [num_heads] with BiViNet head modules.
+            sync_heads: Boolean indicating whether to synchronize heads copies in multi-step mode.
         """
 
         # Initialization of default nn.Module
@@ -60,6 +63,9 @@ class BiViNet(nn.Module):
 
         elif step_mode == 'single':
             self.heads = nn.ModuleList(heads)
+
+        # Set synchronize heads attribute
+        self.sync_heads = sync_heads
 
     @staticmethod
     def get_param_families():
@@ -240,7 +246,7 @@ class BiViNet(nn.Module):
 
         # Get prediction dictionary (validation/testing only)
         if optimizer is None:
-            pred_heads = self.heads[0] if self.step_mode == 'multi' else self.heads
+            pred_heads = self.heads[-1] if self.step_mode == 'multi' else self.heads
             pred_dict = {k: v for head in pred_heads for k, v in head(feat_maps).items()}
 
         # Return prediction dictionary (testing only)
@@ -268,8 +274,8 @@ class BiViNet(nn.Module):
         # Update model parameters (training only)
         optimizer.step()
 
-        # Average and synchronize head copies in multi-step mode (training only)
-        if self.step_mode == 'multi':
+        # If requested, synchronize head copies in multi-step mode (training only)
+        if self.step_mode == 'multi' and self.sync_heads:
             avg_heads_state_dict = {}
 
             for key_values in zip(*[heads.state_dict().items() for heads in self.heads]):
@@ -311,6 +317,6 @@ def build_bivinet(args):
     heads = [*build_det_heads(args), *build_seg_heads(args)]
 
     # Build BiViNet module
-    bivinet = BiViNet(backbone, core, args.bvn_step_mode, heads)
+    bivinet = BiViNet(backbone, core, args.bvn_step_mode, heads, args.bvn_sync_heads)
 
     return bivinet

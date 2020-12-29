@@ -55,9 +55,10 @@ def get_parser():
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
 
     # BiViNet
-    parser.add_argument('--bvn_step_mode', default='multi', choices=['multi', 'single'], help='BiViNet step mode')
     parser.add_argument('--min_downsampling', default=3, type=int, help='minumum downsampling exponent')
     parser.add_argument('--max_downsampling', default=6, type=int, help='maximum downsampling exponent')
+    parser.add_argument('--bvn_step_mode', default='multi', choices=['multi', 'single'], help='BiViNet step mode')
+    parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
 
     # * Core
     parser.add_argument('--core_type', default='BLA', choices=['BLA', 'FPN'], help='type of core module to be used')

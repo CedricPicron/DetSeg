@@ -139,6 +139,7 @@ elif profiling_args.model == 'bivinet_bin_seg':
 elif profiling_args.model == 'bivinet_ret_bla':
     main_args.meta_arch = 'BiViNet'
     main_args.bvn_step_mode = 'multi'
+    main_args.bvn_sync_heads = False
     main_args.core_type = 'BLA'
     main_args.bla_num_layers = 4
     main_args.det_heads = ['retina']
@@ -153,7 +154,7 @@ elif profiling_args.model == 'bivinet_ret_bla':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes, 'xyxy', False, [main_args.num_init_slots] * batch_size)
+    boxes = Boxes(boxes, 'cxcywh', False, [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -180,7 +181,7 @@ elif profiling_args.model == 'bivinet_ret_fpn':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes, 'xyxy', False, [main_args.num_init_slots] * batch_size)
+    boxes = Boxes(boxes, 'cxcywh', False, [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
