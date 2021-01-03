@@ -239,7 +239,7 @@ class CocoEvaluator(object):
 
             sub_evaluator = self.sub_evaluators[metric]
             sub_evaluator.cocoDt = coco_api_predictions
-            sub_evaluator.params.imgIds = image_ids
+            sub_evaluator.params.imgIds = images.image_ids
 
             image_evals = CocoEvaluator.evaluate(sub_evaluator)
             self.image_evals[metric].append(image_evals)
