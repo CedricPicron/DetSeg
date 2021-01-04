@@ -64,6 +64,7 @@ def get_parser():
     parser.add_argument('--core_type', default='BLA', choices=['BLA', 'FPN'], help='type of core module to be used')
 
     # ** BLA (Bidirectional Local Attention)
+    parser.add_argument('--bla_version', default='main', choices=['main', 'v1'], help='string with BLA version to use')
     parser.add_argument('--bla_num_layers', default=4, type=int, help='number of consecutive BLA core layers')
 
     parser.add_argument('--bla_base_feat_size', default=8, type=int, help='feature size of highest resolution map')
@@ -71,9 +72,13 @@ def get_parser():
     parser.add_argument('--bla_max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
     parser.add_argument('--bla_max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
 
-    parser.add_argument('--bla_no_pos_attn', action='store_true', help='disables locally position dependent attention')
+    parser.add_argument('--bla_disable_self', action='store_true', help='disables BLA self-attention mechanism')
+    parser.add_argument('--bla_disable_td', action='store_true', help='disables BLA top-down attention mechanism')
+    parser.add_argument('--bla_disable_bu', action='store_true', help='disables BLA bottom-up attention mechanism')
+    parser.add_argument('--bla_disable_pos', action='store_true', help='disables BLA position dependent attention')
     parser.add_argument('--bla_attn_dropout', default=0.1, type=float, help='dropout value used with BLA attention')
 
+    parser.add_argument('--bla_disable_ffn', action='store_true', help='disables BLA FFN layers')
     parser.add_argument('--bla_ffn_size_multiplier', default=8, type=int, help='size multiplier used during BLA FFN')
     parser.add_argument('--bla_ffn_dropout', default=0.1, type=float, help='dropout value used during BLA FFN')
 

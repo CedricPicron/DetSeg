@@ -70,6 +70,11 @@ elif profiling_args.model == 'bla_init':
 
 elif profiling_args.model == 'bla_update':
     main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.bla_version = 'main'
+    main_args.bla_disable_self = False
+    main_args.bla_disable_td = False
+    main_args.bla_disable_bu = False
+    main_args.bla_disable_ffn = False
     model = build_bla(main_args).to('cuda')
 
     feat_map0 = torch.randn(2, 8, 1024, 1024).to('cuda')
@@ -141,6 +146,7 @@ elif profiling_args.model == 'bivinet_ret_bla':
     main_args.bvn_step_mode = 'multi'
     main_args.bvn_sync_heads = False
     main_args.core_type = 'BLA'
+    main_args.bla_version = 'main'
     main_args.bla_num_layers = 4
     main_args.det_heads = ['retina']
     main_args.num_classes = 80
