@@ -64,7 +64,7 @@ def get_parser():
     parser.add_argument('--core_type', default='BLA', choices=['BLA', 'FPN'], help='type of core module to be used')
 
     # ** BLA (Bidirectional Local Attention)
-    parser.add_argument('--bla_version', default='main', choices=['main', 'v1'], help='string with BLA version to use')
+    parser.add_argument('--bla_version', default='main', choices=['main', 'v1', 'v2'], help='string with BLA version')
     parser.add_argument('--bla_num_layers', default=4, type=int, help='number of consecutive BLA core layers')
 
     parser.add_argument('--bla_base_feat_size', default=8, type=int, help='feature size of highest resolution map')
