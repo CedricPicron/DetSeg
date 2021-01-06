@@ -470,9 +470,11 @@ class RetinaHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dict, tgt_dict):
+    def visualize(self, images, pred_dict, tgt_dict, score_treshold=0.4):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
+
+        Boxes must have a score of at least the score threshold to be drawn. Target boxes get a default 100% score.
 
         Args:
             images (Images): Images structure containing the batched images.
@@ -488,6 +490,8 @@ class RetinaHead(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
+
         Returns:
             images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
         """
@@ -495,11 +499,12 @@ class RetinaHead(nn.Module):
         # Prepare predictions
         pred_boxes = pred_dict['boxes'].to_format('xyxy')
         well_defined = pred_boxes.well_defined()
-        pred_boxes = pred_boxes.boxes[well_defined]
-
-        pred_labels = pred_dict['labels'][well_defined]
         pred_scores = pred_dict['scores'][well_defined]
-        pred_batch_ids = pred_dict['batch_ids'][well_defined]
+
+        pred_labels = pred_dict['labels'][well_defined][pred_scores >= score_treshold]
+        pred_boxes = pred_boxes.boxes[well_defined][pred_scores >= score_treshold]
+        pred_batch_ids = pred_dict['batch_ids'][well_defined][pred_scores >= score_treshold]
+        pred_scores = pred_scores[pred_scores >= score_treshold]
 
         # Prepare targets
         tgt_boxes = tgt_dict['boxes'].to_format('xyxy').boxes
