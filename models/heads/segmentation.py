@@ -652,15 +652,6 @@ def build_seg_heads(args):
         ValueError: Error when unknown segmentation head type was provided.
     """
 
-    # Get feature sizes of input maps and whether input projection is needed
-    if args.core_type == 'BLA':
-        map_ids = range(args.min_downsampling, args.max_downsampling+1)
-        feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in map_ids]
-
-    elif args.core_type == 'FPN':
-        num_maps = args.max_downsampling - args.min_downsampling + 1
-        feat_sizes = [args.fpn_feat_size] * num_maps
-
     # Initialize empty list of segmentation head modules
     seg_heads = []
 
@@ -668,12 +659,12 @@ def build_seg_heads(args):
     for seg_head_type in args.seg_heads:
         if seg_head_type == 'binary':
             head_args = [args.disputed_loss, args.disputed_beta, args.bin_seg_weight]
-            binary_seg_head = BinarySegHead(feat_sizes, *head_args)
+            binary_seg_head = BinarySegHead(args.core_feat_sizes, *head_args)
             seg_heads.append(binary_seg_head)
 
         elif seg_head_type == 'semantic':
             head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, args.val_metadata]
-            semantic_seg_head = SemanticSegHead(feat_sizes, *head_args)
+            semantic_seg_head = SemanticSegHead(args.core_feat_sizes, *head_args)
             seg_heads.append(semantic_seg_head)
 
         else:

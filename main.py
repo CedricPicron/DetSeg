@@ -55,13 +55,13 @@ def get_parser():
     parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
 
     # BiViNet
-    parser.add_argument('--min_downsampling', default=3, type=int, help='minumum downsampling exponent')
-    parser.add_argument('--max_downsampling', default=6, type=int, help='maximum downsampling exponent')
-    parser.add_argument('--bvn_step_mode', default='multi', choices=['multi', 'single'], help='BiViNet step mode')
+    parser.add_argument('--bvn_min_downsampling', default=3, type=int, help='minumum downsampling exponent')
+    parser.add_argument('--bvn_max_downsampling', default=6, type=int, help='maximum downsampling exponent')
+    parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BiViNet step mode')
     parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
 
     # * Core
-    parser.add_argument('--core_type', default='BLA', choices=['BLA', 'FPN'], help='type of core module to be used')
+    parser.add_argument('--core_type', default='GC', choices=['BLA', 'FPN', 'GC'], help='type of core module')
 
     # ** BLA (Bidirectional Local Attention)
     parser.add_argument('--bla_version', default='main', choices=['main', 'v1', 'v2', 'v3'], help='BLA version string')
@@ -85,6 +85,9 @@ def get_parser():
     # ** FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
     parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')
+
+    # ** GC (Generalized Core)
+    parser.add_argument('--gc_yaml', default='', type=str, help='path to yaml-file with GC specification')
 
     # * Heads
     # ** Detection heads

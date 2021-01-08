@@ -299,21 +299,17 @@ def build_bivinet(args):
     """
 
     # Check command-line arguments
-    min_id, max_id = (args.min_downsampling, args.max_downsampling)
-    assert_msg = f"'--max_downsampling' ({max_id}) should be larger than '--min_downsampling' ({min_id})"
+    min_id, max_id = (args.bvn_min_downsampling, args.bvn_max_downsampling)
+    assert_msg = f"'--bvn_max_downsampling' ({max_id}) should be larger than '--bvn_min_downsampling' ({min_id})"
     assert max_id > min_id, assert_msg
 
-    assert_msg = f"only '--min_downsampling >= 2' (got {min_id}) is currently supported"
-    assert min_id >= 2, assert_msg
-
-    # Build backbone
+    # Build backbone module
     backbone = build_backbone(args)
-    args.backbone_feat_sizes = backbone.feat_sizes
 
-    # Build core
+    # Build core module
     core = build_core(args)
 
-    # Build detection and segmentation heads
+    # Build detection and segmentation head modules
     heads = [*build_det_heads(args), *build_seg_heads(args)]
 
     # Build BiViNet module

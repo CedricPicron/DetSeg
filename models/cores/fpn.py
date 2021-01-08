@@ -17,6 +17,7 @@ class FPN(nn.Module):
         out_proj (Projector): Module computing output feature maps from fused feature maps.
         fuse_type (str): String of lateral with top-down fuse operation chosen from {'avg', 'sum'}.
         bottom_up (ModuleList): List of size [num_bottom_up_layers] computing additional bottom-up output maps.
+        feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
     """
 
     def __init__(self, in_feat_sizes, out_feat_sizes, fuse_type, bottom_up_dict=None):
@@ -72,6 +73,9 @@ class FPN(nn.Module):
             for in_size, out_size in zip(feat_sizes[1:-1], feat_sizes[2:]):
                 layers = [nn.ReLU(), nn.Conv2d(in_size, out_size, **conv_kwargs)]
                 self.bottom_up.append(nn.Sequential(*layers))
+
+        # Set feature sizes attribute
+        self.feat_sizes = [*out_feat_sizes, *bottom_up_dict['feat_sizes']]
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -142,7 +146,7 @@ def build_fpn(args):
     in_feat_sizes = args.backbone_feat_sizes
     out_feat_sizes = [args.fpn_feat_size] * len(in_feat_sizes)
 
-    num_bottom_up_layers = args.max_downsampling - args.min_downsampling - len(in_feat_sizes) + 1
+    num_bottom_up_layers = args.bvn_max_downsampling - args.bvn_min_downsampling - len(in_feat_sizes) + 1
     bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * num_bottom_up_layers}
 
     # Build BLA module

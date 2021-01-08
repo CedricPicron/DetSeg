@@ -689,16 +689,11 @@ def build_det_heads(args):
     """
 
     # Get map ids (i.e. map downsampling exponents)
-    map_ids = list(range(args.min_downsampling, args.max_downsampling+1))
+    map_ids = list(range(args.bvn_min_downsampling, args.bvn_min_downsampling+len(args.core_feat_sizes)))
 
-    # Get feature sizes of input maps and whether input projection is needed
-    if args.core_type == 'BLA':
-        in_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in map_ids]
-        in_proj = True
-
-    elif args.core_type == 'FPN':
-        in_feat_sizes = [args.fpn_feat_size] * len(map_ids)
-        in_proj = False
+    # Get feature sizes of input maps and decide whether input projection is needed
+    in_feat_sizes = args.core_feat_sizes
+    in_proj = any(feat_size != in_feat_sizes[0] for feat_size in in_feat_sizes)
 
     # Initialize empty list of detection head modules
     det_heads = []

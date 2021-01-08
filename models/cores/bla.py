@@ -1535,7 +1535,7 @@ def build_bla(args):
     num_layers = args.bla_num_layers
     in_feat_sizes = args.backbone_feat_sizes
 
-    min_id, max_id = (args.min_downsampling, args.max_downsampling)
+    min_id, max_id = (args.bvn_min_downsampling, args.bvn_max_downsampling)
     out_feat_sizes = [min((args.bla_base_feat_size * 2**i, args.bla_max_feat_size)) for i in range(min_id, max_id+1)]
 
     num_heads_list = [min((args.bla_base_num_heads * 2**i, args.bla_max_num_heads)) for i in range(min_id, max_id+1)]

@@ -147,11 +147,15 @@ def build_backbone(args):
     # Find out whether backbone should be trained or not
     train_backbone = args.lr_backbone > 0
 
-    # Build desired backbone module
+    # Build backbone module
     if args.meta_arch == 'BiViNet':
         assert not args.dilation, "'--dilation' is not allowed for meta-architecture BiViNet"
 
-        map_ids = range(args.min_downsampling, args.max_downsampling+1)
+        min_id = args.bvn_min_downsampling
+        assert_msg = f"only '--bvn_min_downsampling >= 2' (got {min_id}) is currently supported"
+        assert min_id >= 2, assert_msg
+
+        map_ids = range(args.bvn_min_downsampling, args.bvn_max_downsampling+1)
         return_layers = {f'layer{i-1}': str(i) for i in map_ids if i >= 2 and i <= 5}
         backbone = Backbone(args.backbone, args.dilation, return_layers, train_backbone)
 
@@ -161,5 +165,8 @@ def build_backbone(args):
 
     else:
         raise ValueError(f"Unknown meta-architecture type '{args.meta_arch}' was provided.")
+
+    # Add backbone output feature sizes to args
+    args.backbone_feat_sizes = backbone.feat_sizes
 
     return backbone
