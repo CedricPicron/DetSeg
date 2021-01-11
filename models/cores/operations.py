@@ -6,6 +6,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.modules.attention import Attn2d
+
 
 def initialize_add(operation, feat_sizes):
     """
@@ -44,6 +46,73 @@ def initialize_add(operation, feat_sizes):
     return sub_operations, feat_sizes
 
 
+def initialize_attn2d(operation, feat_sizes, modules_offset):
+    """
+    Initializes 2D attention operation with corresponding modules for forward computation.
+
+    Args:
+        operation (dict): Dictionary specifying the operation to be performed.
+        feat_sizes (List): List of feature sizes of feature maps to be expected during forward computation.
+        modules_offset (int): Integer containing the offset to be added to the module indices.
+
+    Returns:
+        modules (List): List of initialized modules used by this operation.
+        sub_operations (List): List of sub-operation dictionaries specifying their behavior during forward computation.
+        feat_sizes (List): Updated list of feature sizes of feature maps to be generated during forward computation.
+
+    Raises:
+        ValueError: Error when incorrect output channels input is provided.
+    """
+
+    # Get lists of number of input and output channels
+    if isinstance(operation['in'][0], int):
+        in_channels_list = [[feat_sizes[map_id]] for map_id in operation['in']]
+    else:
+        in_channels_list = [[feat_sizes[map_id] for map_id in map_ids] for map_ids in operation['in']]
+
+    out_channels = operation['out_channels']
+    out_channels_list = [out_channels] if isinstance(out_channels, int) else out_channels
+
+    if len(in_channels_list) > 1 and len(out_channels_list) == 1:
+        out_channels_list = [out_channels_list[0]] * len(in_channels_list)
+    elif len(in_channels_list) != len(out_channels_list) and len(out_channels_list) > 1:
+        raise ValueError("Size of input and output channels list must match when multiple output channels are given.")
+
+    # Get 2D attention keyword arguments
+    allowed_keys = ['kernel_size', 'stride', 'padding', 'dilation', 'num_heads', 'bias', 'padding_mode', 'attn_mode']
+    allowed_keys.extend(['pos_attn', 'q_stride', 'qk_norm'])
+    sub_operation_kwargs = {k: v for k, v in operation.items() if k in allowed_keys}
+
+    # Initialize list of modules and sub-operations
+    modules = []
+    sub_operations = []
+
+    # Initialize every 2D attention sub-operation
+    for map_ids, in_channels, out_channels in zip(operation['in'], in_channels_list, out_channels_list):
+        module = Attn2d(in_channels, out_channels, **sub_operation_kwargs)
+        sub_operation = {'in_map_ids': map_ids, 'module_id': modules_offset+len(modules)}
+
+        if 'weight_init' in operation:
+            init_kwargs = {k.replace('weight_init_', ''): v for k, v in operation.items() if 'weight_init_' in k}
+
+            for name, parameter in module.named_parameters():
+                if 'weight' in parameter:
+                    getattr(nn.init, operation['weight_init'])(parameter, **init_kwargs)
+
+        if 'bias_init' in operation:
+            init_kwargs = {k.replace('bias_init_', ''): v for k, v in operation.items() if 'bias_init_' in k}
+
+            for name, parameter in module.named_parameters():
+                if 'bias' in parameter:
+                    getattr(nn.init, operation['bias_init'])(parameter, **init_kwargs)
+
+        modules.append(module)
+        sub_operations.append(sub_operation)
+        feat_sizes.append(out_channels)
+
+    return modules, sub_operations, feat_sizes
+
+
 def initialize_conv2d(operation, feat_sizes, modules_offset):
     """
     Initializes 2D convolution operation with corresponding modules for forward computation.
@@ -62,9 +131,10 @@ def initialize_conv2d(operation, feat_sizes, modules_offset):
         ValueError: Error when incorrect output channels input is provided.
     """
 
-    # Get lists of number input and output channels
-    in_channels_list = [feat_sizes[i] for i in operation['in']]
-    out_channels_list = [operation['out_channels']]
+    # Get lists of number of input and output channels
+    in_channels_list = [feat_sizes[map_id] for map_id in operation['in']]
+    out_channels = operation['out_channels']
+    out_channels_list = [out_channels] if isinstance(out_channels, int) else out_channels
 
     if len(in_channels_list) > 1 and len(out_channels_list) == 1:
         out_channels_list = [out_channels_list[0]] * len(in_channels_list)
@@ -220,6 +290,8 @@ def initialize_operation(operation, feat_sizes, modules_offset):
     # Initialize operation
     if operation_type == 'add':
         sub_operations, feat_sizes = initialize_add(operation, feat_sizes)
+    elif operation_type == 'attn2d':
+        modules, sub_operations, feat_sizes = initialize_attn2d(operation, feat_sizes, modules_offset)
     elif operation_type == 'conv2d':
         modules, sub_operations, feat_sizes = initialize_conv2d(operation, feat_sizes, modules_offset)
     elif operation_type == 'interpolate':

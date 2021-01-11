@@ -1,0 +1,137 @@
+---
+feat_sizes:
+  - 512  # P3 map
+  - 1024 # P4 map
+  - 2048 # P5 map
+
+operations:
+
+  # Lateral projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - 2
+      - 1
+      - 0
+    out:
+      - 3
+      - 4
+      - 5
+
+  # Top-down delta projection
+  - type: 'attn2d'
+    out_channels: 256
+    kernel_size: 1
+    num_heads: 8
+    attn_mode: 'cross'
+    pos_attn: False
+    q_stride: 2
+    qk_norm: 'sigmoid'
+    in:
+      - - 4
+        - 3
+    out:
+      - 6
+
+  # Upsample P5 to P4
+  - type: 'interpolate'
+    shape: 4
+    mode: 'nearest'
+    in: 6
+    out: 7
+
+  # Fuse at P4 level
+  - type: 'add'
+    in:
+      - - 4
+        - 7
+    out:
+      - 8
+
+  # Top-down delta projection
+  - type: 'attn2d'
+    out_channels: 256
+    kernel_size: 1
+    num_heads: 8
+    attn_mode: 'cross'
+    pos_attn: False
+    q_stride: 2
+    qk_norm: 'sigmoid'
+    in:
+      - - 5
+        - 8
+    out:
+      - 9
+
+  # Upsample P4 to P3
+  - type: 'interpolate'
+    shape: 5
+    mode: 'nearest'
+    in: 9
+    out: 10
+
+  # Fuse at P3 level
+  - type: 'add'
+    in:
+      - - 5
+        - 10
+    out:
+      - 11
+
+  # Output projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - 3
+      - 8
+      - 11
+    out:
+      - 12
+      - 13
+      - 14
+
+  # Get P6 from original P5
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 2
+    out: 15
+
+  # Get ReLU P6
+  - type: 'relu'
+    in: 15
+    out: 16
+
+  # Get P7 from ReLU P6
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 16
+    out: 17
+
+outputs:
+    - 14 # P3 map
+    - 13 # P4 map
+    - 12 # P5 map
+    - 15 # P6 map
+    - 17 # P7 map
+...
