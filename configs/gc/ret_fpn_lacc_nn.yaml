@@ -10,28 +10,43 @@ layers:
       - - 0
         - 1
     out: 
-      - - 3
+      - - 4
 
     # Top-down operations
     operations:
+
+      # Top-down delta projection
+      - type: 'attn2d'
+        out_channels: 256
+        kernel_size: 1
+        num_heads: 8
+        attn_mode: 'cross'
+        pos_attn: False
+        q_stride: 2
+        qk_norm: 'sigmoid'
+        in:
+          - - 1
+            - 0
+        out:
+          - - 2
 
       # Upsample
       - type: 'interpolate'
         shape: True
         mode: 'nearest'
         in: 
-          - - 0
+          - - 2
             - 1
         out: 
-          - - 2
+          - - 3
 
       # Fuse
       - type: 'add'
         in:
           - - 1
-            - 2
+            - 3
         out:
-          - - 3
+          - - 4
 
 operations:
 

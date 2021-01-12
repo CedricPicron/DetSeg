@@ -39,8 +39,9 @@ class GC(nn.Module):
         with open(yaml_file, 'r') as stream:
             gc_dict = safe_load(stream)
 
-        # Get expected feature sizes from input maps
+        # Get expected feature sizes from input maps and get layers
         feat_sizes = gc_dict['feat_sizes']
+        layers = gc_dict.setdefault('layers', [])
 
         # Initialize modules and operations attributes
         self.modules_list = nn.ModuleList([])
@@ -48,7 +49,8 @@ class GC(nn.Module):
 
         # Register every operation with their corresponding modules
         for operation in gc_dict['operations']:
-            modules, sub_operations, feat_sizes = initialize_operation(operation, feat_sizes, len(self.modules_list))
+            modules_offset = len(self.modules_list)
+            modules, sub_operations, feat_sizes = initialize_operation(operation, feat_sizes, layers, modules_offset)
             self.modules_list.extend(modules)
             self.operations.extend(sub_operations)
 
@@ -67,7 +69,7 @@ class GC(nn.Module):
             out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
 
         Raises:
-            ValueError: Error when operation dictionary does not contain either 'module_id' or 'function' as keys.
+            ValueError: Error for operation dictionary without key from {'filter_ids', 'module_id', 'function'}.
         """
 
         # Initialize list of feature maps
@@ -75,12 +77,19 @@ class GC(nn.Module):
 
         # Perform every operation
         for operation in self.operations:
-            if 'module_id' in operation:
+            if 'filter_ids' in operation:
+                feat_maps = [feat_maps[i] for i in operation['filter_ids']]
+                continue
+
+            elif 'module_id' in operation:
                 function = self.modules_list[operation['module_id']]
+
             elif 'function' in operation:
                 function = operation['function']
+
             else:
-                raise ValueError("Operation dictonary must have either 'module_id' or 'function' as keys.")
+                required_keys = {'filter_ids', 'module_id', 'function'}
+                raise ValueError(f"Operation dictonary should contain a key from {required_keys}.")
 
             inputs = [feat_maps[i] for i in operation['in_map_ids']]
             kwargs = {k: v for k, v in operation.items() if k not in ['module_id', 'function', 'in_map_ids']}
