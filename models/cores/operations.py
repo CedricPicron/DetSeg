@@ -217,6 +217,49 @@ def initialize_conv2d(operation, feat_sizes, modules_offset):
     return modules, sub_operations, feat_sizes
 
 
+def initialize_groupnorm(operation, feat_sizes, modules_offset):
+    """
+    Initializes groupnorm operation with corresponding modules for forward computation.
+
+    Args:
+        operation (Dict): Dictionary specifying the operation to be performed.
+        feat_sizes (List): List of feature sizes of feature maps to be expected during forward computation.
+        modules_offset (int): Integer containing the offset to be added to the module indices.
+
+    Returns:
+        modules (List): List of initialized modules used by this operation.
+        sub_operations (List): List of sub-operation dictionaries specifying their behavior during forward computation.
+        feat_sizes (List): Updated list of feature sizes of feature maps to be generated during forward computation.
+
+    Raises:
+        ValueError: Error when incorrect input is provided for the 'in' operation key.
+    """
+
+    # Check 'in' operation key
+    if any(len(map_ids) != 1 for map_ids in operation['in']):
+        raise ValueError(f"Exactly one map must be provided per list in {operation['in']}.")
+
+    # Get groupnorm keyword arguments
+    allowed_keys = ['num_groups', 'eps', 'affine']
+    sub_operation_kwargs = {k: v for k, v in operation.items() if k in allowed_keys}
+
+    # Initialize list of modules and sub-operations
+    modules = []
+    sub_operations = []
+
+    # Initialize every groupnorm sub-operation
+    for map_ids in operation['in']:
+        num_channels = feat_sizes[map_ids[0]]
+        module = nn.GroupNorm(num_channels=num_channels, **sub_operation_kwargs)
+        sub_operation = {'in_map_ids': map_ids, 'module_id': modules_offset+len(modules)}
+
+        modules.append(module)
+        sub_operations.append(sub_operation)
+        feat_sizes.append(feat_sizes[map_ids[0]])
+
+    return modules, sub_operations, feat_sizes
+
+
 def initialize_interpolate(operation, feat_sizes):
     """
     Initializes interpolate operation for forward computation.
@@ -398,6 +441,8 @@ def initialize_operation(operation, feat_sizes, layers, modules_offset):
         modules, sub_operations, feat_sizes = initialize_attn2d(operation, feat_sizes, modules_offset)
     elif operation_type == 'conv2d':
         modules, sub_operations, feat_sizes = initialize_conv2d(operation, feat_sizes, modules_offset)
+    elif operation_type == 'groupnorm':
+        modules, sub_operations, feat_sizes = initialize_groupnorm(operation, feat_sizes, modules_offset)
     elif operation_type == 'interpolate':
         sub_operations, feat_sizes = initialize_interpolate(operation, feat_sizes)
     elif operation_type == 'layer':
