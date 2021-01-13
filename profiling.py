@@ -279,7 +279,7 @@ elif profiling_args.model == 'fpn':
 
 elif profiling_args.model == 'gc':
     main_args.backbone_feat_sizes = [512, 1024, 2048]
-    main_args.gc_yaml = './configs/gc/ret_fpn_lccc_gn.yaml'
+    main_args.gc_yaml = './configs/gc/ret_fpn_lccc_fn.yaml'
     model = build_gc(main_args).to('cuda')
 
     feat_map2 = torch.randn(2, 256, 256, 256).to('cuda')
