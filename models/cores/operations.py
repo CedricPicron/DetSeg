@@ -362,13 +362,27 @@ def initialize_layer(layer_operation, feat_sizes, layers, modules_offset):
         feat_sizes (List): Updated list of feature sizes of feature maps to be generated during forward computation.
 
     Raises:
+        ValueError: Error when layer operation with multiple layers does not contain 'out_to_in' key.
+        ValueError: Error when shapes of 'out' and 'out_to_in' keys do not match.
+
         ValueError: Error when unknown layer name is provided.
         ValueError: Error when multiple layers have the same name.
         ValueError: Error when multiple or no sets of inputs are provided by the layer structure.
         ValueError: Error when multiple or no sets of outputs are provided by the layer structure.
     """
 
-    # Get layer and check
+    # Check layer operation
+    if layer_operation.setdefault('num_layers', 1) > 1:
+        if 'out_to_in' not in layer_operation:
+            raise ValueError(f"Layer operation {layer_operation} with multiple layers must contain 'out_to_in' key.")
+
+        out_shape = [len(map_ids) for map_ids in layer_operation['out']]
+        out_to_in_shape = [len(map_ids) for map_ids in layer_operation['out_to_in']]
+
+        if out_shape != out_to_in_shape:
+            raise ValueError(f"Layer operation {layer_operation} must have 'out' and 'out_to_in' keys of equal shape.")
+
+    # Get and check layer
     valid_layers = [layer for layer in layers if layer['name'] == layer_operation['name']]
 
     if len(valid_layers) == 0:
@@ -383,35 +397,47 @@ def initialize_layer(layer_operation, feat_sizes, layers, modules_offset):
     if len(layer['out']) != 1:
         raise ValueError(f"Exacly one set of outputs must be provided by the layer structure (got {layer['out']}).")
 
+    # Get layer to layer filter ids when multiple layers are present
+    if layer_operation['num_layers'] > 1:
+        out_ids = [map_id for map_ids in layer_operation['out'] for map_id in map_ids]
+        in_ids = [map_id for map_ids in layer_operation['out_to_in'] for map_id in map_ids]
+        layer_filter_ids = list(range(len(feat_sizes)))
+
+        for i in range(len(feat_sizes)):
+            if i in in_ids:
+                layer_filter_ids[i] = out_ids[in_ids.index(i)]
+
     # Get local map ids and number of input maps
     local_in_ids = layer['in'][0]
     local_out_ids = layer['out'][0]
     num_in_maps = len(local_in_ids)
-
-    # Rename modules offset as global modules offset
-    global_modules_offset = modules_offset
 
     # Initialize layer modules and layer operations
     layer_modules = []
     layer_operations = []
 
     # Register every operation from layer structure with their corresponding modules
-    for global_in_ids in layer_operation['in']:
-        num_maps = len(feat_sizes)
-        local_to_global_dict = {k: v for k, v in zip(local_in_ids, global_in_ids)}
-        local_to_global_dict['offset'] = num_maps - num_in_maps
+    for layer_id in range(layer_operation['num_layers']):
+        if layer_id > 0:
+            layer_operations.extend([{'filter_ids': layer_filter_ids}])
+            feat_sizes = [feat_sizes[i] for i in layer_filter_ids]
 
-        for operation in deepcopy(layer['operations']):
-            operation = prepare_operation(operation, local_to_global_dict)
+        for global_in_ids in layer_operation['in']:
+            num_maps = len(feat_sizes)
+            local_to_global_dict = {k: v for k, v in zip(local_in_ids, global_in_ids)}
+            local_to_global_dict['offset'] = num_maps - num_in_maps
 
-            modules_offset = global_modules_offset + len(layer_modules)
-            modules, sub_operations, feat_sizes = initialize_operation(operation, feat_sizes, layers, modules_offset)
-            layer_modules.extend(modules)
-            layer_operations.extend(sub_operations)
+            for operation in deepcopy(layer['operations']):
+                operation = prepare_operation(operation, local_to_global_dict)
 
-        filter_ids = list(range(num_maps)) + [num_maps+map_id-num_in_maps for map_id in local_out_ids]
-        layer_operations.append({'filter_ids': filter_ids})
-        feat_sizes = [feat_sizes[i] for i in filter_ids]
+                offset = modules_offset + len(layer_modules)
+                modules, sub_operations, feat_sizes = initialize_operation(operation, feat_sizes, layers, offset)
+                layer_modules.extend(modules)
+                layer_operations.extend(sub_operations)
+
+            filter_ids = list(range(num_maps)) + [num_maps+map_id-num_in_maps for map_id in local_out_ids]
+            layer_operations.append({'filter_ids': filter_ids})
+            feat_sizes = [feat_sizes[i] for i in filter_ids]
 
     return layer_modules, layer_operations, feat_sizes
 

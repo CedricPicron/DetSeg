@@ -1,0 +1,145 @@
+---
+feat_sizes:
+  - 512  # P3 map
+  - 1024 # P4 map
+  - 2048 # P5 map
+
+layers:
+  - name: 'top-down'
+    in:
+      - - 0
+        - 1
+    out: 
+      - - 5
+
+    # Top-down operations
+    operations:
+
+      # Top-down delta projection
+      - type: 'featurenorm'
+        in:
+          - - 0
+        out:
+          - - 2
+
+      - type: 'attn2d'
+        out_channels: 256
+        kernel_size: 1
+        num_heads: 8
+        attn_mode: 'cross'
+        pos_attn: False
+        q_stride: 2
+        qk_norm: 'sigmoid'
+        in:
+          - - 1
+            - 2
+        out:
+          - - 3
+
+      # Upsample
+      - type: 'interpolate'
+        shape: True
+        mode: 'nearest'
+        in: 
+          - - 3
+            - 1
+        out: 
+          - - 4
+
+      # Fuse
+      - type: 'add'
+        in:
+          - - 1
+            - 4
+        out:
+          - - 5
+
+operations:
+
+  # Lateral projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - - 2
+      - - 1
+      - - 0
+    out:
+      - - 3
+      - - 4
+      - - 5
+
+  # Top-down
+  - type: 'layer'
+    name: 'top-down'
+    in:
+      - - 3
+        - 4
+      - - 6
+        - 5
+    out:
+      - - 6
+      - - 7
+
+  # Output projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - - 3
+      - - 6
+      - - 7
+    out:
+      - - 8
+      - - 9
+      - - 10
+
+  # Get P6 from original P5
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 2
+    out: 
+      - - 11
+
+  # Get ReLU P6
+  - type: 'relu'
+    in: 
+      - - 11
+    out: 
+      - - 12
+
+  # Get P7 from ReLU P6
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 12
+    out: 
+      - - 13
+
+outputs:
+    - 10 # P3 map
+    - 9 # P4 map
+    - 8 # P5 map
+    - 11 # P6 map
+    - 13 # P7 map
+...
