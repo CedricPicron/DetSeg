@@ -107,7 +107,7 @@ class Attn2d(nn.Module):
 
         # Initialize local position features if requested
         if pos_attn:
-            self.pos_feats = Parameter(torch.empty(out_channels, kernel_size[0]*kernel_size[1]))
+            self.pos_feats = Parameter(torch.empty(out_channels, self.kernel_size[0]*self.kernel_size[1]))
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -163,12 +163,14 @@ class Attn2d(nn.Module):
         query_map = query_map.view(*query_map.shape[:3], self.num_heads, 1, -1)
 
         # Process key/value map
+        kv_size = kv_map.shape[-2:]
+
         if sum(self.padding) > 0:
             padding_size = (self.padding[1], self.padding[1], self.padding[0], self.padding[0])
             kv_map = F.pad(kv_map, padding_size, mode=self.padding_mode)
 
         kv_map = kv_map.permute(0, 2, 3, 1)
-        sizes = [(size+attn_stride-1)//attn_stride for size, attn_stride in zip(kv_map.shape[1:3], self.stride)]
+        sizes = [(size+attn_stride-1)//attn_stride for size, attn_stride in zip(kv_size, self.stride)]
         center_strides = [stride*attn_stride for stride, attn_stride in zip(kv_map.stride()[1:3], self.stride)]
         points_strides = [stride*dilation for stride, dilation in zip(kv_map.stride()[1:3], self.dilation)]
 

@@ -1,0 +1,258 @@
+---
+feat_sizes:
+  - 512  # P3 map
+  - 1024 # P4 map
+  - 2048 # P5 map
+
+layers:
+
+  # Top-down layer
+  - name: 'top-down'
+    in:
+      - - 0
+        - 1
+    out: 
+      - - 6
+
+    # Top-down operations
+    operations:
+
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
+        in:
+          - - 0
+        out:
+          - - 2
+
+      # ReLU activation
+      - type: 'relu'
+        in:
+          - - 2
+        out:
+          - - 3
+
+      # Top-down delta projection
+      - type: 'conv2d'
+        out_channels: 256
+        kernel_size: 1
+        in:
+          - - 3
+        out:
+          - - 4
+
+      # Upsample
+      - type: 'interpolate'
+        shape: True
+        mode: 'nearest'
+        in: 
+          - - 4
+            - 1
+        out: 
+          - - 5
+
+      # Fuse
+      - type: 'add'
+        in:
+          - - 1
+            - 5
+        out:
+          - - 6
+
+  # Bottom-up layer
+  - name: 'bottom-up'
+    in:
+      - - 0
+        - 1
+    out: 
+      - - 5
+
+    # Bottom-up operations
+    operations:
+
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
+        in:
+          - - 0
+        out:
+          - - 2
+
+      # ReLU activation
+      - type: 'relu'
+        in:
+          - - 2
+        out:
+          - - 3
+
+      # Bottom-up delta projection
+      - type: 'conv2d'
+        out_channels: 256
+        kernel_size: 3
+        stride: 2
+        padding: 1
+        in:
+          - - 3
+        out:
+          - - 4
+
+      # Fuse
+      - type: 'add'
+        in:
+          - - 1
+            - 4
+        out:
+          - - 5
+
+  # PA layer
+  - name: 'pa'
+    in:
+      - - 0 # P7
+        - 1 # P6
+        - 2 # P5
+        - 3 # P4
+        - 4 # P3
+    out: 
+      - - 8  # P3
+        - 9  # P4
+        - 10 # P5
+        - 11 # P6
+        - 12 # P7
+    
+    # PA operations
+    operations:
+
+      # Top-down layer
+      - type: 'layer'
+        name: 'top-down'
+        in:
+          - - 0 # P7
+            - 1 # P6
+          - - 5 # P6
+            - 2 # P5
+          - - 6 # P5
+            - 3 # P4
+          - - 7 # P4
+            - 4 # P3
+        out:
+          - - 5 # P6
+          - - 6 # P5
+          - - 7 # P4
+          - - 8 # P3
+
+      # Bottom-up layer
+      - type: 'layer'
+        name: 'bottom-up'
+        in:
+          - - 8  # P3
+            - 7  # P4
+          - - 9  # P4
+            - 6  # P5
+          - - 10 # P5
+            - 5  # P6
+          - - 11 # P6
+            - 0  # P7
+        out:
+          - - 9  # P4
+          - - 10 # P5
+          - - 11 # P6
+          - - 12 # P7
+
+operations:
+
+  # Lateral projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - - 2
+      - - 1
+      - - 0
+    out:
+      - - 3
+      - - 4
+      - - 5
+
+  # Get P6 from original P5
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 2
+    out: 
+      - - 6
+
+  # Get ReLU P6
+  - type: 'relu'
+    in: 
+      - - 6
+    out: 
+      - - 7
+
+  # Get P7 from ReLU P6
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 7
+    out: 
+      - - 8
+
+  # PA
+  - type: 'layer'
+    name: 'pa'
+    num_layers: 1
+    in:
+      - - 8 # P7
+        - 6 # P6
+        - 3 # P5
+        - 4 # P4
+        - 5 # P3
+    out:
+      - - 9  # P3
+        - 10 # P4
+        - 11 # P5
+        - 12 # P6
+        - 13 # P7
+
+  # Output projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - - 9  # P3
+      - - 10 # P4
+      - - 11 # P5
+      - - 12 # P6
+      - - 13 # P7
+    out:
+      - - 14 # P3
+      - - 15 # P4
+      - - 16 # P5
+      - - 17 # P6
+      - - 18 # P7
+
+outputs:
+    - 14 # P3
+    - 15 # P4
+    - 16 # P5
+    - 17 # P6
+    - 18 # P7
+...

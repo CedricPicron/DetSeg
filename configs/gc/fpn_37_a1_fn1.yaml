@@ -5,6 +5,8 @@ feat_sizes:
   - 2048 # P5 map
 
 layers:
+
+  # Top-down layer
   - name: 'top-down'
     in:
       - - 0
@@ -15,13 +17,14 @@ layers:
     # Top-down operations
     operations:
 
-      # Top-down delta projection
+      # Feature normalization
       - type: 'featurenorm'
         in:
           - - 0
         out:
           - - 2
 
+      # Top-down delta projection
       - type: 'attn2d'
         out_channels: 256
         kernel_size: 1

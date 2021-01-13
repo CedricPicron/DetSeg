@@ -369,6 +369,7 @@ def initialize_layer(layer_operation, feat_sizes, layers, modules_offset):
         ValueError: Error when multiple layers have the same name.
         ValueError: Error when multiple or no sets of inputs are provided by the layer structure.
         ValueError: Error when multiple or no sets of outputs are provided by the layer structure.
+        ValueError: Error when input sizes from layer operation do not match layer structure input size.
     """
 
     # Check layer operation
@@ -396,6 +397,8 @@ def initialize_layer(layer_operation, feat_sizes, layers, modules_offset):
         raise ValueError(f"Exacly one set of inputs must be provided by the layer structure (got {layer['in']}).")
     if len(layer['out']) != 1:
         raise ValueError(f"Exacly one set of outputs must be provided by the layer structure (got {layer['out']}).")
+    if any(len(map_ids) != len(layer['in'][0]) for map_ids in layer_operation['in']):
+        raise ValueError(f"Input sizes {layer_operation['in']} must match layer structure input size {layer['in']}.")
 
     # Get layer to layer filter ids when multiple layers are present
     if layer_operation['num_layers'] > 1:

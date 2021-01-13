@@ -5,6 +5,8 @@ feat_sizes:
   - 2048 # P5 map
 
 layers:
+
+  # Top-down layer
   - name: 'top-down'
     in:
       - - 0
