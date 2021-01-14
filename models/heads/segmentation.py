@@ -66,7 +66,7 @@ class BinarySegHead(nn.Module):
         if len(pred_correctness) > 0:
             accuracy = pred_correctness.sum() / float(len(pred_correctness))
         else:
-            accuracy = torch.tensor(1.0).to(pred_correctness)
+            accuracy = torch.tensor(1.0).to(pred_correctness.device)
 
         return accuracy
 
@@ -392,7 +392,7 @@ class SemanticSegHead(nn.Module):
         if len(pred_correctness) > 0:
             accuracy = pred_correctness.sum() / float(len(pred_correctness))
         else:
-            accuracy = torch.tensor(1.0).to(pred_correctness)
+            accuracy = torch.tensor(1.0).to(pred_correctness.device)
 
         return accuracy
 

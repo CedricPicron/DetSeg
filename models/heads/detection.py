@@ -334,7 +334,7 @@ class RetinaHead(nn.Module):
         if pred_correctness.numel() > 0:
             accuracy = pred_correctness.sum() / float(pred_correctness.numel())
         else:
-            accuracy = torch.tensor(1.0).to(pred_correctness)
+            accuracy = torch.tensor(1.0).to(pred_correctness.device)
 
         return accuracy
 
