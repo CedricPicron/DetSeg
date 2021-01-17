@@ -319,7 +319,7 @@ def main(args):
     if args.checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
-        start_epoch = checkpoint['epoch']
+        start_epoch = checkpoint['epoch'] + 1
 
     # Start training timer
     start_time = time.time()
