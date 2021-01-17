@@ -246,8 +246,11 @@ def main(args):
 
     # Load model from checkpoint if required
     if args.checkpoint:
-        checkpoint = torch.load(args.checkpoint, map_location='cpu')
-        model.load_state_dict(checkpoint['model'])
+        try:
+            checkpoint = torch.load(args.checkpoint, map_location='cpu')
+            model.load_state_dict(checkpoint['model'])
+        except FileNotFoundError:
+            args.checkpoint = ''
 
     # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
