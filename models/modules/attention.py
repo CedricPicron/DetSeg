@@ -16,7 +16,7 @@ class Attn2d(nn.Module):
 
     Attributes:
         in_channels (Tuple): Number of channels of input maps used for query and key/value computation respectively.
-        out_channels (int): Number of channels of output map.
+        out_channels (int): Number of channels of output map (i.e. number of channels of value map).
         kernel_size (Tuple): Size of the attention region in (height, width) format.
         stride (Tuple): Stride of the attention region in (height, width) format.
         padding (Tuple): Key/value map padding in (height, width) format.
@@ -26,6 +26,7 @@ class Attn2d(nn.Module):
         attn_mode (str): Attention mode from {'self', 'cross'}.
         pos_attn (bool): Whehter or not local position features are learned.
         q_stride (Tuple): Stride of the query elements in (height, width) format.
+        qk_channels (int): Number of channels of query and key maps.
         qk_norm (callable): Query-key normalization function.
 
         If attn_mode is 'self':
@@ -40,13 +41,14 @@ class Attn2d(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, num_heads=1, bias=True,
-                 padding_mode='zeros', attn_mode='self', pos_attn=True, q_stride=1, qk_norm='softmax'):
+                 padding_mode='zeros', attn_mode='self', pos_attn=True, q_stride=1, qk_channels=None,
+                 qk_norm='softmax'):
         """
         Initializes the Attn2d module.
 
         Args:
             in_channels (int or List): Number of channels of input maps.
-            out_channels (int): Number of channels of output map.
+            out_channels (int): Number of channels of output map (i.e. number of channels of value map).
             kernel_size (int or List): Size of the attention region in (height, width) format.
             stride (int or List): Stride of the attention region in (height, width) format (default=1).
             padding (int or List): Key/value map padding in (height, width) format (default=0).
@@ -57,17 +59,20 @@ class Attn2d(nn.Module):
             attn_mode (str): Attention mode from {'self', 'cross'} (default='self').
             pos_attn (bool): Whehter or not local position features are learned (default=True).
             q_stride (int or List): Stride of the query elements in (height, width) format (default=1).
+            qk_channels (int or None): Number of channels of query and key maps (default=None).
             qk_norm (str): Query-key normalization function name from {'softmax', 'sigmoid'} (default='softmax').
 
         Raises:
             ValueError: Error when invalid attention mode is provided.
             ValueError: Error when two different number of input channels are given in 'self' attention mode.
+            ValueError: Error when the number of heads does not divide the number of output channels.
+            ValueError: Error when the number of heads does not divide the number of query-key channels.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Check inputs
+        # Check inputs (1)
         if attn_mode not in ['self', 'cross']:
             raise ValueError(f"Attention mode must be 'self' or 'cross' (got {attn_mode}).")
 
@@ -90,6 +95,7 @@ class Attn2d(nn.Module):
         self.attn_mode = attn_mode
         self.pos_attn = pos_attn
         self.q_stride = (q_stride, q_stride) if isinstance(q_stride, int) else tuple(q_stride)
+        self.qk_channels = qk_channels if qk_channels is not None else out_channels
 
         if qk_norm == 'softmax':
             def softmax(x): return F.softmax(x, dim=-1)
@@ -98,16 +104,25 @@ class Attn2d(nn.Module):
         elif qk_norm == 'sigmoid':
             self.qk_norm = torch.sigmoid
 
+        # Check inputs (2)
+        if self.out_channels % self.num_heads != 0:
+            msg = f"The number of heads ({num_heads}) should divide the number of output channels ({out_channels})."
+            raise ValueError(msg)
+
+        if self.qk_channels % self.num_heads != 0:
+            msg = f"The number of heads ({num_heads}) should divide the number of qk-channels ({self.qk_channels})."
+            raise ValueError(msg)
+
         # Initialize linear projection modules
         if attn_mode == 'self':
-            self.proj = nn.Conv2d(in_channels[0], 3*out_channels, kernel_size=1, bias=bias)
+            self.proj = nn.Conv2d(self.in_channels[0], 2*self.qk_channels+self.out_channels, kernel_size=1, bias=bias)
         else:
-            self.q_proj = nn.Conv2d(in_channels[0], out_channels, kernel_size=1, bias=bias)
-            self.kv_proj = nn.Conv2d(in_channels[1], 2*out_channels, kernel_size=1, bias=bias)
+            self.q_proj = nn.Conv2d(self.in_channels[0], self.qk_channels, kernel_size=1, bias=bias)
+            self.kv_proj = nn.Conv2d(self.in_channels[1], self.qk_channels+self.out_channels, kernel_size=1, bias=bias)
 
         # Initialize local position features if requested
         if pos_attn:
-            self.pos_feats = Parameter(torch.empty(out_channels, self.kernel_size[0]*self.kernel_size[1]))
+            self.pos_feats = Parameter(torch.empty(self.qk_channels, self.kernel_size[0]*self.kernel_size[1]))
 
         # Set default initial values of module parameters
         self.reset_parameters()
@@ -143,22 +158,21 @@ class Attn2d(nn.Module):
             out_feat_map (FloatTensor): Output feature map of shape [batch_size, out_channels, fH, fW].
         """
 
-        # Some renaming for readability
-        f = self.out_channels
+        # Get initial query, key and value maps
+        q_channels = self.qk_channels
         q_sH, q_sW = self.q_stride
 
-        # Get initial query, key and value maps
         if self.attn_mode == 'self':
             qkv_map = self.proj(in_feat_maps[0])
-            query_map = qkv_map[:, :f, ::q_sH, ::q_sW]
-            kv_map = qkv_map[:, f:3*f, :, :]
+            query_map = qkv_map[:, :q_channels, ::q_sH, ::q_sW]
+            kv_map = qkv_map[:, q_channels:, :, :]
 
         else:
             query_map = self.q_proj(in_feat_maps[0][:, :, ::q_sH, ::q_sW])
             kv_map = self.kv_proj(in_feat_maps[1])
 
         # Process query map
-        scale = float(f//self.num_heads)**-0.25
+        scale = float(self.qk_channels//self.num_heads)**-0.25
         query_map = scale*query_map.permute(0, 2, 3, 1)
         query_map = query_map.view(*query_map.shape[:3], self.num_heads, 1, -1)
 
@@ -174,18 +188,19 @@ class Attn2d(nn.Module):
         center_strides = [stride*attn_stride for stride, attn_stride in zip(kv_map.stride()[1:3], self.stride)]
         points_strides = [stride*dilation for stride, dilation in zip(kv_map.stride()[1:3], self.dilation)]
 
-        sizes = [kv_map.shape[0], *sizes, 2*f, *self.kernel_size]
+        kv_channels = self.qk_channels + self.out_channels
+        sizes = [kv_map.shape[0], *sizes, kv_channels, *self.kernel_size]
         strides = [kv_map.stride()[0], *center_strides, kv_map.stride()[3], *points_strides]
         kv_map = kv_map.as_strided(sizes, strides).reshape(*sizes[:-2], -1)
 
         # Process key map
-        key_map = kv_map[:, :, :, :f, :]
+        key_map = kv_map[:, :, :, :self.qk_channels, :]
         key_map = torch.add(self.pos_feats, key_map, alpha=scale) if self.pos_attn else scale*key_map
-        key_map = key_map.view(*key_map.shape[:3], self.num_heads, f//self.num_heads, -1)
+        key_map = key_map.view(*key_map.shape[:3], self.num_heads, self.qk_channels//self.num_heads, -1)
 
         # Process value map
-        value_map = kv_map[:, :, :, f:2*f, :]
-        value_map = value_map.view(*key_map.shape)
+        value_map = kv_map[:, :, :, self.qk_channels:, :]
+        value_map = value_map.view(*value_map.shape[:3], self.num_heads, self.out_channels//self.num_heads, -1)
 
         # Get output feature map
         attn_weights = self.qk_norm(torch.matmul(query_map, key_map))
