@@ -43,12 +43,14 @@ def prepare_operation(operation, local_to_global_dict=None):
 
     # Change local map ids to global map ids if requested
     if local_to_global_dict is not None:
-        for i, map_ids in enumerate(deepcopy(operation['in'])):
-            for j, map_id in enumerate(map_ids):
-                if map_id in local_to_global_dict:
-                    operation['in'][i][j] = local_to_global_dict[map_id]
-                else:
-                    operation['in'][i][j] = map_id + local_to_global_dict['offset']
+        for key in operation:
+            if key in ['in', 'out', 'out_to_in']:
+                for i, map_ids in enumerate(deepcopy(operation[key])):
+                    for j, map_id in enumerate(map_ids):
+                        if map_id in local_to_global_dict:
+                            operation[key][i][j] = local_to_global_dict[map_id]
+                        else:
+                            operation[key][i][j] = map_id + local_to_global_dict['offset']
 
     return operation
 
