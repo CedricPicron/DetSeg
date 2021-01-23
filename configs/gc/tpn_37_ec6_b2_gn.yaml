@@ -6,44 +6,58 @@ feat_sizes:
 
 layers:
 
-  # Top-down layer
+   # Top-down layer
   - name: 'top-down'
     in:
       - - 0
         - 1
     out: 
-      - - 4
+      - - 6
 
     # Top-down operations
     operations:
+
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
+        in:
+          - - 0
+        out:
+          - - 2
+
+      # ReLU activation
+      - type: 'relu'
+        in:
+          - - 2
+        out:
+          - - 3
+
+      # Top-down delta projection
+      - type: 'conv2d'
+        out_channels: 256
+        kernel_size: 1
+        in:
+          - - 3
+        out:
+          - - 4
 
       # Upsample
       - type: 'interpolate'
         shape: True
         mode: 'nearest'
         in: 
-          - - 0
+          - - 4
             - 1
         out: 
-          - - 2
+          - - 5
 
-      # Fuse
+      # Residual addition
       - type: 'add'
         in:
           - - 1
-            - 2
+            - 5
         out:
-          - - 3
-
-      # Average
-      - type: 'mul'
-        inplace: True
-        other: 0.5
-        in:
-          - - 3
-        out:
-          - - 4
-        
+          - - 6
 
   # Bottleneck layer
   - name: 'bottleneck'
@@ -140,14 +154,15 @@ layers:
         out:
           - - 10
 
-  # Bottleneck residual (stride 2)
-  - name: 'bottleneck_res2'
+  # Bottom-up layer
+  - name: 'bottom-up'
     in:
       - - 0
+        - 1
     out:
-      - - 9
+      - - 11
 
-    # Bottleneck residual operations
+    # Bottom-up operations
     operations:
       
       # Group normalization
@@ -156,40 +171,40 @@ layers:
         in:
           - - 0
         out:
-          - - 1
+          - - 2
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 1
-        out:
           - - 2
+        out:
+          - - 3
 
       # In-projection
       - type: 'conv2d'
         out_channels: 64
         kernel_size: 1
         in:
-          - - 2
-        out:
           - - 3
+        out:
+          - - 4
 
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 3
-        out:
           - - 4
+        out:
+          - - 5
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 4
-        out:
           - - 5
+        out:
+          - - 6
 
       # Level processing
       - type: 'conv2d'
@@ -198,88 +213,42 @@ layers:
         stride: 2
         padding: 1
         in:
-          - - 5
-        out:
           - - 6
+        out:
+          - - 7
 
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 6
-        out:
           - - 7
+        out:
+          - - 8
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 7
-        out:
           - - 8
+        out:
+          - - 9
 
       # Out-projection
       - type: 'conv2d'
         out_channels: 256
         kernel_size: 1
         in:
-          - - 8
-        out:
           - - 9
-
-  # Bottom-up layer
-  - name: 'bottom-up'
-    in:
-      - - 0
-        - 1
-    out: 
-      - - 6
-
-    # Bottom-up operations
-    operations:
-
-      # Bottleneck residual layer
-      - type: 'layer'
-        name: 'bottleneck_res2'
-        in:
-          - - 0
         out:
-          - - 2
-
-      # Downsample
-      - type: interpolate
-        shape: True
-        mode: 'nearest'
-        in: 
-          - - 0
-            - 1
-        out: 
-          - - 3
+          - - 10
 
       # Residual addition
       - type: 'add'
         in:
-          - - 2
-            - 3
-        out:
-          - - 4
-
-      # Fuse
-      - type: 'add'
-        in:
           - - 1
-            - 4
+            - 10
         out:
-          - - 5
-
-      # Average
-      - type: 'mul'
-        inplace: True
-        other: 0.5
-        in:
-          - - 5
-        out:
-          - - 6
+          - - 11
 
   # TPN layer
   - name: 'tpn'
