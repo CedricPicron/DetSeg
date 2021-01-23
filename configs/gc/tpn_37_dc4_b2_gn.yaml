@@ -443,7 +443,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 6
+    num_layers: 4
     in:
       - - 8 # P7
         - 6 # P6

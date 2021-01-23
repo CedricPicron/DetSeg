@@ -12,70 +12,52 @@ layers:
       - - 0
         - 1
     out: 
-      - - 8
+      - - 6
 
     # Top-down operations
     operations:
-
-      # Downsample map
-      - type: 'interpolate'
-        shape: True
-        mode: 'nearest'
-        in: 
-          - - 1
-            - 0
-        out: 
-          - - 2
-
-      # Get difference map
-      - type: 'sub'
-        in:
-          - - 0
-            - 2
-        out:
-          - - 3
 
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 3
+          - - 0
         out:
-          - - 4
+          - - 2
 
       # ReLU activation
       - type: 'relu'
         in:
-          - - 4
+          - - 2
         out:
-          - - 5
+          - - 3
 
       # Top-down delta projection
       - type: 'conv2d'
         out_channels: 256
         kernel_size: 1
         in:
-          - - 5
+          - - 3
         out:
-          - - 6
+          - - 4
 
       # Upsample
       - type: 'interpolate'
         shape: True
         mode: 'nearest'
         in: 
-          - - 6
+          - - 4
             - 1
         out: 
-          - - 7
+          - - 5
 
       # Residual addition
       - type: 'add'
         in:
           - - 1
-            - 7
+            - 5
         out:
-          - - 8
+          - - 6
 
   # Bottleneck layer
   - name: 'bottleneck'
@@ -178,69 +160,51 @@ layers:
       - - 0
         - 1
     out:
-      - - 13
+      - - 11
 
     # Bottom-up operations
     operations:
-
-      # Upsample map
-      - type: 'interpolate'
-        shape: True
-        mode: 'nearest'
-        in: 
-          - - 1
-            - 0
-        out: 
-          - - 2
-
-      # Get difference map
-      - type: 'sub'
-        in:
-          - - 0
-            - 2
-        out:
-          - - 3
       
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 3
+          - - 0
         out:
-          - - 4
+          - - 2
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 4
+          - - 2
         out:
-          - - 5
+          - - 3
 
       # In-projection
       - type: 'conv2d'
         out_channels: 64
         kernel_size: 1
         in:
-          - - 5
+          - - 3
         out:
-          - - 6
+          - - 4
 
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 6
+          - - 4
         out:
-          - - 7
+          - - 5
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 7
+          - - 5
         out:
-          - - 8
+          - - 6
 
       # Level processing
       - type: 'conv2d'
@@ -249,42 +213,42 @@ layers:
         stride: 2
         padding: 1
         in:
-          - - 8
+          - - 6
         out:
-          - - 9
+          - - 7
 
       # Group normalization
       - type: 'groupnorm'
         num_groups: 8
         in:
-          - - 9
+          - - 7
         out:
-          - - 10
+          - - 8
 
       # ReLU activation
       - type: 'relu'
         inplace: True
         in:
-          - - 10
+          - - 8
         out:
-          - - 11
+          - - 9
 
       # Out-projection
       - type: 'conv2d'
         out_channels: 256
         kernel_size: 1
         in:
-          - - 11
+          - - 9
         out:
-          - - 12
+          - - 10
 
       # Residual addition
       - type: 'add'
         in:
           - - 1
-            - 12
+            - 10
         out:
-          - - 13
+          - - 11
 
   # TPN layer
   - name: 'tpn'
@@ -325,7 +289,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 3
+        num_layers: 4
         in:
           - - 0 # P7
           - - 5 # P6
@@ -366,7 +330,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 3
+        num_layers: 4
         in:
           - - 13 # P3
           - - 14 # P4
@@ -443,7 +407,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 4
+    num_layers: 2
     in:
       - - 8 # P7
         - 6 # P6
