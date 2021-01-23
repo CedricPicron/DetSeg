@@ -388,7 +388,7 @@ def get_coco_transforms():
 
     crop = T.Compose([T.RandomResize([400, 500, 600]), T.RandomSizeCrop(384, 600)])
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
-    default_resize = T.RandomResize(scales, max_size=1333)
+    default_resize = T.RandomResize(scales, max_size=1200)
     cropped_resize = T.Compose([crop, default_resize])
 
     hflip = T.RandomHorizontalFlip()
