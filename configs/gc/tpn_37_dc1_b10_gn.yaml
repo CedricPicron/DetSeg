@@ -325,7 +325,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 8
+        num_layers: 10
         in:
           - - 0 # P7
           - - 5 # P6
@@ -366,7 +366,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 8
+        num_layers: 10
         in:
           - - 13 # P3
           - - 14 # P4
