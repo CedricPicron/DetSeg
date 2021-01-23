@@ -526,6 +526,42 @@ def initialize_relu(operation, feat_sizes):
     return sub_operations, feat_sizes
 
 
+def initialize_sub(operation, feat_sizes):
+    """
+    Initializes subtraction operation for forward computation.
+
+    Args:
+        operation (Dict): Dictionary specifying the operation to be performed.
+        feat_sizes (List): List of feature sizes of feature maps to be expected during forward computation.
+
+    Returns:
+        sub_operations (List): List of sub-operation dictionaries specifying their behavior during forward computation.
+        feat_sizes (List): Updated list of feature sizes of feature maps to be generated during forward computation.
+
+    Raises:
+        ValueError: Error when incorrect input is provided for the 'in' operation key.
+    """
+
+    # Check 'in' operation key
+    if any(len(map_ids) != 2 for map_ids in operation['in']):
+        raise ValueError(f"Exactly two maps must be provided per list in {operation['in']}.")
+
+    # Get sub-operation keyword arguments and initialize empty list of sub-operations
+    allowed_keys = ['alpha']
+    sub_operation_kwargs = {k: v for k, v in operation.items() if k in allowed_keys}
+    sub_operations = []
+
+    # Initialize every subtraction operation
+    for map_ids in operation['in']:
+        sub_operation = {'function': torch.sub, 'in_map_ids': map_ids, **sub_operation_kwargs}
+        feat_size = feat_sizes[map_ids[0]]
+
+        sub_operations.append(sub_operation)
+        feat_sizes.append(feat_size)
+
+    return sub_operations, feat_sizes
+
+
 def initialize_operation(operation, feat_sizes, layers, modules_offset):
     """
     Initializes operation with corresponding modules for forward computation.
@@ -571,6 +607,8 @@ def initialize_operation(operation, feat_sizes, layers, modules_offset):
         sub_operations, feat_sizes = initialize_mul(operation, feat_sizes)
     elif operation_type == 'relu':
         sub_operations, feat_sizes = initialize_relu(operation, feat_sizes)
+    elif operation_type == 'sub':
+        sub_operations, feat_sizes = initialize_sub(operation, feat_sizes)
     else:
         raise ValueError(f'Unknown operation type {operation_type} was provided.')
 
