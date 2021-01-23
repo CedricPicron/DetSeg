@@ -36,6 +36,11 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
     header = f"Train epoch {epoch}:"
 
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+
+        # Release unoccupied cached memory on GPU
+        torch.cuda.empty_cache()
+
+        # Place images and target dictionary on correct device
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
@@ -95,6 +100,8 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
 
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+
+        # Place images and target dictionary on correct device
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
