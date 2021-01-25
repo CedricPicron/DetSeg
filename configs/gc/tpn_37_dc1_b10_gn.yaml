@@ -20,7 +20,8 @@ layers:
       # Downsample map
       - type: 'interpolate'
         shape: True
-        mode: 'nearest'
+        mode: 'bilinear'
+        align_corners: False
         in: 
           - - 1
             - 0
@@ -62,7 +63,8 @@ layers:
       # Upsample
       - type: 'interpolate'
         shape: True
-        mode: 'nearest'
+        mode: 'bilinear'
+        align_corners: False
         in: 
           - - 6
             - 1
@@ -186,7 +188,8 @@ layers:
       # Upsample map
       - type: 'interpolate'
         shape: True
-        mode: 'nearest'
+        mode: 'bilinear'
+        align_corners: False
         in: 
           - - 1
             - 0

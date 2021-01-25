@@ -44,7 +44,8 @@ layers:
       # Upsample
       - type: 'interpolate'
         shape: True
-        mode: 'nearest'
+        mode: 'bilinear'
+        align_corners: False
         in: 
           - - 4
             - 1
