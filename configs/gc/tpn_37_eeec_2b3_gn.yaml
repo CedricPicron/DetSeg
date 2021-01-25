@@ -290,7 +290,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 10
+        num_layers: 3
         in:
           - - 0 # P7
           - - 5 # P6
@@ -331,7 +331,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 10
+        num_layers: 3
         in:
           - - 13 # P3
           - - 14 # P4
@@ -408,7 +408,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 1
+    num_layers: 2
     in:
       - - 8 # P7
         - 6 # P6

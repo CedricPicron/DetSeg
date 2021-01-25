@@ -37,9 +37,6 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
 
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
 
-        # Release unoccupied cached memory on GPU
-        torch.cuda.empty_cache()
-
         # Place images and target dictionary on correct device
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}

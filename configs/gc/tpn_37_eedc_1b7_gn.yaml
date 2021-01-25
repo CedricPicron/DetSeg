@@ -28,8 +28,8 @@ layers:
         out: 
           - - 2
 
-      # Get addition map
-      - type: 'add'
+      # Get difference map
+      - type: 'sub'
         in:
           - - 0
             - 2
@@ -196,8 +196,8 @@ layers:
         out: 
           - - 2
 
-      # Get addition map
-      - type: 'add'
+      # Get difference map
+      - type: 'sub'
         in:
           - - 0
             - 2
@@ -328,7 +328,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 1
+        num_layers: 7
         in:
           - - 0 # P7
           - - 5 # P6
@@ -369,7 +369,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 1
+        num_layers: 7
         in:
           - - 13 # P3
           - - 14 # P4
@@ -446,7 +446,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 7
+    num_layers: 1
     in:
       - - 8 # P7
         - 6 # P6
