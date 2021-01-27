@@ -108,14 +108,11 @@ class DistributedDataParallel(DistributedDataParallel):
     """
     Altered version of the PyTorch 'DistributedDataParallel' module.
 
-    It runs 'prepare_for_backward' before the module's forward method instead of after. This allows
-    losses to be backpropagted inside the module's forward method instead of only after and outside the method.
+    It runs 'prepare_for_backward' before the module's forward method instead of after. This allows losses to be
+    backpropagted inside the module's forward method instead of only after and outside the method.
 
-    The module assumes all module parameters which require gradient, also receive a gradient in each forward pass.
-    As such, we do not support setting the 'find_unused_parameters' argument to True.
-
-    When an out-of-memory error occurs, it retries after clearing the GPU cache. It assumes the out-of-memory error
-    occurred during the forward pass of the underlying model (hence no variables were marked as ready for backprop).
+    The module assumes all module's parameters which require gradient, receive a gradient in each forward pass.
+    As such, we do not support setting the 'find_unused_parameters' to True.
 
     Note that we only support single process single device (SPSD) mode, which is the recommended mode for using the
     PyTorch 'DistributedDataParallel' module.
@@ -160,18 +157,9 @@ class DistributedDataParallel(DistributedDataParallel):
         else:
             self.require_forward_param_sync = False
 
-        # Get module inputs and keyword arguments
+        # Get module outputs from given inputs and keyword arguments
         inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
-
-        # Get module outputs
-        try:
-            outputs = self.module(*inputs[0], **kwargs[0])
-        except RuntimeError as error:
-            if 'out of memory' in str(error):
-                torch.cuda.empty_cache()
-                outputs = self.module(*inputs[0], **kwargs[0])
-            else:
-                raise error
+        outputs = self.module(*inputs[0], **kwargs[0])
 
         return outputs
 
