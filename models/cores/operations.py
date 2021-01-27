@@ -126,7 +126,7 @@ def initialize_attn2d(operation, feat_sizes, modules_offset):
 
     # Get 2D attention keyword arguments
     allowed_keys = ['kernel_size', 'stride', 'padding', 'dilation', 'num_heads', 'bias', 'padding_mode', 'attn_mode']
-    allowed_keys.extend(['pos_attn', 'q_stride', 'qk_norm'])
+    allowed_keys.extend(['pos_attn', 'q_stride', 'qk_channels', 'qk_norm'])
     sub_operation_kwargs = {k: v for k, v in operation.items() if k in allowed_keys}
 
     # Initialize list of modules and sub-operations
