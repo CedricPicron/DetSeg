@@ -24,6 +24,7 @@ def get_parser():
     # General
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
     parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
+    parser.add_argument('--load_model_only', action='store_true', help='only load model from checkpoint')
     parser.add_argument('--output_dir', default='', type=str, help='save path during training (no saving when empty)')
 
     # Evaluation
@@ -316,7 +317,7 @@ def main(args):
     start_epoch = 1
 
     # Load optimizer, scheduler and start epoch from checkpoint if required
-    if args.checkpoint:
+    if args.checkpoint and not args.load_model_only:
         optimizer.load_state_dict(checkpoint['optimizer'])
         scheduler.load_state_dict(checkpoint['scheduler'])
         start_epoch = checkpoint['epoch'] + 1
