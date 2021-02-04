@@ -9,8 +9,8 @@ from torch.nn.utils import clip_grad_norm_
 
 from .backbone import build_backbone
 from .cores.build import build_core
-from .heads.detection import build_det_heads
-from .heads.segmentation import build_seg_heads
+from .heads.detection.build import build_det_heads
+from .heads.segmentation.build import build_seg_heads
 from .utils import downsample_masks
 
 

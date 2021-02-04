@@ -19,8 +19,8 @@ from models.criterion import build_criterion
 from models.decoder import build_decoder
 from models.detr import build_detr
 from models.encoder import build_encoder
-from models.heads.detection import build_det_heads
-from models.heads.segmentation import build_seg_heads
+from models.heads.detection.build import build_det_heads
+from models.heads.segmentation.build import build_seg_heads
 from structures.boxes import Boxes
 from structures.images import Images
 
