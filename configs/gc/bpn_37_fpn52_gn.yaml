@@ -1,0 +1,179 @@
+---
+feat_sizes:
+  - 512  # P3 map
+  - 1024 # P4 map
+  - 2048 # P5 map
+
+layers:
+
+   # Top-down layer
+  - name: 'top-down'
+    in:
+      - - 0
+        - 1
+    out: 
+      - - 6
+
+    # Top-down operations
+    operations:
+
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
+        in:
+          - - 0
+        out:
+          - - 2
+
+      # ReLU activation
+      - type: 'relu'
+        in:
+          - - 2
+        out:
+          - - 3
+
+      # Top-down delta projection
+      - type: 'conv2d'
+        out_channels: 256
+        kernel_size: 1
+        in:
+          - - 3
+        out:
+          - - 4
+
+      # Upsample
+      - type: 'interpolate'
+        shape: True
+        mode: 'bilinear'
+        align_corners: False
+        in: 
+          - - 4
+            - 1
+        out: 
+          - - 5
+
+      # Residual addition
+      - type: 'add'
+        in:
+          - - 1
+            - 5
+        out:
+          - - 6
+
+  # BPN layer
+  - name: 'bpn'
+    in:
+      - - 0 # P7
+        - 1 # P6
+        - 2 # P5
+        - 3 # P4
+        - 4 # P3
+    out: 
+      - - 5 # P6
+        - 6 # P5
+        - 7 # P4
+        - 8 # P3
+    
+    # BPN operations
+    operations:
+
+      # Top-down layer
+      - type: 'layer'
+        name: 'top-down'
+        num_layers: 52
+        in:
+          - - 0 # P7
+            - 1 # P6
+          - - 5 # P6
+            - 2 # P5
+          - - 6 # P5
+            - 3 # P4
+          - - 7 # P4
+            - 4 # P3
+        out:
+          - - 5 # P6 new
+          - - 6 # P5 new
+          - - 7 # P4 new
+          - - 8 # P3 new
+        out_to_in:
+          - - 1 # P6 old
+          - - 2 # P5 old
+          - - 3 # P4 old
+          - - 4 # P3 old
+
+operations:
+
+  # Lateral projection
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in:
+      - - 2
+      - - 1
+      - - 0
+    out:
+      - - 3
+      - - 4
+      - - 5
+
+  # Get P6 from original P5
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 2
+    out: 
+      - - 6
+
+  # Get ReLU P6
+  - type: 'relu'
+    inplace: True
+    in: 
+      - - 6
+    out: 
+      - - 7
+
+  # Get P7 from ReLU P6
+  - type: 'conv2d'
+    out_channels: 256
+    kernel_size: 3
+    stride: 2
+    padding: 1
+    weight_init: 'kaiming_uniform_'
+    weight_init_a: 1
+    bias_init: 'zeros_'
+    in: 
+      - - 7
+    out: 
+      - - 8
+
+  # BPN
+  - type: 'layer'
+    name: 'bpn'
+    in:
+      - - 8 # P7
+        - 6 # P6
+        - 3 # P5
+        - 4 # P4
+        - 5 # P3
+    out:
+      - - 9  # P6
+        - 10 # P5
+        - 11 # P4
+        - 12 # P3
+
+outputs:
+  - 12 # P3
+  - 11 # P4
+  - 10 # P5
+  - 9  # P6
+  - 8  # P7
+...
