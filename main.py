@@ -200,8 +200,8 @@ def get_parser():
     parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
 
     # Scheduler
-    parser.add_argument('--epochs', default=300, type=int, help='total number of training epochs')
-    parser.add_argument('--lr_drop', default=200, type=int, help='scheduler period of learning rate decay')
+    parser.add_argument('--epochs', default=36, type=int, help='total number of training epochs')
+    parser.add_argument('--lr_drops', nargs='*', default=[27, 33], type=int, help='epochs of learning rate drops')
 
     return parser
 
@@ -313,7 +313,7 @@ def main(args):
                     break
 
     optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_drops)
     start_epoch = 1
 
     # Load optimizer, scheduler and start epoch from checkpoint if required

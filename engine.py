@@ -200,8 +200,8 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler):
         output_dir = Path(args.output_dir)
         checkpoint_paths = [output_dir / 'checkpoint.pth']
 
-        # Extra checkpoint before LR drop and after 27th and 40th epoch
-        if epoch % args.lr_drop == 0 or epoch in [27, 40]:
+        # Extra checkpoint before LR drop
+        if epoch in args.lr_drops:
             checkpoint_paths.append(output_dir / f'checkpoint{epoch}.pth')
 
         # Checkpoint saving
