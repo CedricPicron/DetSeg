@@ -23,8 +23,8 @@ def get_parser():
 
     # General
     parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
-    parser.add_argument('--checkpoint', default='', type=str, help='path with checkpoint to resume from')
-    parser.add_argument('--load_model_only', action='store_true', help='only load model from checkpoint')
+    parser.add_argument('--checkpoint_full', default='', type=str, help='path with full checkpoint to resume from')
+    parser.add_argument('--checkpoint_model', default='', type=str, help='path with model checkpoint to resume from')
     parser.add_argument('--output_dir', default='', type=str, help='save path during training (no saving when empty)')
 
     # Evaluation
@@ -245,13 +245,25 @@ def main(args):
     if args.load_orig_detr and args.meta_arch == 'DETR':
         model.load_from_original_detr()
 
-    # Load model from checkpoint if required
-    if args.checkpoint:
+    # Try loading checkpoint
+    checkpoint_path = ''
+
+    if args.checkpoint_full:
         try:
-            checkpoint = torch.load(args.checkpoint, map_location='cpu')
-            model.load_state_dict(checkpoint['model'])
+            checkpoint = torch.load(args.checkpoint_full, map_location='cpu')
+            checkpoint_path = args.checkpoint_full
+            load_model_only = False
         except FileNotFoundError:
-            args.checkpoint = ''
+            pass
+
+    if not checkpoint_path and args.checkpoint_model:
+        checkpoint = torch.load(args.checkpoint_model, map_location='cpu')
+        checkpoint_path = args.checkpoint_model
+        load_model_only = True
+
+    # Load model from checkpoint if present
+    if checkpoint_path:
+        model.load_state_dict(checkpoint['model'])
 
     # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
@@ -261,10 +273,10 @@ def main(args):
     if args.eval:
         val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
 
-        if not args.checkpoint and not args.output_dir:
+        if not checkpoint_path and not args.output_dir:
             return
 
-        output_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint).parent
+        output_dir = Path(args.output_dir) if args.output_dir else Path(checkpoint_path).parent
         if distributed.is_main_process():
             if evaluator is None:
                 with (output_dir / 'eval.txt').open('w') as eval_file:
@@ -279,7 +291,7 @@ def main(args):
 
     # If requested, visualize model from checkpoint and return
     if args.visualize:
-        if not args.checkpoint and not args.output_dir:
+        if not checkpoint_path and not args.output_dir:
             print("No output directory was given or could be derived from checkpoint. Returning now.")
             return
 
@@ -290,7 +302,7 @@ def main(args):
         if args.batch_size > 1:
             print("It's recommended to use 'batch_size=1' so that printed loss and analysis dicts are image-specific.")
 
-        output_dir = Path(args.output_dir) if args.output_dir else Path(args.checkpoint).parent / 'visualization'
+        output_dir = Path(args.output_dir) if args.output_dir else Path(checkpoint_path).parent / 'visualization'
         output_dir.mkdir(exist_ok=True)
 
         # Get visualization dataloader
@@ -301,7 +313,7 @@ def main(args):
         visualize(model, dataloader, output_dir)
         return
 
-    # Get optimizer, scheduler and start epoch
+    # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
@@ -314,13 +326,18 @@ def main(args):
 
     optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_drops)
-    start_epoch = 1
 
-    # Load optimizer, scheduler and start epoch from checkpoint if required
-    if args.checkpoint and not args.load_model_only:
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        scheduler.load_state_dict(checkpoint['scheduler'])
-        start_epoch = checkpoint['epoch'] + 1
+    # Update default optimizer and/or scheduler based on checkpoint
+    if checkpoint_path:
+        if load_model_only:
+            optimizer.step()
+            [scheduler.step() for _ in range(checkpoint['epoch'])]
+        else:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+
+    # Get start epoch
+    start_epoch = checkpoint['epoch']+1 if checkpoint_path else 1
 
     # Start training timer
     start_time = time.time()
