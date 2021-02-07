@@ -13,20 +13,22 @@ class PolicyNet(nn.Module):
     Class implementing the PolicyNet module.
 
     Attributes:
-        input_type (str): String containing the input type chosen from {'map'}.
+        input_type (str): String containing the input type chosen from {'pyramid'}.
+        inference_samples (int): Maximum number of samples during inference.
         head (nn.Sequential): Module computing the action logits from its input.
     """
 
-    def __init__(self, feat_size, input_type, num_hidden_layers=1, **kwargs):
+    def __init__(self, feat_size, input_type, num_hidden_layers=1, inference_samples=100, **kwargs):
         """
         Initializes the PolicyNet module.
 
         Args:
             feat_size (int): Integer containing the feature size.
-            input_type (str): String containing the input type chosen from {'map'}.
-            num_hidden_layers (int): Number of hidden layers (default=1).
+            input_type (str): String containing the input type chosen from {'pyramid'}.
+            num_hidden_layers (int): Number of hidden layers of the policy head (default=1).
+            inference_samples (int): Maximum number of samples during inference (default=100).
 
-            kwargs (Dict): Dictionary containing additional keywords arguments:
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
                 - num_groups (int): number of groups used for group normalization.
 
         Raises:
@@ -36,11 +38,12 @@ class PolicyNet(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set input type attribute
+        # Set input type and number of samples attributes
         self.input_type = input_type
+        self.inference_samples = inference_samples
 
         # Initialize network based on input type
-        if input_type == 'map':
+        if input_type == 'pyramid':
 
             # Get normalization and activation modules
             num_groups = kwargs.setdefault('num_groups', 8)
@@ -67,28 +70,44 @@ class PolicyNet(nn.Module):
         Forward method of the PolicyNet module.
 
         Args:
-            If input_type is 'map':
+            If input_type is 'pyramid':
                 input (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
         Returns
-            If input_type is 'map':
-                action_masks (List): List of size [num_maps] with masks of shape [batch_size, feat_size, fH, fW].
-                action_losses (FloatTensor): Initial pre-reward action losses of shape [num_selected_features].
+            If module in training mode and input_type is 'pyramid':
+                sample_masks (BoolTensor): Masks of features to sampled of shape [batch_size, fH*fW].
+                action_losses (List): List of size [batch_size] with initial action losses of shape [train_samples].
+
+            If module in inference mode:
+                sample_ids (LongTensor): Indices of features to be sampled of shape [batch_size, inference_samples].
         """
 
         # Process input based on input type
-        if self.input_type == 'map':
+        if self.input_type == 'pyramid':
 
-            # Get action logit maps
+            # Get action logits
             logit_maps = [self.head(feat_map) for feat_map in input]
+            logits = torch.cat([logit_map.flatten(1) for logit_map in logit_maps], dim=1)
 
-            # Get action masks
-            with torch.no_grad():
-                prob_maps = [F.sigmoid(logit_map) for logit_map in logit_maps]
-                action_masks = [torch.bernoulli(prob_map).to(torch.bool) for prob_map in prob_maps]
+            # Get sample masks and action losses during training
+            if self.training:
 
-            # Get initial pre-reward action losses
-            sampled_logits = torch.cat([map[mask] for map, mask in zip(logit_maps, action_masks)])
-            action_losses = F.logsigmoid(sampled_logits)
+                # Get sample masks
+                with torch.no_grad():
+                    action_probs = F.sigmoid(logits)
+                    sample_masks = torch.bernoulli(action_probs).to(torch.bool)
 
-        return action_masks, action_losses
+                # Get initial pre-reward action losses
+                batch_size = len(logits)
+                sampled_logits = [logits[i][sample_masks[i]] for i in range(batch_size)]
+                action_losses = [F.logsigmoid(sampled_logits[i]) for i in range(batch_size)]
+
+                return sample_masks, action_losses
+
+            # Get indices of most promising features during inference
+            else:
+
+                # Get indices of most promising features
+                sample_ids = torch.argsort(logits, dim=1, descending=True)[:, :self.inference_samples]
+
+                return sample_ids
