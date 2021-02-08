@@ -208,3 +208,104 @@ class Attn2d(nn.Module):
         out_feat_map = out_feat_map.permute(0, 3, 1, 2)
 
         return out_feat_map
+
+
+class SelfAttn1d(nn.Module):
+    """
+    Class implementing the SelfAttn1d module.
+
+    The module performs multi-head self-attention on sets of 1D features.
+
+    Attributes:
+        feat_size (int): Integer containing the feature size.
+        num_heads (int): Number of attention heads.
+
+        layer_norm (nn.LayerNorm): Layer normalization module before attention mechanism.
+        in_proj (nn.Linear): Linear input projection module projecting normalized features to queries, keys and values.
+        out_proj (nn.Linear): Linear output projection module projecting weighted values to delta output features.
+    """
+
+    def __init__(self, feat_size, num_heads):
+        """
+        Initializes the SelfAttn1d module.
+
+        Args:
+            feat_size (int): Integer containing the feature size.
+            num_heads (int): Number of attention heads.
+
+        Raises:
+            ValueError: Raised when the number of heads does not divide the feature size.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check inputs
+        if feat_size % num_heads != 0:
+            raise ValueError(f"The number of heads ({num_heads}) should divide the feature size ({feat_size}).")
+
+        # Set non-learnable attributes
+        self.feat_size = feat_size
+        self.num_heads = num_heads
+
+        # Initialize layer normalization module
+        self.layer_norm = nn.LayerNorm(feat_size)
+
+        # Initalize input and output projection modules
+        self.in_proj = nn.Linear(feat_size, 3*feat_size)
+        self.out_proj = nn.Linear(feat_size, feat_size)
+
+        # Set default initial values of module parameters
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """
+        Resets module parameters to default initial values.
+        """
+
+        nn.init.xavier_uniform_(self.in_proj.weight)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.in_proj.bias)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, in_feat_list):
+        """
+        Forward method of the SelfAttn1d module.
+
+        Args:
+            in_feat_list (List): List [num_feat_sets] containing input features of shape [num_features, feat_size].
+
+        Returns:
+            out_feat_list (List): List [num_feat_sets] containing output features of shape [num_features, feat_size].
+        """
+
+        # Initialize empty output features list
+        out_feat_list = []
+
+        # Perform self-attention on every set of input features
+        for in_feats in in_feat_list:
+
+            # Apply layer normalization
+            norm_feats = self.layer_norm(in_feats)
+
+            # Get queries, keys and values
+            f = self.feat_size
+            head_size = f//self.num_heads
+
+            qkv_feats = self.in_proj(norm_feats)
+            queries = qkv_feats[:, :f].view(-1, self.num_heads, head_size).permute(1, 0, 2)
+            keys = qkv_feats[:, f:2*f].view(-1, self.num_heads, head_size).permute(1, 2, 0)
+            values = qkv_feats[:, 2*f:3*f].view(-1, self.num_heads, head_size).permute(1, 0, 2)
+
+            # Get weighted values
+            scale = float(head_size)**-0.5
+            attn_weights = F.softmax(scale*torch.bmm(queries, keys), dim=2)
+            weighted_values = torch.bmm(attn_weights, values)
+            weighted_values = weighted_values.permute(1, 0, 2).view(-1, self.feat_size)
+
+            # Get output features
+            delta_feats = self.out_proj(weighted_values)
+            out_feats = in_feats + delta_feats
+            out_feat_list.append(out_feats)
+
+        return out_feat_list
