@@ -62,16 +62,19 @@ class PolicyNet(nn.Module):
             hidden_blocks = [deepcopy(hidden_block) for _ in range(num_hidden_layers)]
             self.head = nn.Sequential(*hidden_blocks, final_block)
 
+        # Raise error when an unknown input type is provided
         else:
             raise ValueError(f"Unknown input type '{input_type}' was provided.")
 
-    def forward(self, input):
+    def forward(self, input, mode):
         """
         Forward method of the PolicyNet module.
 
         Args:
             If input_type is 'pyramid':
                 input (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+
+            mode (str): Mode of PolicyNet forward method chosen from {'training', 'inference'}.
 
         Returns
             If module in training mode and input_type is 'pyramid':
@@ -80,6 +83,9 @@ class PolicyNet(nn.Module):
 
             If module in inference mode:
                 sample_ids (LongTensor): Indices of features to be sampled of shape [batch_size, inference_samples].
+
+        Raises:
+            ValueError: Raised when an unknown mode is provided.
         """
 
         # Process input based on input type
@@ -90,7 +96,7 @@ class PolicyNet(nn.Module):
             logits = torch.cat([logit_map.flatten(1) for logit_map in logit_maps], dim=1)
 
             # Get sample masks and action losses during training
-            if self.training:
+            if mode == 'training':
 
                 # Get sample masks
                 with torch.no_grad():
@@ -105,9 +111,13 @@ class PolicyNet(nn.Module):
                 return sample_masks, action_losses
 
             # Get indices of most promising features during inference
-            else:
+            elif mode == 'inference':
 
                 # Get indices of most promising features
                 sample_ids = torch.argsort(logits, dim=1, descending=True)[:, :self.inference_samples]
 
                 return sample_ids
+
+            # Raise error when an unknown mode is provided
+            else:
+                raise ValueError(f"Unknown mode '{mode}' was provided.")

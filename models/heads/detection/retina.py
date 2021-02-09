@@ -127,11 +127,12 @@ class RetinaHead(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def forward_init(self, feat_maps, tgt_dict=None):
+    def forward_init(self, images, feat_maps, tgt_dict=None):
         """
         Forward initialization method of the RetinaHead module.
 
         Args:
+            images (Images): Images structure containing the batched images.
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
