@@ -191,13 +191,21 @@ class BRD(nn.Module):
                 giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
                 loss_matrix = cls_loss + l1_loss + giou_loss
 
-                # Get sorted loss matrix and ranking matrix
-                sorted_loss_matrix, ranking_matrix = torch.sort(loss_matrix, dim=0)
+                # Get sorted loss matrix and corresponding prediction rankings
+                sorted_loss_matrix, pred_rankings = torch.sort(loss_matrix, dim=0)
+
+                # Get initial ranking matrix
+                ranking_matrix = torch.empty_like(pred_rankings)
+                num_preds, num_tgts = loss_matrix.shape
+                index_matrix = torch.arange(num_preds).repeat(num_tgts, 1).t().to(pred_rankings)
+                ranking_matrix.scatter_(dim=0, index=pred_rankings, src=index_matrix)
+
+                # Update ranking matrix to avoid duplicates by taking loss values into account
                 norm_loss_matrix = (loss_matrix-loss_matrix.min())/(loss_matrix.max()-loss_matrix.min())
                 ranking_matrix = ranking_matrix + norm_loss_matrix
 
                 # Get best losses per prediction
-                pred_ids = torch.arange(len(ranking_matrix))
+                pred_ids = torch.arange(num_preds)
                 best_rankings, best_tgt_ids = torch.min(ranking_matrix, dim=1)
                 best_losses_per_pred = loss_matrix[pred_ids, best_tgt_ids]
 
@@ -212,7 +220,7 @@ class BRD(nn.Module):
             loss_dict['brd_action_loss'] += action_loss
 
             # Get best prediction indices per target
-            best_pred_ids = torch.argmin(loss_matrix, dim=0)
+            best_pred_ids = pred_rankings[0, :]
 
             # Get classification loss
             cls_logits_i = cls_logits[i][best_pred_ids, :]
