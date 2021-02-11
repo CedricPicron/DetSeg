@@ -150,21 +150,23 @@ class BRD(nn.Module):
                 - brd_l1_loss (FloatTensor): weigthed L1 bounding box loss of shape [1];
                 - brd_giou_loss (FloatTensor): weighted GIoU bounding box loss of shape [1].
 
-            analysis_dict (Dict): Analysis dictionary containing following key:
-                - brd_cls_acc (FloatTensor): classification accuracy of shape [].
+            analysis_dict (Dict): Analysis dictionary containing following keys:
+                - brd_cls_acc (FloatTensor): classification accuracy of shape [1];
+                - brd_num_preds (FloatTensor): number of predictions of shape [1].
 
         Raises:
             ValueError: Raised when target boxes are not normalized.
         """
 
-        # Get batch size and initialize dictionaries
-        batch_size = len(cls_logits)
-        loss_dict = {'brd_action_loss': 0, 'brd_cls_loss': 0, 'brd_l1_loss': 0, 'brd_giou_loss': 0}
-        analysis_dict = {'brd_cls_acc': 0}
+        # Initialize loss and analysis dictionaries
+        tensor_kwargs = {'dtype': torch.float, 'device': tgt_labels[0].device}
+        loss_dict = {f'brd_{k}_loss': torch.zeros(1, **tensor_kwargs) for k in ['action', 'cls', 'l1', 'giou']}
+        analysis_dict = {f'brd_{k}': torch.zeros(1, **tensor_kwargs) for k in ['cls_acc', 'num_preds']}
 
         # Get total number of target boxes across batch_entries
+        batch_size = len(cls_logits)
         num_tgt_boxes = sum(len(tgt_boxes[i]) for i in range(batch_size))
-        num_tgt_boxes = torch.tensor([num_tgt_boxes], dtype=torch.float, device=box_logits[0].device)
+        num_tgt_boxes = torch.tensor([num_tgt_boxes], **tensor_kwargs)
 
         # Average number of target boxes across nodes
         if is_dist_avail_and_initialized():
@@ -174,84 +176,93 @@ class BRD(nn.Module):
         # Get loss and analysis for every batch entry
         for i in range(batch_size):
 
-            # Prepare boxes
-            pred_boxes_i = Boxes(box_logits[i].sigmoid(), format='cxcywh', normalized=True)
-            tgt_boxes_i = tgt_boxes[i].to_format('cxcywh')
+            # Get number of predictions and targets
+            num_preds = len(cls_logits[i])
+            num_tgts = len(tgt_labels[i])
 
-            # Check whether target boxes are normalized
-            if not tgt_boxes_i.normalized:
-                raise ValueError("Target boxes should be normalized when using BRD loss.")
+            # Add number of predictions to analysis dictionary
+            analysis_dict['brd_num_preds'] += num_preds / batch_size
 
-            # Get action weights
-            with torch.no_grad():
+            # Skip batch entry if needed
+            if num_preds > 1 and num_tgts > 0:
 
-                # Get loss matrix
-                cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
-                l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
-                giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
-                loss_matrix = cls_loss + l1_loss + giou_loss
+                # Prepare boxes
+                pred_boxes_i = Boxes(box_logits[i].sigmoid(), format='cxcywh', normalized=True)
+                tgt_boxes_i = tgt_boxes[i].to_format('cxcywh')
 
-                # Get sorted loss matrix and corresponding prediction rankings
-                sorted_loss_matrix, pred_rankings = torch.sort(loss_matrix, dim=0)
+                # Check whether target boxes are normalized
+                if not tgt_boxes_i.normalized:
+                    raise ValueError("Target boxes should be normalized when using BRD loss.")
 
-                # Get initial ranking matrix
-                ranking_matrix = torch.empty_like(pred_rankings)
-                num_preds, num_tgts = loss_matrix.shape
-                index_matrix = torch.arange(num_preds).repeat(num_tgts, 1).t().to(pred_rankings)
-                ranking_matrix.scatter_(dim=0, index=pred_rankings, src=index_matrix)
+                # Get action weights
+                with torch.no_grad():
 
-                # Update ranking matrix to avoid duplicates by taking loss values into account
-                norm_loss_matrix = (loss_matrix-loss_matrix.min())/(loss_matrix.max()-loss_matrix.min())
-                ranking_matrix = ranking_matrix + norm_loss_matrix
+                    # Get loss matrix
+                    cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
+                    l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
+                    giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+                    loss_matrix = cls_loss + l1_loss + giou_loss
 
-                # Get best losses per prediction
-                pred_ids = torch.arange(num_preds)
-                best_rankings, best_tgt_ids = torch.min(ranking_matrix, dim=1)
-                best_losses_per_pred = loss_matrix[pred_ids, best_tgt_ids]
+                    # Get sorted loss matrix and corresponding prediction rankings
+                    sorted_loss_matrix, pred_rankings = torch.sort(loss_matrix, dim=0)
 
-                # Get baseline losses per prediction and action weights
-                true_operation = sorted_loss_matrix[0, best_tgt_ids]
-                false_operation = sorted_loss_matrix[1, best_tgt_ids]
-                baseline_losses_per_pred = torch.where(best_rankings > 1, true_operation, false_operation)
-                action_weights = best_losses_per_pred - baseline_losses_per_pred
+                    # Get initial ranking matrix
+                    ranking_matrix = torch.empty_like(pred_rankings)
+                    index_matrix = torch.arange(num_preds).repeat(num_tgts, 1).t().to(pred_rankings)
+                    ranking_matrix.scatter_(dim=0, index=pred_rankings, src=index_matrix)
 
-            # Get weighted action loss
-            action_loss = torch.sum(action_weights * action_losses[i], dim=0, keepdim=True)
-            loss_dict['brd_action_loss'] += action_loss
+                    # Update ranking matrix to avoid duplicates by taking loss values into account
+                    norm_loss_matrix = (loss_matrix-loss_matrix.min())/(loss_matrix.max()-loss_matrix.min())
+                    ranking_matrix = ranking_matrix + norm_loss_matrix
 
-            # Get best prediction indices per target
-            best_pred_ids = pred_rankings[0, :]
+                    # Get best losses per prediction
+                    pred_ids = torch.arange(num_preds)
+                    best_rankings, best_tgt_ids = torch.min(ranking_matrix, dim=1)
+                    best_losses_per_pred = loss_matrix[pred_ids, best_tgt_ids]
 
-            # Get classification loss
-            cls_logits_i = cls_logits[i][best_pred_ids, :]
-            cls_targets = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
+                    # Get baseline losses per prediction and action weights
+                    true_operation = sorted_loss_matrix[0, best_tgt_ids]
+                    false_operation = sorted_loss_matrix[1, best_tgt_ids]
+                    baseline_losses_per_pred = torch.where(best_rankings > 1, true_operation, false_operation)
+                    action_weights = best_losses_per_pred - baseline_losses_per_pred
 
-            cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
-            cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets, **cls_kwargs)
-            loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
+                # Get weighted action loss
+                action_loss = torch.sum(action_weights * action_losses[i], dim=0, keepdim=True)
+                loss_dict['brd_action_loss'] += action_loss
 
-            # Get L1 bounding box loss
-            l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
-            loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
+                # Get best prediction indices per target
+                best_pred_ids = pred_rankings[0, :]
 
-            # Get GIoU bounding box loss
-            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
-            loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
+                # Get classification loss
+                cls_logits_i = cls_logits[i][best_pred_ids, :]
+                cls_targets = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
 
-            # Perform classification accurcy analysis
-            with torch.no_grad():
+                cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
+                cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets, **cls_kwargs)
+                loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
 
-                # Get number of correct predictions
-                pred_labels = torch.argmax(cls_logits_i, dim=1)
-                num_correct_preds = torch.eq(pred_labels, tgt_labels[i]).sum()
+                # Get L1 bounding box loss
+                l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
+                loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
 
-                # Average number of correct predictions accross nodes
-                if is_dist_avail_and_initialized():
-                    torch.distributed.all_reduce(num_correct_preds)
-                    num_correct_preds = num_correct_preds/get_world_size()
+                # Get GIoU bounding box loss
+                giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
+                loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
 
-                # Get classification accuracy
-                analysis_dict['brd_cls_acc'] += 100 * num_correct_preds / num_tgt_boxes
+                # Perform classification accurcy analysis
+                with torch.no_grad():
+
+                    # Get number of correct predictions
+                    pred_labels = torch.argmax(cls_logits_i, dim=1)
+                    num_correct_preds = torch.eq(pred_labels, tgt_labels[i]).sum(dim=0, keepdim=True)
+
+                    # Average number of correct predictions accross nodes
+                    if is_dist_avail_and_initialized():
+                        torch.distributed.all_reduce(num_correct_preds)
+                        num_correct_preds = num_correct_preds/get_world_size()
+
+                    # Get classification accuracy
+                    analysis_dict['brd_cls_acc'] += 100 * num_correct_preds / num_tgt_boxes
 
         return loss_dict, analysis_dict
 
