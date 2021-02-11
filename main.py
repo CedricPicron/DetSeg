@@ -94,6 +94,27 @@ def get_parser():
     # ** Detection heads
     parser.add_argument('--det_heads', nargs='*', default='', type=str, help='names of desired detection heads')
 
+    # *** BRD (Base Reinforced Detector) head
+    parser.add_argument('--brd_feat_size', default=256, type=int, help='internal feature size of the BRD head')
+
+    parser.add_argument('--brd_num_groups', default=8, type=int, help='number of group normalization groups')
+    parser.add_argument('--brd_prior_prob', default=0.01, type=float, help='prior object probability')
+    parser.add_argument('--brd_inference_samples', default=100, type=int, help='number of samples during inference')
+    parser.add_argument('--brd_policy_layers', default=1, type=int, help='number of policy hidden layers')
+
+    parser.add_argument('--brd_num_heads', default=8, type=int, help='number of decoder attention heads')
+    parser.add_argument('--brd_dec_hidden_size', default=1024, type=int, help='feature size in decoder hidden layer')
+    parser.add_argument('--brd_dec_layers', default=2, type=int, help='number of decoder layers')
+
+    parser.add_argument('--brd_head_hidden_size', default=256, type=int, help='feature size in head hidden layer')
+    parser.add_argument('--brd_head_layers', default=1, type=int, help='number of head hidden layers')
+
+    parser.add_argument('--brd_focal_alpha', default=0.25, type=float, help='BRD head focal alpha value')
+    parser.add_argument('--brd_focal_gamma', default=2.0, type=float, help='BRD head focal gamma value')
+    parser.add_argument('--brd_cls_weight', default=1.0, type=float, help='BRD head classification weight factor')
+    parser.add_argument('--brd_l1_weight', default=5.0, type=float, help='BRD head L1 bounding box weight factor')
+    parser.add_argument('--brd_giou_weight', default=2.0, type=float, help='BRD head GIoU bounding box weight factor')
+
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')

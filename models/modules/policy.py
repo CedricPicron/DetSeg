@@ -2,6 +2,7 @@
 Collection of policy-based modules.
 """
 from copy import deepcopy
+import math
 
 import torch
 from torch import nn
@@ -18,15 +19,16 @@ class PolicyNet(nn.Module):
         head (nn.Sequential): Module computing the action logits from its input.
     """
 
-    def __init__(self, feat_size, input_type, num_hidden_layers=1, inference_samples=100, **kwargs):
+    def __init__(self, feat_size, input_type, prior_prob, inference_samples=100, num_hidden_layers=1, **kwargs):
         """
         Initializes the PolicyNet module.
 
         Args:
             feat_size (int): Integer containing the feature size.
             input_type (str): String containing the input type chosen from {'pyramid'}.
-            num_hidden_layers (int): Number of hidden layers of the policy head (default=1).
+            prior_prob (float): Prior action probability.
             inference_samples (int): Maximum number of samples during inference (default=100).
+            num_hidden_layers (int): Number of hidden layers of the policy head (default=1).
 
             kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
                 - num_groups (int): number of groups used for group normalization.
@@ -48,14 +50,14 @@ class PolicyNet(nn.Module):
             # Get normalization and activation modules
             num_groups = kwargs.setdefault('num_groups', 8)
             norm = nn.GroupNorm(num_groups, feat_size)
-            activation = nn.Relu(inplace=True)
+            activation = nn.ReLU(inplace=True)
 
             # Get hidden block module
-            hidden_weight = nn.Conv1d(feat_size, feat_size, kernel_size=1)
+            hidden_weight = nn.Conv2d(feat_size, feat_size, kernel_size=1)
             hidden_block = nn.Sequential(norm, activation, hidden_weight)
 
             # Get final block module
-            final_weight = nn.Conv1d(feat_size, 1, kernel_size=1)
+            final_weight = nn.Conv2d(feat_size, 1, kernel_size=1)
             final_block = nn.Sequential(norm, activation, final_weight)
 
             # Get policy head module
@@ -65,6 +67,21 @@ class PolicyNet(nn.Module):
         # Raise error when an unknown input type is provided
         else:
             raise ValueError(f"Unknown input type '{input_type}' was provided.")
+
+        # Set default initial values of module parameters
+        self.reset_parameters(prior_prob)
+
+    def reset_parameters(self, prior_prob):
+        """
+        Resets module parameters to default initial values.
+
+        Args:
+            prior_prob (float): Prior action probability.
+        """
+
+        if self.input_type == 'pyramid':
+            bias_value = -(math.log((1 - prior_prob) / prior_prob))
+            torch.nn.init.constant_(self.head[-1][-1].bias, bias_value)
 
     def forward(self, input, mode):
         """
@@ -100,7 +117,7 @@ class PolicyNet(nn.Module):
 
                 # Get sample masks
                 with torch.no_grad():
-                    action_probs = F.sigmoid(logits)
+                    action_probs = torch.sigmoid(logits)
                     sample_masks = torch.bernoulli(action_probs).to(torch.bool)
 
                 # Get initial pre-reward action losses

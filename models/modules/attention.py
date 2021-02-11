@@ -301,7 +301,7 @@ class SelfAttn1d(nn.Module):
             scale = float(head_size)**-0.5
             attn_weights = F.softmax(scale*torch.bmm(queries, keys), dim=2)
             weighted_values = torch.bmm(attn_weights, values)
-            weighted_values = weighted_values.permute(1, 0, 2).view(-1, self.feat_size)
+            weighted_values = weighted_values.permute(1, 0, 2).reshape(-1, self.feat_size)
 
             # Get output features
             delta_feats = self.out_proj(weighted_values)

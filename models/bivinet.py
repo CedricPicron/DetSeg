@@ -234,7 +234,7 @@ class BiViNet(nn.Module):
 
             # Prepare heads and target dictionary for current forward pass
             for head in self.heads:
-                tgt_dict, attr_dict, buffer_dict = head.forward_init(feat_maps, tgt_dict)
+                tgt_dict, attr_dict, buffer_dict = head.forward_init(images, feat_maps, tgt_dict)
                 [setattr(head, k, v) for k, v in attr_dict.items()]
                 [getattr(head, k).copy_(v) for k, v in buffer_dict.items()]
 

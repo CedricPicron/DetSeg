@@ -3,14 +3,17 @@ Base Reinforced Detector (BRD) head.
 """
 from copy import deepcopy
 
+from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from models.functional.position import sine_pos_encodings
 from models.modules.attention import SelfAttn1d
 from models.modules.mlp import FFN, MLP
 from models.modules.policy import PolicyNet
 from structures.boxes import Boxes, box_giou
+from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
 class BRD(nn.Module):
@@ -21,10 +24,16 @@ class BRD(nn.Module):
         policy (PolicyNet): Policy network computing action masks and initial action losses.
         decoder (nn.Sequential): Sequence of decoder layers, with each layer having a self-attention and FFN operation.
         cls_head (MLP): Module computing the classification logits from object features.
-        box_head (MLP): Module computing the bounding box predictions from object features.
+        box_head (MLP): Module computing the bounding box logits from object features.
+
+        focal_alpha (float): Alpha value of the sigmoid focal loss used during classification.
+        focal_gamma (float): Gamma value of the sigmoid focal loss used during classification.
+        cls_weight (float): Factor weighting the classification loss.
+        l1_weight (float): Factor weighting the L1 bounding box loss.
+        giou_weight (float): Factor weighting the GIoU bounding box loss.
     """
 
-    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict):
+    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict, loss_dict):
         """
         Initializes the BRD module.
 
@@ -32,9 +41,10 @@ class BRD(nn.Module):
             feat_size (int): Integer containing the feature size.
 
             policy_dict (Dict): Policy dictionary, potentially containing following keys:
-                - num_hidden_layers (int): number of hidden layers of the policy head;
+                - num_groups (int): number of groups used for group normalization;
+                - prior_prob (float): prior object probability;
                 - inference_samples (int): maximum number of samples during inference;
-                - num_groups (int): number of groups used for group normalization.
+                - num_hidden_layers (int): number of hidden layers of the policy head.
 
             decoder_dict (Dict): Decoder dictionary containing following keys:
                 - num_heads (int): number of attention heads used during the self-attention operation;
@@ -45,6 +55,13 @@ class BRD(nn.Module):
                 - num_classes (int): integer containing the number of object classes (without background);
                 - hidden_size (int): integer containing the hidden feature size used during the MLP operation;
                 - num_hidden_layers (int): number of hidden layers of the MLP head.
+
+            loss_dict (Dict): Loss dictionary containing following keys:
+                - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
+                - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
+                - cls_weight (float): factor weighting the classification loss;
+                - l1_weight (float): factor weighting the L1 bounding box loss;
+                - giou_weight (float): factor weighting the GIoU bounding box loss.
         """
 
         # Initialization of default nn.Module
@@ -62,9 +79,16 @@ class BRD(nn.Module):
         self.decoder = nn.Sequential(*[deepcopy(decoder_layer) for _ in range(num_decoder_layers)])
 
         # Initialize classification and bounding box heads
-        num_classes = head_dict['num_classes']
+        num_classes = head_dict.pop('num_classes')
         self.cls_head = MLP(feat_size, out_size=num_classes, **head_dict)
         self.box_head = MLP(feat_size, out_size=4, **head_dict)
+
+        # Set loss-related attributes
+        self.focal_alpha = loss_dict['focal_alpha']
+        self.focal_gamma = loss_dict['focal_gamma']
+        self.cls_weight = loss_dict['cls_weight']
+        self.l1_weight = loss_dict['l1_weight']
+        self.giou_weight = loss_dict['giou_weight']
 
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """
@@ -108,63 +132,129 @@ class BRD(nn.Module):
 
         return tgt_dict, {}, {}
 
-    def get_loss(self, action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes):
+    def get_loss(self, action_losses, cls_logits, box_logits, tgt_labels, tgt_boxes):
         """
         Get BRD loss and its corresponding analysis.
 
         Args:
             action_losses (List): List of size [batch_size] with initial action losses of shape [train_samples].
             cls_logits (List): List of size [batch_size] with classification logits of shape [num_preds, num_classes].
-            pred_boxes (List): List of size [batch_size] with bounding box predictions of shape [num_preds, 4].
+            box_logits (List): List of size [batch_size] with bounding box logits of shape [num_preds, 4].
             tgt_labels (List): List of size [batch_size] with class indices of shape [num_targets].
             tgt_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_targets].
 
         Returns:
-            loss_dict (Dict): Loss dictionary.
-            analysis_dict (Dict): Analysis dictionary.
+            loss_dict (Dict): Loss dictionary containing following keys:
+                - brd_action_loss (FloatTensor): weighted action loss of shape [1];
+                - brd_cls_loss (FloatTensor): weighted classification loss of shape [1];
+                - brd_l1_loss (FloatTensor): weigthed L1 bounding box loss of shape [1];
+                - brd_giou_loss (FloatTensor): weighted GIoU bounding box loss of shape [1].
+
+            analysis_dict (Dict): Analysis dictionary containing following key:
+                - brd_cls_acc (FloatTensor): classification accuracy of shape [].
 
         Raises:
             ValueError: Raised when target boxes are not normalized.
         """
 
-        # Get batch size
+        # Get batch size and initialize dictionaries
         batch_size = len(cls_logits)
+        loss_dict = {'brd_action_loss': 0, 'brd_cls_loss': 0, 'brd_l1_loss': 0, 'brd_giou_loss': 0}
+        analysis_dict = {'brd_cls_acc': 0}
+
+        # Get total number of target boxes across batch_entries
+        num_tgt_boxes = sum(len(tgt_boxes[i]) for i in range(batch_size))
+        num_tgt_boxes = torch.tensor([num_tgt_boxes], dtype=torch.float, device=box_logits[0].device)
+
+        # Average number of target boxes across nodes
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_tgt_boxes)
+            num_tgt_boxes = torch.clamp(num_tgt_boxes/get_world_size(), min=1.0)
 
         # Get loss and analysis for every batch entry
         for i in range(batch_size):
 
             # Prepare boxes
-            pred_boxes_i = Boxes(pred_boxes[i], format='cxcywh', normalized=True)
+            pred_boxes_i = Boxes(box_logits[i].sigmoid(), format='cxcywh', normalized=True)
             tgt_boxes_i = tgt_boxes[i].to_format('cxcywh')
 
             # Check whether target boxes are normalized
-            if not tgt_boxes.normalized:
+            if not tgt_boxes_i.normalized:
                 raise ValueError("Target boxes should be normalized when using BRD loss.")
 
-            # Get matching cost matrix
+            # Get action weights
             with torch.no_grad():
 
-                # Get classification cost matrix
-                cls_probs = cls_logits[i].sigmoid()
-                cls_cost = -self.match_cls_weight * cls_probs[:, tgt_labels[i]]
+                # Get loss matrix
+                cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
+                l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
+                giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+                loss_matrix = cls_loss + l1_loss + giou_loss
 
-                # Get L1 and GIOU bounding box cost matrices
-                l1_cost = self.match_l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
-                giou_cost = -self.match_giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+                # Get sorted loss matrix and ranking matrix
+                sorted_loss_matrix, ranking_matrix = torch.sort(loss_matrix, dim=0)
+                norm_loss_matrix = (loss_matrix-loss_matrix.min())/(loss_matrix.max()-loss_matrix.min())
+                ranking_matrix = ranking_matrix + norm_loss_matrix
 
-                # Get full cost matrix
-                cost_matrix = cls_cost + l1_cost + giou_cost
+                # Get best losses per prediction
+                pred_ids = torch.arange(len(ranking_matrix))
+                best_rankings, best_tgt_ids = torch.min(ranking_matrix, dim=1)
+                best_losses_per_pred = loss_matrix[pred_ids, best_tgt_ids]
 
-                return cost_matrix
+                # Get baseline losses per prediction and action weights
+                true_operation = sorted_loss_matrix[0, best_tgt_ids]
+                false_operation = sorted_loss_matrix[1, best_tgt_ids]
+                baseline_losses_per_pred = torch.where(best_rankings > 1, true_operation, false_operation)
+                action_weights = best_losses_per_pred - baseline_losses_per_pred
+
+            # Get weighted action loss
+            action_loss = torch.sum(action_weights * action_losses[i], dim=0, keepdim=True)
+            loss_dict['brd_action_loss'] += action_loss
+
+            # Get best prediction indices per target
+            best_pred_ids = torch.argmin(loss_matrix, dim=0)
+
+            # Get classification loss
+            cls_logits_i = cls_logits[i][best_pred_ids, :]
+            cls_targets = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
+
+            cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
+            cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets, **cls_kwargs)
+            loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
+
+            # Get L1 bounding box loss
+            l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
+            loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
+
+            # Get GIoU bounding box loss
+            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
+            loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
+
+            # Perform classification accurcy analysis
+            with torch.no_grad():
+
+                # Get number of correct predictions
+                pred_labels = torch.argmax(cls_logits_i, dim=1)
+                num_correct_preds = torch.eq(pred_labels, tgt_labels[i]).sum()
+
+                # Average number of correct predictions accross nodes
+                if is_dist_avail_and_initialized():
+                    torch.distributed.all_reduce(num_correct_preds)
+                    num_correct_preds = num_correct_preds/get_world_size()
+
+                # Get classification accuracy
+                analysis_dict['brd_cls_acc'] += 100 * num_correct_preds / num_tgt_boxes
+
+        return loss_dict, analysis_dict
 
     @staticmethod
-    def make_predictions(cls_logits, pred_boxes):
+    def make_predictions(cls_logits, box_logits):
         """
         Make classified bounding box predictions based on given classification and bounding box predictions.
 
         Args:
             cls_logits (List): List of size [batch_size] with classification logits of shape [num_preds, num_classes].
-            pred_boxes (List): List of size [batch_size] with bounding box predictions of shape [num_preds, 4].
+            box_logits (List): List of size [batch_size] with bounding box logits of shape [num_preds, 4].
 
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
@@ -188,7 +278,7 @@ class BRD(nn.Module):
         # Add predictions to prediction dictionary
         for i in range(batch_size):
             scores, labels = cls_logits[i].sigmoid().max(dim=1)
-            boxes = Boxes(pred_boxes[i], **box_kwargs)
+            boxes = Boxes(box_logits[i].sigmoid(), **box_kwargs)
             batch_ids = torch.full_like(labels, i)
 
             pred_dict['labels'].append(labels)
@@ -216,8 +306,14 @@ class BRD(nn.Module):
 
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
-                loss_dict (Dict): Loss dictionary.
-                analysis_dict (Dict): Analysis dictionary.
+                loss_dict (Dict): Loss dictionary containing following keys:
+                    - brd_action_loss (FloatTensor): weighted action loss of shape [];
+                    - brd_cls_loss (FloatTensor): weighted classification loss of shape [];
+                    - brd_l1_loss (FloatTensor): weigthed L1 bounding box loss of shape [];
+                    - brd_giou_loss (FloatTensor): weighted GIoU bounding box loss of shape [].
+
+                analysis_dict (Dict): Analysis dictionary containing following key:
+                    - brd_cls_acc (FloatTensor): classification accuracy of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dict (Dict): Prediction dictionary containing following keys:
@@ -249,20 +345,20 @@ class BRD(nn.Module):
         # Process object features with decoder
         obj_feats = self.decoder(obj_feats)
 
-        # Get classification logits and bounding box predictions
+        # Get classification and bounding box logits
         cls_logits = self.cls_head(obj_feats)
-        pred_boxes = self.box_head(obj_feats)
+        box_logits = self.box_head(obj_feats)
 
         # Get loss and analysis dictionaries during trainval
         if tgt_dict is not None:
             tgt_labels = tgt_dict['labels']
             tgt_boxes = tgt_dict['boxes']
-            loss_dict, analysis_dict = self.get_loss(action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes)
+            loss_dict, analysis_dict = self.get_loss(action_losses, cls_logits, box_logits, tgt_labels, tgt_boxes)
 
             return loss_dict, analysis_dict
 
         # Get prediction dictionary validation/testing
         else:
-            pred_dict = BRD.make_predictions(cls_logits, pred_boxes)
+            pred_dict = BRD.make_predictions(cls_logits, box_logits)
 
             return pred_dict
