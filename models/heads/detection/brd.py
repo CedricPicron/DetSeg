@@ -28,6 +28,8 @@ class BRD(nn.Module):
 
         focal_alpha (float): Alpha value of the sigmoid focal loss used during classification.
         focal_gamma (float): Gamma value of the sigmoid focal loss used during classification.
+        reward_weight (float): Factor weighting the action rewards.
+        punish_weight (float): Factor weighting the action punishments.
         cls_weight (float): Factor weighting the classification loss.
         l1_weight (float): Factor weighting the L1 bounding box loss.
         giou_weight (float): Factor weighting the GIoU bounding box loss.
@@ -59,6 +61,8 @@ class BRD(nn.Module):
             loss_dict (Dict): Loss dictionary containing following keys:
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
                 - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
+                - reward_weight (float): factor weighting the action rewards;
+                - punish_weight (float): factor weighting the action punishments;
                 - cls_weight (float): factor weighting the classification loss;
                 - l1_weight (float): factor weighting the L1 bounding box loss;
                 - giou_weight (float): factor weighting the GIoU bounding box loss.
@@ -86,6 +90,8 @@ class BRD(nn.Module):
         # Set loss-related attributes
         self.focal_alpha = loss_dict['focal_alpha']
         self.focal_gamma = loss_dict['focal_gamma']
+        self.reward_weight = loss_dict['reward_weight']
+        self.punish_weight = loss_dict['punish_weight']
         self.cls_weight = loss_dict['cls_weight']
         self.l1_weight = loss_dict['l1_weight']
         self.giou_weight = loss_dict['giou_weight']
@@ -223,13 +229,12 @@ class BRD(nn.Module):
                 # Get best losses per prediction
                 pred_ids = torch.arange(num_preds)
                 best_rankings, best_tgt_ids = torch.min(ranking_matrix, dim=1)
-                best_losses_per_pred = loss_matrix[pred_ids, best_tgt_ids]
+                best_losses = loss_matrix[pred_ids, best_tgt_ids]
 
                 # Get baseline losses per prediction and action weights
-                true_operation = sorted_loss_matrix[0, best_tgt_ids]
-                false_operation = sorted_loss_matrix[1, best_tgt_ids]
-                baseline_losses_per_pred = torch.where(best_rankings > 1, true_operation, false_operation)
-                action_weights = best_losses_per_pred - baseline_losses_per_pred
+                reward_action = self.reward_weight * 1/num_tgts * (best_losses - sorted_loss_matrix[1, best_tgt_ids])
+                punish_action = self.punish_weight * 1/num_preds * (best_losses - sorted_loss_matrix[0, best_tgt_ids])
+                action_weights = torch.where(best_rankings < 1, reward_action, punish_action)
 
             # Get weighted action loss
             action_loss = torch.sum(action_weights * action_losses[i], dim=0, keepdim=True)

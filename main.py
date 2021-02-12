@@ -111,6 +111,8 @@ def get_parser():
 
     parser.add_argument('--brd_focal_alpha', default=0.25, type=float, help='BRD head focal alpha value')
     parser.add_argument('--brd_focal_gamma', default=2.0, type=float, help='BRD head focal gamma value')
+    parser.add_argument('--brd_reward_weight', default=1.0, type=float, help='BRD head reward weight factor')
+    parser.add_argument('--brd_punish_weight', default=0.1, type=float, help='BRD head punishment weight factor')
     parser.add_argument('--brd_cls_weight', default=1.0, type=float, help='BRD head classification weight factor')
     parser.add_argument('--brd_l1_weight', default=5.0, type=float, help='BRD head L1 bounding box weight factor')
     parser.add_argument('--brd_giou_weight', default=2.0, type=float, help='BRD head GIoU bounding box weight factor')
