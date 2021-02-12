@@ -149,7 +149,7 @@ class BiViNet(nn.Module):
 
         # Backpropagate loss (training only)
         loss = sum(loss_dict.values())
-        loss.backward() if loss.requires_grad else None
+        loss.backward()
 
         return loss_dict, analysis_dict
 
