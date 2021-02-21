@@ -34,6 +34,7 @@ sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_
 # Argument parsing
 parser = argparse.ArgumentParser()
 parser.add_argument('--forward', action='store_true', help='whether to profile forward pass only')
+parser.add_argument('--inference', action='store_true', help='whether to profile model in inference mode')
 parser.add_argument('--main_args', nargs='*', help='comma-separted string of main arguments')
 parser.add_argument('--memory', action='store_true', help='whether to report memory usage')
 parser.add_argument('--model', default='sample_decoder', choices=model_choices, help='model type to be profiled')
@@ -227,7 +228,7 @@ elif profiling_args.model == 'brd_head':
 elif profiling_args.model == 'criterion':
     batch_size = main_args.batch_size
     main_args.num_classes = 80
-    criterion = build_criterion(main_args).to('cuda')
+    model = build_criterion(main_args).to('cuda')
 
     def generate_out_list():
         num_slots_total = batch_size * main_args.num_init_slots
@@ -246,9 +247,9 @@ elif profiling_args.model == 'criterion':
     sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    globals_dict = {'criterion': criterion, 'generate_out_list': generate_out_list, 'tgt_dict': tgt_dict}
-    forward_stmt = "criterion(generate_out_list(), tgt_dict)"
-    backward_stmt = "torch.stack([v for v in criterion(generate_out_list(), tgt_dict)[0].values()]).sum().backward()"
+    globals_dict = {'model': model, 'generate_out_list': generate_out_list, 'tgt_dict': tgt_dict}
+    forward_stmt = "model(generate_out_list(), tgt_dict)"
+    backward_stmt = "torch.stack([v for v in model(generate_out_list(), tgt_dict)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'detr':
     main_args.meta_arch = 'DETR'
@@ -306,10 +307,9 @@ elif profiling_args.model == 'fpn':
 
 elif profiling_args.model == 'gc':
     main_args.backbone_feat_sizes = [512, 1024, 2048]
-    main_args.gc_yaml = './configs/gc/bpn_37_pa13_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_ceae_5b1_gn.yaml'
     model = build_gc(main_args).to('cuda')
 
-    feat_map2 = torch.randn(2, 256, 256, 256).to('cuda')
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
     feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
     feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
@@ -446,12 +446,16 @@ elif profiling_args.model == 'sem_seg_head':
     backward_stmt = "model(**inputs)[0]['sem_seg_loss'].backward()"
 
 # Select forward or backward statement
-stmt = forward_stmt if profiling_args.forward else backward_stmt
+stmt = forward_stmt if profiling_args.forward or profiling_args.inference else backward_stmt
 
-# Do not build computation graph with forward statement
-if profiling_args.forward:
+# Check whether computation graph needs to be built
+if profiling_args.forward or profiling_args.inference:
     for parameter in model.parameters():
         parameter.requires_grad = False
+
+# Put model in inference mode if desired
+if profiling_args.inference:
+    model.eval()
 
 # Warm-up and timing with torch.utils.benchmark.Timer
 timer = Timer(stmt=stmt, globals=globals_dict)
@@ -461,9 +465,14 @@ t = timer.timeit(number=10).median*1e3
 with profiler.profile(use_cuda=True, profile_memory=profiling_args.memory) as prof:
     exec(stmt)
 
-# Print profiling table and median timeit time
+# Print profiling table
 print(prof.table(sort_by=profiling_args.sort_by, row_limit=100))
-print(f"Recorded timeit time: {t: .4f} ms")
 
-# Print max GPU memory usage
-print(f"Max GPU memory usage: {torch.cuda.max_memory_allocated()/(1024*1024): .0f} MB")
+# Print number of parameters if desired
+if not profiling_args.forward and not profiling_args.inference:
+    num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Number of parameters: {num_parameters/10**6: .1f} M")
+
+# Print number of frame per second and max GPU memory
+print(f"Number of FPS: {1000/t: .1f} FPS")
+print(f"Max GPU memory: {torch.cuda.max_memory_allocated()/(1024**3): .2f} GB")
