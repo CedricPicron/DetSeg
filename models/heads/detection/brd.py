@@ -369,7 +369,7 @@ class BRD(nn.Module):
 
         else:
             sample_ids = self.policy(feat_maps, mode='inference')
-            obj_feats = [aug_feats[i][sample_ids[i]] for i in range(aug_feats)]
+            obj_feats = [aug_feats[i][sample_ids[i]] for i in range(len(aug_feats))]
 
         # Process object features with decoder
         obj_feats = self.decoder(obj_feats)
