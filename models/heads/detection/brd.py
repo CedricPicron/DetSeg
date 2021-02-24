@@ -2,6 +2,7 @@
 Base Reinforced Detector (BRD) head.
 """
 from copy import deepcopy
+import math
 
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
@@ -60,7 +61,8 @@ class BRD(nn.Module):
             head_dict (Dict): Head dictionary containing following keys:
                 - num_classes (int): integer containing the number of object classes (without background);
                 - hidden_size (int): integer containing the hidden feature size used during the MLP operation;
-                - num_hidden_layers (int): number of hidden layers of the MLP head.
+                - num_hidden_layers (int): number of hidden layers of the MLP head;
+                - prior_cls_prob (float): prior class probability.
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
@@ -90,6 +92,7 @@ class BRD(nn.Module):
 
         # Initialize classification and bounding box heads
         num_classes = head_dict.pop('num_classes')
+        prior_cls_prob = head_dict.pop('prior_cls_prob')
         self.cls_head = MLP(feat_size, out_size=num_classes, **head_dict)
         self.box_head = MLP(feat_size, out_size=4, **head_dict)
 
@@ -104,6 +107,20 @@ class BRD(nn.Module):
 
         # Set metadata attribute
         self.metadata = metadata
+
+        # Set default initial values of module parameters
+        self.reset_parameters(prior_cls_prob)
+
+    def reset_parameters(self, prior_cls_prob):
+        """
+        Resets module parameters to default initial values.
+
+        Args:
+            prior_cls_prob (float): Prior class probability.
+        """
+
+        bias_value = -(math.log((1 - prior_cls_prob) / prior_cls_prob))
+        torch.nn.init.constant_(self.cls_head.head[-1][-1].bias, bias_value)
 
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """

@@ -108,6 +108,7 @@ def get_parser():
 
     parser.add_argument('--brd_head_hidden_size', default=256, type=int, help='feature size in head hidden layer')
     parser.add_argument('--brd_head_layers', default=1, type=int, help='number of head hidden layers')
+    parser.add_argument('--brd_head_prior_cls_prob', default=0.01, type=float, help='prior class probability')
 
     parser.add_argument('--brd_focal_alpha', default=0.25, type=float, help='BRD head focal alpha value')
     parser.add_argument('--brd_focal_gamma', default=2.0, type=float, help='BRD head focal gamma value')

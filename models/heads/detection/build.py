@@ -39,6 +39,7 @@ def build_det_heads(args):
 
             head_dict = {'num_classes': args.num_classes, 'hidden_size': args.brd_head_hidden_size}
             head_dict = {**head_dict, 'num_hidden_layers': args.brd_head_layers}
+            head_dict = {**head_dict, 'prior_cls_prob': args.brd_head_prior_cls_prob}
 
             loss_dict = {'focal_alpha': args.brd_focal_alpha, 'focal_gamma': args.brd_focal_gamma}
             loss_dict = {**loss_dict, 'reward_weight': args.brd_reward_weight, 'punish_weight': args.brd_punish_weight}

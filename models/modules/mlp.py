@@ -92,7 +92,7 @@ class MLP(nn.Module):
 
         # Get MLP head depending on the number of hidden layers
         if num_hidden_layers == 0:
-            self.head = nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, out_size))
+            self.head = nn.Sequenatial(nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, out_size)))
 
         elif num_hidden_layers > 0:
             input_block = nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, hidden_size))
