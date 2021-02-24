@@ -3,6 +3,8 @@ Base Reinforced Detector (BRD) head.
 """
 from copy import deepcopy
 
+from detectron2.structures.instances import Instances
+from detectron2.utils.visualizer import Visualizer
 from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
@@ -33,9 +35,11 @@ class BRD(nn.Module):
         cls_weight (float): Factor weighting the classification loss.
         l1_weight (float): Factor weighting the L1 bounding box loss.
         giou_weight (float): Factor weighting the GIoU bounding box loss.
+
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict, loss_dict):
+    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata):
         """
         Initializes the BRD module.
 
@@ -66,6 +70,8 @@ class BRD(nn.Module):
                 - cls_weight (float): factor weighting the classification loss;
                 - l1_weight (float): factor weighting the L1 bounding box loss;
                 - giou_weight (float): factor weighting the GIoU bounding box loss.
+
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -95,6 +101,9 @@ class BRD(nn.Module):
         self.cls_weight = loss_dict['cls_weight']
         self.l1_weight = loss_dict['l1_weight']
         self.giou_weight = loss_dict['giou_weight']
+
+        # Set metadata attribute
+        self.metadata = metadata
 
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """
@@ -391,3 +400,84 @@ class BRD(nn.Module):
             pred_dict = BRD.make_predictions(cls_logits, box_logits)
 
             return pred_dict
+
+    def visualize(self, images, pred_dict, tgt_dict, score_treshold=0.4):
+        """
+        Draws predicted and target bounding boxes on given full-resolution images.
+
+        Boxes must have a score of at least the score threshold to be drawn. Target boxes get a default 100% score.
+
+        Args:
+            images (Images): Images structure containing the batched images.
+
+            pred_dict (Dict): Prediction dictionary containing at least following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
+                - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+
+            score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
+
+        Returns:
+            images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
+        """
+
+        # Prepare predictions
+        pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
+        well_defined = pred_boxes.well_defined()
+        pred_scores = pred_dict['scores'][well_defined]
+
+        pred_labels = pred_dict['labels'][well_defined][pred_scores >= score_treshold]
+        pred_boxes = pred_boxes.boxes[well_defined][pred_scores >= score_treshold]
+        pred_batch_ids = pred_dict['batch_ids'][well_defined][pred_scores >= score_treshold]
+        pred_scores = pred_scores[pred_scores >= score_treshold]
+
+        # Prepare targets
+        tgt_labels = torch.cat(tgt_dict['labels'])
+        tgt_boxes = Boxes.cat(tgt_dict['boxes']).to_img_scale(images).to_format('xyxy').boxes
+
+        # Concatenate predictions and targets
+        labels = torch.cat([pred_labels, tgt_labels])
+        boxes = torch.cat([pred_boxes, tgt_boxes])
+        scores = torch.cat([pred_scores, torch.ones_like(tgt_labels, dtype=torch.float)])
+
+        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+        pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
+        sizes = torch.cat([pred_sizes, pred_sizes[-1] + tgt_dict['sizes'][1:]])
+
+        # Get image sizes without padding in (width, height) format
+        img_sizes = images.size(with_padding=False)
+
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
+
+        # Get number of images and initialize images dictionary
+        num_images = len(images)
+        images_dict = {}
+
+        # Draw bounding boxes on images and add them to images dictionary
+        for i, i0, i1 in zip(range(2*num_images), sizes[:-1], sizes[1:]):
+            image_id = i % num_images
+            visualizer = Visualizer(images[image_id], metadata=self.metadata)
+
+            img_size = img_sizes[image_id]
+            img_size = (img_size[1], img_size[0])
+
+            img_labels = labels[i0:i1].cpu().numpy()
+            img_boxes = boxes[i0:i1].cpu().numpy()
+            img_scores = scores[i0:i1].cpu().numpy()
+
+            instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+            visualizer.draw_instance_predictions(instances)
+
+            annotated_image = visualizer.output.get_image()
+            key = f'pred_{image_id}' if (i // num_images) == 0 else f'tgt_{image_id}'
+            images_dict[f'ret_det_{key}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict

@@ -20,8 +20,9 @@ def build_det_heads(args):
         ValueError: Error when unknown detection head type was provided.
     """
 
-    # Initialize empty list of detection head modules
+    # Initialize empty list of detection head modules and get metadata
     det_heads = []
+    metadata = args.val_metadata
 
     # Build desired detection head modules
     for det_head_type in args.det_heads:
@@ -44,13 +45,12 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'cls_weight': args.brd_cls_weight, 'l1_weight': args.brd_l1_weight}
             loss_dict = {**loss_dict, 'giou_weight': args.brd_giou_weight}
 
-            brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict)
+            brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata)
             det_heads.append(brd_head)
 
         elif det_head_type == 'retina':
             num_classes = args.num_classes
             in_feat_sizes = args.core_feat_sizes
-            metadata = args.val_metadata
 
             map_ids = list(range(args.bvn_min_downsampling, args.bvn_min_downsampling+len(in_feat_sizes)))
             in_proj = any(feat_size != in_feat_sizes[0] for feat_size in in_feat_sizes)
