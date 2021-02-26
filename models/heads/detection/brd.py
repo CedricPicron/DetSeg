@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 from models.functional.position import sine_pos_encodings
 from models.modules.attention import SelfAttn1d
+from models.modules.container import Sequential
 from models.modules.mlp import FFN, MLP
 from models.modules.policy import PolicyNet
 from structures.boxes import Boxes, box_giou
@@ -29,10 +30,15 @@ class BRD(nn.Module):
         cls_head (MLP): Module computing the classification logits from object features.
         box_head (MLP): Module computing the bounding box logits from object features.
 
+        delta_range_xy (float): Value determining the range of object location deltas.
+        delta_range_wh (float): Value determining the range of object size deltas.
+
         focal_alpha (float): Alpha value of the sigmoid focal loss used during classification.
         focal_gamma (float): Gamma value of the sigmoid focal loss used during classification.
+
         reward_weight (float): Factor weighting the action rewards.
         punish_weight (float): Factor weighting the action punishments.
+
         cls_weight (float): Factor weighting the classification loss.
         l1_weight (float): Factor weighting the L1 bounding box loss.
         giou_weight (float): Factor weighting the GIoU bounding box loss.
@@ -65,6 +71,8 @@ class BRD(nn.Module):
                 - prior_cls_prob (float): prior class probability.
 
             loss_dict (Dict): Loss dictionary containing following keys:
+                - delta_range_xy (float): value determining the range of object location deltas;
+                - delta_range_wh (float): value determining the range of object size deltas;
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
                 - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
                 - reward_weight (float): factor weighting the action rewards;
@@ -85,10 +93,10 @@ class BRD(nn.Module):
         # Initialize decoder
         self_attn = SelfAttn1d(feat_size, decoder_dict['num_heads'])
         ffn = FFN(feat_size, decoder_dict['hidden_size'])
-        decoder_layer = nn.Sequential(self_attn, ffn)
+        decoder_layer = Sequential(self_attn, ffn)
 
         num_decoder_layers = decoder_dict['num_layers']
-        self.decoder = nn.Sequential(*[deepcopy(decoder_layer) for _ in range(num_decoder_layers)])
+        self.decoder = Sequential(*[deepcopy(decoder_layer) for _ in range(num_decoder_layers)])
 
         # Initialize classification and bounding box heads
         num_classes = head_dict.pop('num_classes')
@@ -97,10 +105,15 @@ class BRD(nn.Module):
         self.box_head = MLP(feat_size, out_size=4, **head_dict)
 
         # Set loss-related attributes
+        self.delta_range_xy = loss_dict['delta_range_xy']
+        self.delta_range_wh = loss_dict['delta_range_wh']
+
         self.focal_alpha = loss_dict['focal_alpha']
         self.focal_gamma = loss_dict['focal_gamma']
+
         self.reward_weight = loss_dict['reward_weight']
         self.punish_weight = loss_dict['punish_weight']
+
         self.cls_weight = loss_dict['cls_weight']
         self.l1_weight = loss_dict['l1_weight']
         self.giou_weight = loss_dict['giou_weight']
@@ -121,6 +134,7 @@ class BRD(nn.Module):
 
         bias_value = -(math.log((1 - prior_cls_prob) / prior_cls_prob))
         torch.nn.init.constant_(self.cls_head.head[-1][-1].bias, bias_value)
+        torch.nn.init.zeros_(self.box_head.head[-1][-1].bias)
 
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """
@@ -164,14 +178,14 @@ class BRD(nn.Module):
 
         return tgt_dict, {}, {}
 
-    def get_loss(self, action_losses, cls_logits, box_logits, tgt_labels, tgt_boxes):
+    def get_loss(self, action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes):
         """
         Get BRD loss and its corresponding analysis.
 
         Args:
             action_losses (List): List of size [batch_size] with initial action losses of shape [train_samples].
             cls_logits (List): List of size [batch_size] with classification logits of shape [num_preds, num_classes].
-            box_logits (List): List of size [batch_size] with bounding box logits of shape [num_preds, 4].
+            pred_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_preds].
             tgt_labels (List): List of size [batch_size] with class indices of shape [num_targets].
             tgt_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_targets].
 
@@ -219,16 +233,12 @@ class BRD(nn.Module):
             if num_preds <= 1 or num_tgts == 0:
                 loss_dict['brd_action_loss'] += 0.0 * action_losses[i].sum()
                 loss_dict['brd_cls_loss'] += 0.0 * cls_logits[i].sum()
-                loss_dict['brd_l1_loss'] += 0.0 * box_logits[i].sum()
-                loss_dict['brd_giou_loss'] += 0.0 * box_logits[i].sum()
+                loss_dict['brd_l1_loss'] += 0.0 * pred_boxes[i].boxes.sum()
+                loss_dict['brd_giou_loss'] += 0.0 * pred_boxes[i].boxes.sum()
                 continue
 
-            # Prepare boxes
-            pred_boxes_i = Boxes(box_logits[i].sigmoid(), format='cxcywh', normalized=True)
-            tgt_boxes_i = tgt_boxes[i].to_format('cxcywh')
-
             # Check whether target boxes are normalized
-            if not tgt_boxes_i.normalized:
+            if not tgt_boxes[i].normalized:
                 raise ValueError("Target boxes should be normalized when using BRD loss.")
 
             # Get action weights
@@ -236,8 +246,8 @@ class BRD(nn.Module):
 
                 # Get loss matrix
                 cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
-                l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
-                giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+                l1_loss = self.l1_weight * torch.cdist(pred_boxes[i].boxes, tgt_boxes[i].boxes, p=1)
+                giou_loss = -self.giou_weight * box_giou(pred_boxes[i], tgt_boxes[i])
                 loss_matrix = cls_loss + l1_loss + giou_loss
 
                 # Get sorted loss matrix and corresponding prediction rankings
@@ -278,11 +288,11 @@ class BRD(nn.Module):
             loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
 
             # Get L1 bounding box loss
-            l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
+            l1_loss = F.l1_loss(pred_boxes[i].boxes[best_pred_ids, :], tgt_boxes[i].boxes, reduction='sum')
             loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
 
             # Get GIoU bounding box loss
-            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
+            giou_loss = (1 - torch.diag(box_giou(pred_boxes[i][best_pred_ids], tgt_boxes[i]))).sum()
             loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
 
             # Perform classification accurcy analysis
@@ -303,13 +313,13 @@ class BRD(nn.Module):
         return loss_dict, analysis_dict
 
     @staticmethod
-    def make_predictions(cls_logits, box_logits):
+    def make_predictions(cls_logits, pred_boxes):
         """
         Make classified bounding box predictions based on given classification and bounding box predictions.
 
         Args:
             cls_logits (List): List of size [batch_size] with classification logits of shape [num_preds, num_classes].
-            box_logits (List): List of size [batch_size] with bounding box logits of shape [num_preds, 4].
+            pred_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_preds].
 
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
@@ -326,14 +336,13 @@ class BRD(nn.Module):
         pred_dict['scores'] = []
         pred_dict['batch_ids'] = []
 
-        # Get batch size and general box information
+        # Get batch size
         batch_size = len(cls_logits)
-        box_kwargs = {'format': 'cxcywh', 'normalized': True}
 
         # Add predictions to prediction dictionary
         for i in range(batch_size):
             scores, labels = cls_logits[i].sigmoid().max(dim=1)
-            boxes = Boxes(box_logits[i].sigmoid(), **box_kwargs)
+            boxes = pred_boxes[i]
             batch_ids = torch.full_like(labels, i)
 
             pred_dict['labels'].append(labels)
@@ -378,43 +387,76 @@ class BRD(nn.Module):
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
+        # Get batch size and number of feature maps
+        batch_size = len(feat_maps[0])
+        num_maps = len(feat_maps)
+
         # Assume no padded regions when feature masks are missing
         if feat_masks is None:
             tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
             feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
 
-        # Get position-augmented features
-        pos_maps = sine_pos_encodings((feat_maps, feat_masks), input_type='pyramid')
-        aug_maps = [feat_map+pos_map for feat_map, pos_map in zip(feat_maps, pos_maps)]
-        aug_feats = torch.cat([aug_map.flatten(2).permute(0, 2, 1) for aug_map in aug_maps], dim=1)
+        # Get position feature maps and position ids
+        pos_feat_maps, pos_id_maps = sine_pos_encodings((feat_maps, feat_masks), input_type='pyramid', normalize=True)
 
-        # Apply policy network to obtain object features
+        # Get object features, position features and prior object locations before sampling
+        obj_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
+        pos_feats = torch.cat([pos_feat_map.flatten(2).permute(0, 2, 1) for pos_feat_map in pos_feat_maps], dim=1)
+        prior_cxcy = torch.cat([pos_id_map.flatten(2).permute(0, 2, 1) for pos_id_map in pos_id_maps], dim=1)
+
+        # Get prior object sizes before sampling
+        prior_w = [(1/feat_mask[:, 0, :].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
+        prior_h = [(1/feat_mask[:, :, 0].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
+        prior_wh = [torch.stack([prior_w[i], prior_h[i]], dim=3) for i in range(num_maps)]
+        prior_wh = torch.cat([prior_wh[i].flatten(0, 1).permute(1, 0, 2) for i in range(num_maps)], dim=1)
+
+        # Apply policy to get object features with corresponding information
         if tgt_dict is not None:
             sample_masks, action_losses = self.policy(feat_maps, mode='training')
-            obj_feats = [aug_feats[i][sample_masks[i]] for i in range(len(aug_feats))]
+            obj_feats = [obj_feats[i][sample_masks[i]] for i in range(batch_size)]
+            pos_feats = [pos_feats[i][sample_masks[i]] for i in range(batch_size)]
+            prior_cxcy = [prior_cxcy[i][sample_masks[i]] for i in range(batch_size)]
+            prior_wh = [prior_wh[i][sample_masks[i]] for i in range(batch_size)]
 
         else:
             sample_ids = self.policy(feat_maps, mode='inference')
-            obj_feats = [aug_feats[i][sample_ids[i]] for i in range(len(aug_feats))]
+            obj_feats = [obj_feats[i][sample_ids[i]] for i in range(batch_size)]
+            pos_feats = [pos_feats[i][sample_ids[i]] for i in range(batch_size)]
+            prior_cxcy = [prior_cxcy[i][sample_ids[i]] for i in range(batch_size)]
+            prior_wh = [prior_wh[i][sample_ids[i]] for i in range(batch_size)]
 
         # Process object features with decoder
-        obj_feats = self.decoder(obj_feats)
+        obj_feats = self.decoder(obj_feats, pos_feat_list=pos_feats)
 
         # Get classification and bounding box logits
         cls_logits = self.cls_head(obj_feats)
         box_logits = self.box_head(obj_feats)
 
+        # Get prediction boxes
+        pred_boxes = []
+
+        for i in range(batch_size):
+            box_deltas = box_logits[i].tanh()
+            pred_cxcy = self.delta_range_xy * box_deltas[:, :2] + prior_cxcy[i]
+            pred_wh = self.delta_range_wh ** box_deltas[:, 2:] * prior_wh[i]
+
+            pred_boxes_i = torch.cat([pred_cxcy, pred_wh], dim=1)
+            pred_boxes_i = Boxes(pred_boxes_i, format='cxcywh', normalized=True)
+            pred_boxes.append(pred_boxes_i)
+
         # Get loss and analysis dictionaries during trainval
         if tgt_dict is not None:
             tgt_labels = tgt_dict['labels']
             tgt_boxes = tgt_dict['boxes']
-            loss_dict, analysis_dict = self.get_loss(action_losses, cls_logits, box_logits, tgt_labels, tgt_boxes)
+
+            inputs = [action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes]
+            loss_dict, analysis_dict = self.get_loss(*inputs)
 
             return loss_dict, analysis_dict
 
         # Get prediction dictionary validation/testing
         else:
-            pred_dict = BRD.make_predictions(cls_logits, box_logits)
+            pred_dict = BRD.make_predictions(cls_logits, pred_boxes)
 
             return pred_dict
 

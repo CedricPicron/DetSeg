@@ -36,7 +36,7 @@ class FFN(nn.Module):
         self.in_proj = nn.Linear(feat_size, hidden_size)
         self.out_proj = nn.Linear(hidden_size, feat_size)
 
-    def forward(self, in_feat_list):
+    def forward(self, in_feat_list, **kwargs):
         """
         Forward method of the FFN module.
 
@@ -105,7 +105,7 @@ class MLP(nn.Module):
         else:
             raise ValueError(f"The number of hidden layers must be non-negative (got {num_hidden_layers}).")
 
-    def forward(self, in_feat_list):
+    def forward(self, in_feat_list, **kwargs):
         """
         Forward method of the MLP module.
 

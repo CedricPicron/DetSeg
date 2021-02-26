@@ -204,6 +204,7 @@ elif profiling_args.model == 'brd_head':
     main_args.core_type = 'FPN'
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['brd']
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)[0].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
