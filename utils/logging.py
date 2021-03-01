@@ -3,6 +3,7 @@ Logging utilities.
 """
 from collections import defaultdict, deque
 import datetime
+import functools
 import time
 
 import torch
@@ -73,9 +74,9 @@ class SmoothedValue(object):
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter="\t"):
+    def __init__(self, delimiter="\t", window_size=20):
         self.delimiter = delimiter
-        self.meters = defaultdict(SmoothedValue)
+        self.meters = defaultdict(functools.partial(SmoothedValue, window_size=window_size))
 
     def add_meter(self, name, meter):
         self.meters[name] = meter

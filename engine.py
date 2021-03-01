@@ -157,7 +157,7 @@ def visualize(model, dataloader, output_dir):
     model.eval()
 
     # Initialize logger and its logger_every keyword arguments
-    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter="  ", window_size=1)
     logger_log_every_kwargs = {'print_freq': 1, 'header': 'Visualization:'}
 
     # Iterate over image batches to be visualized
