@@ -241,13 +241,17 @@ class BRD(nn.Module):
             if not tgt_boxes[i].normalized:
                 raise ValueError("Target boxes should be normalized when using BRD loss.")
 
+            # Get prediction and target boxes in (center_x, center_y, width, height) format
+            pred_boxes_i = pred_boxes[i].to_format('cxcywh')
+            tgt_boxes_i = tgt_boxes[i].to_format('cxcywh')
+
             # Get action weights
             with torch.no_grad():
 
                 # Get loss matrix
                 cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
-                l1_loss = self.l1_weight * torch.cdist(pred_boxes[i].boxes, tgt_boxes[i].boxes, p=1)
-                giou_loss = -self.giou_weight * box_giou(pred_boxes[i], tgt_boxes[i])
+                l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
+                giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
                 loss_matrix = cls_loss + l1_loss + giou_loss
 
                 # Get sorted loss matrix and corresponding prediction rankings
@@ -281,18 +285,18 @@ class BRD(nn.Module):
 
             # Get classification loss
             cls_logits_i = cls_logits[i][best_pred_ids, :]
-            cls_targets = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
+            cls_targets_i = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
 
             cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
-            cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets, **cls_kwargs)
+            cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets_i, **cls_kwargs)
             loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
 
             # Get L1 bounding box loss
-            l1_loss = F.l1_loss(pred_boxes[i].boxes[best_pred_ids, :], tgt_boxes[i].boxes, reduction='sum')
+            l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
             loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
 
             # Get GIoU bounding box loss
-            giou_loss = (1 - torch.diag(box_giou(pred_boxes[i][best_pred_ids], tgt_boxes[i]))).sum()
+            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
             loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
 
             # Perform classification accurcy analysis
