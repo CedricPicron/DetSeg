@@ -43,6 +43,7 @@ class BRD(nn.Module):
         l1_rank_weight (float): Factor weighting the ranking L1 bounding box loss.
         giou_rank_weight (float): Factor weighting the ranking GIoU bounding box loss.
 
+        use_all_preds (bool): Whether to use all predictions during actual loss computation.
         cls_loss_weight (float): Factor weighting the actual classification loss.
         l1_loss_weight (float): Factor weighting the actual L1 bounding box loss.
         giou_loss_weight (float): Factor weighting the actual GIoU bounding box loss.
@@ -88,6 +89,7 @@ class BRD(nn.Module):
                 - l1_rank_weight (float): factor weighting the ranking L1 bounding box loss;
                 - giou_rank_weight (float): factor weighting the ranking GIoU bounding box loss;
 
+                - use_all_preds (bool): whether to use all predictions during actual loss computation;
                 - cls_loss_weight (float): factor weighting the actual classification loss;
                 - l1_loss_weight (float): factor weighting the actual L1 bounding box loss;
                 - giou_loss_weight (float): factor weighting the actual GIoU bounding box loss.
@@ -129,6 +131,7 @@ class BRD(nn.Module):
         self.l1_rank_weight = loss_dict['l1_rank_weight']
         self.giou_rank_weight = loss_dict['giou_rank_weight']
 
+        self.use_all_preds = loss_dict['use_all_preds']
         self.cls_loss_weight = loss_dict['cls_loss_weight']
         self.l1_loss_weight = loss_dict['l1_loss_weight']
         self.giou_loss_weight = loss_dict['giou_loss_weight']
@@ -220,19 +223,20 @@ class BRD(nn.Module):
         """
 
         # Initialize loss and analysis dictionaries
-        tensor_kwargs = {'dtype': torch.float, 'device': tgt_labels[0].device}
+        device = tgt_labels[0].device
+        tensor_kwargs = {'dtype': torch.float, 'device': device}
         loss_dict = {f'brd_{k}_loss': torch.zeros(1, **tensor_kwargs) for k in ['action', 'cls', 'l1', 'giou']}
         analysis_dict = {f'brd_{k}': torch.zeros(1, **tensor_kwargs) for k in ['cls_acc', 'num_preds']}
 
-        # Get total number of target boxes across batch_entries
+        # Get total number of target boxes across batch entries
         batch_size = len(cls_logits)
-        num_tgt_boxes = sum(len(tgt_boxes[i]) for i in range(batch_size))
-        num_tgt_boxes = torch.tensor([num_tgt_boxes], **tensor_kwargs)
+        num_tgts_loc = sum(len(tgt_boxes[i]) for i in range(batch_size))
+        num_tgts_glob_avg = torch.tensor([num_tgts_loc], **tensor_kwargs)
 
         # Average number of target boxes across nodes
         if is_dist_avail_and_initialized():
-            torch.distributed.all_reduce(num_tgt_boxes)
-            num_tgt_boxes = torch.clamp(num_tgt_boxes/get_world_size(), min=1.0)
+            torch.distributed.all_reduce(num_tgts_glob_avg)
+            num_tgts_glob_avg = torch.clamp(num_tgts_glob_avg/get_world_size(), min=1.0)
 
         # Get loss and analysis for every batch entry
         for i in range(batch_size):
@@ -298,27 +302,37 @@ class BRD(nn.Module):
             # Get best prediction indices per target
             best_pred_ids = pred_rankings[0, :]
 
-            # Get classification loss
-            cls_logits_i = cls_logits[i][best_pred_ids, :]
-            cls_targets_i = F.one_hot(tgt_labels[i], cls_logits_i.shape[1]).to(cls_logits_i.dtype)
+            # Get prediction and target ids for loss computation
+            if self.use_all_preds:
+                pred_ids = torch.cat([best_pred_ids, torch.arange(num_preds, device=device)], dim=0)
+                tgt_ids = torch.cat([torch.arange(num_tgts, device=device), best_tgt_ids], dim=0)
 
-            cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
+            else:
+                pred_ids = best_pred_ids
+                tgt_ids = torch.arange(num_tgts)
+
+            # Get classification loss
+            cls_logits_i = cls_logits[i][pred_ids, :]
+            num_classes = cls_logits_i.shape[1]
+            cls_targets_i = F.one_hot(tgt_labels[i][tgt_ids], num_classes).to(cls_logits_i.dtype)
+
+            cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'mean'}
             cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets_i, **cls_kwargs)
-            loss_dict['brd_cls_loss'] += self.cls_loss_weight * cls_loss / num_tgt_boxes
+            loss_dict['brd_cls_loss'] += self.cls_loss_weight * (num_tgts/num_tgts_glob_avg) * (num_classes*cls_loss)
 
             # Get L1 bounding box loss
-            l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
-            loss_dict['brd_l1_loss'] += self.l1_loss_weight * l1_loss / num_tgt_boxes
+            l1_loss = F.l1_loss(pred_boxes_i.boxes[pred_ids, :], tgt_boxes_i.boxes[tgt_ids, :], reduction='mean')
+            loss_dict['brd_l1_loss'] += self.l1_loss_weight * (num_tgts/num_tgts_glob_avg) * (4*l1_loss)
 
             # Get GIoU bounding box loss
-            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
-            loss_dict['brd_giou_loss'] += self.giou_loss_weight * giou_loss / num_tgt_boxes
+            giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[pred_ids], tgt_boxes_i[tgt_ids]))).mean()
+            loss_dict['brd_giou_loss'] += self.giou_loss_weight * (num_tgts/num_tgts_glob_avg) * giou_loss
 
             # Perform classification accurcy analysis
             with torch.no_grad():
 
                 # Get number of correct predictions
-                pred_labels = torch.argmax(cls_logits_i, dim=1)
+                pred_labels = torch.argmax(cls_logits_i[:num_tgts], dim=1)
                 num_correct_preds = torch.eq(pred_labels, tgt_labels[i]).sum(dim=0, keepdim=True)
 
                 # Average number of correct predictions accross nodes
@@ -327,7 +341,7 @@ class BRD(nn.Module):
                     num_correct_preds = num_correct_preds/get_world_size()
 
                 # Get classification accuracy
-                analysis_dict['brd_cls_acc'] += 100 * num_correct_preds / num_tgt_boxes
+                analysis_dict['brd_cls_acc'] += 100 * num_correct_preds / num_tgts_glob_avg
 
         return loss_dict, analysis_dict
 

@@ -123,6 +123,7 @@ def get_parser():
     parser.add_argument('--brd_l1_rank_weight', default=5.0, type=float, help='L1 bounding box ranking weight')
     parser.add_argument('--brd_giou_rank_weight', default=2.0, type=float, help='GIoU bounding box ranking weight')
 
+    parser.add_argument('--brd_use_all_preds', action='store_true', help='apply loss on all predictions')
     parser.add_argument('--brd_cls_loss_weight', default=1.0, type=float, help='classification loss weight')
     parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')

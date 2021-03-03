@@ -49,6 +49,7 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'l1_rank_weight': args.brd_l1_rank_weight}
             loss_dict = {**loss_dict, 'giou_rank_weight': args.brd_giou_rank_weight}
 
+            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds}
             loss_dict = {**loss_dict, 'cls_loss_weight': args.brd_cls_loss_weight}
             loss_dict = {**loss_dict, 'l1_loss_weight': args.brd_l1_loss_weight}
             loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}
