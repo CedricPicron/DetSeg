@@ -44,8 +44,14 @@ def build_det_heads(args):
             loss_dict = {'delta_range_xy': args.brd_delta_range_xy, 'delta_range_wh': args.brd_delta_range_wh}
             loss_dict = {**loss_dict, 'focal_alpha': args.brd_focal_alpha, 'focal_gamma': args.brd_focal_gamma}
             loss_dict = {**loss_dict, 'reward_weight': args.brd_reward_weight, 'punish_weight': args.brd_punish_weight}
-            loss_dict = {**loss_dict, 'cls_weight': args.brd_cls_weight, 'l1_weight': args.brd_l1_weight}
-            loss_dict = {**loss_dict, 'giou_weight': args.brd_giou_weight}
+
+            loss_dict = {**loss_dict, 'cls_rank_weight': args.brd_cls_rank_weight}
+            loss_dict = {**loss_dict, 'l1_rank_weight': args.brd_l1_rank_weight}
+            loss_dict = {**loss_dict, 'giou_rank_weight': args.brd_giou_rank_weight}
+
+            loss_dict = {**loss_dict, 'cls_loss_weight': args.brd_cls_loss_weight}
+            loss_dict = {**loss_dict, 'l1_loss_weight': args.brd_l1_loss_weight}
+            loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}
 
             brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata)
             det_heads.append(brd_head)

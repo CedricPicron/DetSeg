@@ -39,9 +39,13 @@ class BRD(nn.Module):
         reward_weight (float): Factor weighting the action rewards.
         punish_weight (float): Factor weighting the action punishments.
 
-        cls_weight (float): Factor weighting the classification loss.
-        l1_weight (float): Factor weighting the L1 bounding box loss.
-        giou_weight (float): Factor weighting the GIoU bounding box loss.
+        cls_rank_weight (float): Factor weighting the ranking classification loss.
+        l1_rank_weight (float): Factor weighting the ranking L1 bounding box loss.
+        giou_rank_weight (float): Factor weighting the ranking GIoU bounding box loss.
+
+        cls_loss_weight (float): Factor weighting the actual classification loss.
+        l1_loss_weight (float): Factor weighting the actual L1 bounding box loss.
+        giou_loss_weight (float): Factor weighting the actual GIoU bounding box loss.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
@@ -73,13 +77,20 @@ class BRD(nn.Module):
             loss_dict (Dict): Loss dictionary containing following keys:
                 - delta_range_xy (float): value determining the range of object location deltas;
                 - delta_range_wh (float): value determining the range of object size deltas;
+
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
                 - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
+
                 - reward_weight (float): factor weighting the action rewards;
                 - punish_weight (float): factor weighting the action punishments;
-                - cls_weight (float): factor weighting the classification loss;
-                - l1_weight (float): factor weighting the L1 bounding box loss;
-                - giou_weight (float): factor weighting the GIoU bounding box loss.
+
+                - cls_rank_weight (float): factor weighting the ranking classification loss;
+                - l1_rank_weight (float): factor weighting the ranking L1 bounding box loss;
+                - giou_rank_weight (float): factor weighting the ranking GIoU bounding box loss;
+
+                - cls_loss_weight (float): factor weighting the actual classification loss;
+                - l1_loss_weight (float): factor weighting the actual L1 bounding box loss;
+                - giou_loss_weight (float): factor weighting the actual GIoU bounding box loss.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
@@ -114,9 +125,13 @@ class BRD(nn.Module):
         self.reward_weight = loss_dict['reward_weight']
         self.punish_weight = loss_dict['punish_weight']
 
-        self.cls_weight = loss_dict['cls_weight']
-        self.l1_weight = loss_dict['l1_weight']
-        self.giou_weight = loss_dict['giou_weight']
+        self.cls_rank_weight = loss_dict['cls_rank_weight']
+        self.l1_rank_weight = loss_dict['l1_rank_weight']
+        self.giou_rank_weight = loss_dict['giou_rank_weight']
+
+        self.cls_loss_weight = loss_dict['cls_loss_weight']
+        self.l1_loss_weight = loss_dict['l1_loss_weight']
+        self.giou_loss_weight = loss_dict['giou_loss_weight']
 
         # Set metadata attribute
         self.metadata = metadata
@@ -249,9 +264,9 @@ class BRD(nn.Module):
             with torch.no_grad():
 
                 # Get loss matrix
-                cls_loss = -self.cls_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
-                l1_loss = self.l1_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
-                giou_loss = -self.giou_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+                cls_loss = -self.cls_rank_weight * torch.sigmoid(cls_logits[i])[:, tgt_labels[i]]
+                l1_loss = self.l1_rank_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
+                giou_loss = -self.giou_rank_weight * box_giou(pred_boxes_i, tgt_boxes_i)
                 loss_matrix = cls_loss + l1_loss + giou_loss
 
                 # Get sorted loss matrix and corresponding prediction rankings
@@ -289,15 +304,15 @@ class BRD(nn.Module):
 
             cls_kwargs = {'alpha': self.focal_alpha, 'gamma': self.focal_gamma, 'reduction': 'sum'}
             cls_loss = sigmoid_focal_loss(cls_logits_i, cls_targets_i, **cls_kwargs)
-            loss_dict['brd_cls_loss'] += self.cls_weight * cls_loss / num_tgt_boxes
+            loss_dict['brd_cls_loss'] += self.cls_loss_weight * cls_loss / num_tgt_boxes
 
             # Get L1 bounding box loss
             l1_loss = F.l1_loss(pred_boxes_i.boxes[best_pred_ids, :], tgt_boxes_i.boxes, reduction='sum')
-            loss_dict['brd_l1_loss'] += self.l1_weight * l1_loss / num_tgt_boxes
+            loss_dict['brd_l1_loss'] += self.l1_loss_weight * l1_loss / num_tgt_boxes
 
             # Get GIoU bounding box loss
             giou_loss = (1 - torch.diag(box_giou(pred_boxes_i[best_pred_ids], tgt_boxes_i))).sum()
-            loss_dict['brd_giou_loss'] += self.giou_weight * giou_loss / num_tgt_boxes
+            loss_dict['brd_giou_loss'] += self.giou_loss_weight * giou_loss / num_tgt_boxes
 
             # Perform classification accurcy analysis
             with torch.no_grad():
