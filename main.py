@@ -110,6 +110,10 @@ def get_parser():
     parser.add_argument('--brd_head_layers', default=1, type=int, help='number of head hidden layers')
     parser.add_argument('--brd_head_prior_cls_prob', default=0.01, type=float, help='prior class probability')
 
+    parser.add_argument('--brd_inter_loss', action='store_true', help='apply loss on intermediate layer predictions')
+    parser.add_argument('--brd_rel_preds', action='store_true', help='predict boxes relative to previous predictions')
+    parser.add_argument('--brd_use_all_preds', action='store_true', help='apply loss on all predictions from layer')
+
     parser.add_argument('--brd_delta_range_xy', default=1.0, type=float, help='range of object location delta')
     parser.add_argument('--brd_delta_range_wh', default=8.0, type=float, help='range of object size delta')
 
@@ -123,7 +127,6 @@ def get_parser():
     parser.add_argument('--brd_l1_rank_weight', default=5.0, type=float, help='L1 bounding box ranking weight')
     parser.add_argument('--brd_giou_rank_weight', default=2.0, type=float, help='GIoU bounding box ranking weight')
 
-    parser.add_argument('--brd_use_all_preds', action='store_true', help='apply loss on all predictions')
     parser.add_argument('--brd_cls_loss_weight', default=1.0, type=float, help='classification loss weight')
     parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')

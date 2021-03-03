@@ -41,7 +41,12 @@ def build_det_heads(args):
             head_dict = {**head_dict, 'num_hidden_layers': args.brd_head_layers}
             head_dict = {**head_dict, 'prior_cls_prob': args.brd_head_prior_cls_prob}
 
-            loss_dict = {'delta_range_xy': args.brd_delta_range_xy, 'delta_range_wh': args.brd_delta_range_wh}
+            loss_dict = {'inter_loss': args.brd_inter_loss, 'rel_preds': args.brd_rel_preds}
+            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds}
+
+            loss_dict = {**loss_dict, 'delta_range_xy': args.brd_delta_range_xy}
+            loss_dict = {**loss_dict, 'delta_range_wh': args.brd_delta_range_wh}
+
             loss_dict = {**loss_dict, 'focal_alpha': args.brd_focal_alpha, 'focal_gamma': args.brd_focal_gamma}
             loss_dict = {**loss_dict, 'reward_weight': args.brd_reward_weight, 'punish_weight': args.brd_punish_weight}
 
@@ -49,7 +54,6 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'l1_rank_weight': args.brd_l1_rank_weight}
             loss_dict = {**loss_dict, 'giou_rank_weight': args.brd_giou_rank_weight}
 
-            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds}
             loss_dict = {**loss_dict, 'cls_loss_weight': args.brd_cls_loss_weight}
             loss_dict = {**loss_dict, 'l1_loss_weight': args.brd_l1_loss_weight}
             loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}

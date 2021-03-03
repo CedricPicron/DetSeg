@@ -30,6 +30,10 @@ class BRD(nn.Module):
         cls_head (MLP): Module computing the classification logits from object features.
         box_head (MLP): Module computing the bounding box logits from object features.
 
+        inter_loss (bool): Whether to apply losses on predictions from intermediate decoder layers.
+        rel_preds (bool): Whether to predict boxes relative to predicted boxes from previous layer.
+        use_all_preds (bool): Whether to use all predictions from a layer during actual loss computation.
+
         delta_range_xy (float): Value determining the range of object location deltas.
         delta_range_wh (float): Value determining the range of object size deltas.
 
@@ -43,7 +47,6 @@ class BRD(nn.Module):
         l1_rank_weight (float): Factor weighting the ranking L1 bounding box loss.
         giou_rank_weight (float): Factor weighting the ranking GIoU bounding box loss.
 
-        use_all_preds (bool): Whether to use all predictions during actual loss computation.
         cls_loss_weight (float): Factor weighting the actual classification loss.
         l1_loss_weight (float): Factor weighting the actual L1 bounding box loss.
         giou_loss_weight (float): Factor weighting the actual GIoU bounding box loss.
@@ -76,6 +79,10 @@ class BRD(nn.Module):
                 - prior_cls_prob (float): prior class probability.
 
             loss_dict (Dict): Loss dictionary containing following keys:
+                - inter_loss (bool): whether to apply losses on predictions from intermediate decoder layers;
+                - rel_preds (bool): whether to predict boxes relative to predicted boxes from previous layer;
+                - use_all_preds (bool): whether to use all predictions from a layer during actual loss computation;
+
                 - delta_range_xy (float): value determining the range of object location deltas;
                 - delta_range_wh (float): value determining the range of object size deltas;
 
@@ -89,7 +96,6 @@ class BRD(nn.Module):
                 - l1_rank_weight (float): factor weighting the ranking L1 bounding box loss;
                 - giou_rank_weight (float): factor weighting the ranking GIoU bounding box loss;
 
-                - use_all_preds (bool): whether to use all predictions during actual loss computation;
                 - cls_loss_weight (float): factor weighting the actual classification loss;
                 - l1_loss_weight (float): factor weighting the actual L1 bounding box loss;
                 - giou_loss_weight (float): factor weighting the actual GIoU bounding box loss.
@@ -118,6 +124,10 @@ class BRD(nn.Module):
         self.box_head = MLP(feat_size, out_size=4, **head_dict)
 
         # Set loss-related attributes
+        self.inter_loss = loss_dict['inter_loss']
+        self.rel_preds = loss_dict['rel_preds']
+        self.use_all_preds = loss_dict['use_all_preds']
+
         self.delta_range_xy = loss_dict['delta_range_xy']
         self.delta_range_wh = loss_dict['delta_range_wh']
 
@@ -131,7 +141,6 @@ class BRD(nn.Module):
         self.l1_rank_weight = loss_dict['l1_rank_weight']
         self.giou_rank_weight = loss_dict['giou_rank_weight']
 
-        self.use_all_preds = loss_dict['use_all_preds']
         self.cls_loss_weight = loss_dict['cls_loss_weight']
         self.l1_loss_weight = loss_dict['l1_loss_weight']
         self.giou_loss_weight = loss_dict['giou_loss_weight']
@@ -443,55 +452,87 @@ class BRD(nn.Module):
         prior_wh = [torch.stack([prior_w[i], prior_h[i]], dim=3) for i in range(num_maps)]
         prior_wh = torch.cat([prior_wh[i].flatten(0, 1).permute(1, 0, 2) for i in range(num_maps)], dim=1)
 
+        # Get prior boxes before sampling
+        prior_boxes = torch.cat([prior_cxcy, prior_wh], dim=2)
+
         # Apply policy to get object features with corresponding information
         if tgt_dict is not None:
             sample_masks, action_losses = self.policy(feat_maps, mode='training')
             obj_feats = [obj_feats[i][sample_masks[i]] for i in range(batch_size)]
             pos_feats = [pos_feats[i][sample_masks[i]] for i in range(batch_size)]
-            prior_cxcy = [prior_cxcy[i][sample_masks[i]] for i in range(batch_size)]
-            prior_wh = [prior_wh[i][sample_masks[i]] for i in range(batch_size)]
+            prior_boxes = [prior_boxes[i][sample_masks[i]] for i in range(batch_size)]
 
         else:
             sample_ids = self.policy(feat_maps, mode='inference')
             obj_feats = [obj_feats[i][sample_ids[i]] for i in range(batch_size)]
             pos_feats = [pos_feats[i][sample_ids[i]] for i in range(batch_size)]
-            prior_cxcy = [prior_cxcy[i][sample_ids[i]] for i in range(batch_size)]
-            prior_wh = [prior_wh[i][sample_ids[i]] for i in range(batch_size)]
+            prior_boxes = [prior_boxes[i][sample_ids[i]] for i in range(batch_size)]
 
         # Process object features with decoder
-        obj_feats = self.decoder(obj_feats, pos_feat_list=pos_feats)
+        decoder_output = self.decoder(obj_feats, return_intermediate=self.inter_loss, pos_feat_list=pos_feats)
+        obj_feats_list = [obj_feats, *decoder_output] if self.inter_loss else [decoder_output]
+        num_pred_sets = len(obj_feats_list)
 
-        # Get classification and bounding box logits
-        cls_logits = self.cls_head(obj_feats)
-        box_logits = self.box_head(obj_feats)
-
-        # Get prediction boxes
-        pred_boxes = []
-
-        for i in range(batch_size):
-            box_deltas = box_logits[i].tanh()
-            pred_cxcy = self.delta_range_xy * box_deltas[:, :2] + prior_cxcy[i]
-            pred_wh = self.delta_range_wh ** box_deltas[:, 2:] * prior_wh[i]
-
-            pred_boxes_i = torch.cat([pred_cxcy, pred_wh], dim=1)
-            pred_boxes_i = Boxes(pred_boxes_i, format='cxcywh', normalized=True)
-            pred_boxes.append(pred_boxes_i)
-
-        # Get loss and analysis dictionaries during trainval
+        # Some preparation during trainval
         if tgt_dict is not None:
             tgt_labels = tgt_dict['labels']
             tgt_boxes = tgt_dict['boxes']
 
-            inputs = [action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes]
-            loss_dict, analysis_dict = self.get_loss(*inputs)
+            loss_dict = {}
+            analysis_dict = {}
 
-            return loss_dict, analysis_dict
+        # Get losses with corresponding analyses or get predictions
+        for set_id, obj_feats in enumerate(obj_feats_list):
 
-        # Get prediction dictionary validation/testing
-        else:
-            pred_dict = BRD.make_predictions(cls_logits, pred_boxes)
+            # Continue if desired
+            if tgt_dict is None and set_id < num_pred_sets-1 and not self.rel_preds:
+                continue
 
-            return pred_dict
+            # Get classification and bounding box logits
+            cls_logits = self.cls_head(obj_feats)
+            box_logits = self.box_head(obj_feats)
+
+            # Get prediction boxes
+            pred_boxes = []
+
+            for i in range(batch_size):
+                box_deltas = box_logits[i].tanh()
+
+                pred_cxcy = self.delta_range_xy * box_deltas[:, :2] + prior_boxes[i][:, :2]
+                pred_wh = self.delta_range_wh ** box_deltas[:, 2:] * prior_boxes[i][:, 2:]
+                pred_boxes_i = torch.cat([pred_cxcy, pred_wh], dim=1)
+
+                if self.rel_preds:
+                    prior_boxes[i] = pred_boxes_i.detach()
+
+                pred_boxes_i = Boxes(pred_boxes_i, format='cxcywh', normalized=True)
+                pred_boxes.append(pred_boxes_i)
+
+            # Continue if desired
+            if tgt_dict is None and set_id < num_pred_sets-1:
+                continue
+
+            # Get loss and analysis dictionaries during trainval
+            if tgt_dict is not None:
+                inputs = [action_losses, cls_logits, pred_boxes, tgt_labels, tgt_boxes]
+                local_loss_dict, local_analysis_dict = self.get_loss(*inputs)
+
+                if self.inter_loss:
+                    loss_dict.update({f'{k}_{set_id}': v for k, v in local_loss_dict.items()})
+                    analysis_dict.update({f'{k}_{set_id}': v for k, v in local_analysis_dict.items()})
+
+                else:
+                    loss_dict = local_loss_dict
+                    analysis_dict = local_analysis_dict
+
+                if set_id == num_pred_sets-1:
+                    return loss_dict, analysis_dict
+
+            # Get prediction dictionary validation/testing
+            elif set_id == num_pred_sets-1:
+                pred_dict = BRD.make_predictions(cls_logits, pred_boxes)
+
+                return pred_dict
 
     def visualize(self, images, pred_dict, tgt_dict, score_treshold=0.4):
         """
