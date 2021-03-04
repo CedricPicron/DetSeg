@@ -347,8 +347,9 @@ class BRD(nn.Module):
             with torch.no_grad():
 
                 # Get number of correct predictions
-                pred_labels = torch.argmax(cls_logits_i[:num_tgts], dim=1)
-                num_correct_preds = torch.eq(pred_labels, tgt_labels[i]).sum(dim=0, keepdim=True)
+                matched_tgts = min(num_preds, num_tgts) if self.use_lsa else num_tgts
+                pred_labels = torch.argmax(cls_logits_i[:matched_tgts], dim=1)
+                num_correct_preds = torch.eq(pred_labels, tgt_labels[i][:matched_tgts]).sum(dim=0, keepdim=True)
 
                 # Average number of correct predictions accross nodes
                 if is_dist_avail_and_initialized():
