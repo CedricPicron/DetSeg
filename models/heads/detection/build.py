@@ -42,7 +42,7 @@ def build_det_heads(args):
             head_dict = {**head_dict, 'prior_cls_prob': args.brd_head_prior_cls_prob}
 
             loss_dict = {'inter_loss': args.brd_inter_loss, 'rel_preds': args.brd_rel_preds}
-            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds}
+            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds, 'use_lsa': args.brd_use_lsa}
 
             loss_dict = {**loss_dict, 'delta_range_xy': args.brd_delta_range_xy}
             loss_dict = {**loss_dict, 'delta_range_wh': args.brd_delta_range_wh}

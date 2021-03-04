@@ -113,6 +113,7 @@ def get_parser():
     parser.add_argument('--brd_inter_loss', action='store_true', help='apply loss on intermediate layer predictions')
     parser.add_argument('--brd_rel_preds', action='store_true', help='predict boxes relative to previous predictions')
     parser.add_argument('--brd_use_all_preds', action='store_true', help='apply loss on all predictions from layer')
+    parser.add_argument('--brd_use_lsa', action='store_true', help='use linear sum assignment during loss matching')
 
     parser.add_argument('--brd_delta_range_xy', default=1.0, type=float, help='range of object location delta')
     parser.add_argument('--brd_delta_range_wh', default=8.0, type=float, help='range of object size delta')

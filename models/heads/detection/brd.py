@@ -7,6 +7,7 @@ import math
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
 from fvcore.nn import sigmoid_focal_loss
+from scipy.optimize import linear_sum_assignment as lsa
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -33,6 +34,7 @@ class BRD(nn.Module):
         inter_loss (bool): Whether to apply losses on predictions from intermediate decoder layers.
         rel_preds (bool): Whether to predict boxes relative to predicted boxes from previous layer.
         use_all_preds (bool): Whether to use all predictions from a layer during actual loss computation.
+        use_lsa (bool): Whether to use linear sum assignment during loss matching.
 
         delta_range_xy (float): Value determining the range of object location deltas.
         delta_range_wh (float): Value determining the range of object size deltas.
@@ -82,6 +84,7 @@ class BRD(nn.Module):
                 - inter_loss (bool): whether to apply losses on predictions from intermediate decoder layers;
                 - rel_preds (bool): whether to predict boxes relative to predicted boxes from previous layer;
                 - use_all_preds (bool): whether to use all predictions from a layer during actual loss computation;
+                - use_lsa (bool): whether to use linear sum assignment during loss matching;
 
                 - delta_range_xy (float): value determining the range of object location deltas;
                 - delta_range_wh (float): value determining the range of object size deltas;
@@ -127,6 +130,7 @@ class BRD(nn.Module):
         self.inter_loss = loss_dict['inter_loss']
         self.rel_preds = loss_dict['rel_preds']
         self.use_all_preds = loss_dict['use_all_preds']
+        self.use_lsa = loss_dict['use_lsa']
 
         self.delta_range_xy = loss_dict['delta_range_xy']
         self.delta_range_wh = loss_dict['delta_range_wh']
@@ -308,17 +312,19 @@ class BRD(nn.Module):
             action_loss = torch.sum(action_weights * action_losses[i], dim=0, keepdim=True)
             loss_dict['brd_action_loss'] += action_loss
 
-            # Get best prediction indices per target
-            best_pred_ids = pred_rankings[0, :]
-
             # Get prediction and target ids for loss computation
-            if self.use_all_preds:
-                pred_ids = torch.cat([best_pred_ids, torch.arange(num_preds, device=device)], dim=0)
-                tgt_ids = torch.cat([torch.arange(num_tgts, device=device), best_tgt_ids], dim=0)
+            if self.use_lsa:
+                pred_ids, tgt_ids = lsa(loss_matrix.cpu())
+                pred_ids = torch.as_tensor(pred_ids, device=device)
+                tgt_ids = torch.as_tensor(tgt_ids, device=device)
 
             else:
-                pred_ids = best_pred_ids
-                tgt_ids = torch.arange(num_tgts)
+                pred_ids = pred_rankings[0, :]
+                tgt_ids = torch.arange(num_tgts, device=device)
+
+            if self.use_all_preds:
+                pred_ids = torch.cat([pred_ids, torch.arange(num_preds, device=device)], dim=0)
+                tgt_ids = torch.cat([tgt_ids, best_tgt_ids], dim=0)
 
             # Get classification loss
             cls_logits_i = cls_logits[i][pred_ids, :]
