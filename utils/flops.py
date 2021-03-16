@@ -9,6 +9,10 @@ def compute_flops(model, dataset, num_samples=100):
     """
     Function computing the FLOPS of a model averaged over samples from the beginning of the given dataset.
 
+    Needs improvement on two aspects:
+        1) the Images and Boxes structures are currently not supported;
+        2) some used operations do not have a corresponding flop count function or are not properly ignored.
+
     Args:
         model (nn.Module): Module implementing a model from which the average number of FLOPS is to be computed.
         dataset (Dataset): Dataset providing the input samples used to get the average number of FLOPS.
