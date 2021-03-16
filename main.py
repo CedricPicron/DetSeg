@@ -16,6 +16,7 @@ from models.bivinet import build_bivinet
 from models.detr import build_detr
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
+from utils.flops import compute_flops
 
 
 def get_parser():
@@ -29,6 +30,10 @@ def get_parser():
 
     # Evaluation
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
+
+    # FLOPS computation
+    parser.add_argument('--get_flops', action='store_true', help='compute number of FLOPS of model and return')
+    parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
 
     # Visualization
     parser.add_argument('--visualize', action='store_true', help='visualize model from checkpoint and return')
@@ -131,6 +136,19 @@ def get_parser():
     parser.add_argument('--brd_cls_loss_weight', default=1.0, type=float, help='classification loss weight')
     parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')
+
+    # *** Duplicate-Free Detector (DFD) head
+    parser.add_argument('--dfd_feat_size', default=256, type=int, help='internal feature size of the DFD head')
+
+    parser.add_argument('--dfd_dd_hidden_size', default=256, type=int, help='hidden dense detector feature size')
+    parser.add_argument('--dfd_dd_layers', default=1, type=int, help='number of dense detector hidden layers')
+    parser.add_argument('--dfd_dd_prior_cls_prob', default=0.01, type=float, help='prior class probability')
+
+    parser.add_argument('--dfd_dd_focal_alpha', default=0.25, type=float, help='dense detector focal alpha value')
+    parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
+
+    parser.add_argument('--dfd_dd_delta_range_xy', default=1.0, type=float, help='dense detector location delta range')
+    parser.add_argument('--dfd_dd_delta_range_wh', default=8.0, type=float, help='dense detector size delta range')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
@@ -325,6 +343,12 @@ def main(args):
                 evaluations = evaluator.sub_evaluators[metric].eval
                 torch.save(evaluations, output_dir / f'eval_{metric}.pth')
 
+        return
+
+    # If requested, compute average number of FLOPS of model and return
+    if args.get_flops:
+        avg_flops = compute_flops(model, val_dataset, num_samples=args.flops_samples)
+        print(f"Average number of FLOPS: {avg_flops: .1f} GFLOPS")
         return
 
     # If requested, visualize model from checkpoint and return

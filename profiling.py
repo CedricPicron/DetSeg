@@ -26,7 +26,7 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['backbone', 'bla_init', 'bla_update', 'bin_seg_head', 'bivinet_bin_seg', 'bivinet_ret']
+model_choices = ['backbone', 'bla_init', 'bla_update', 'bin_seg_head', 'bivinet_bin_seg', 'bivinet_det']
 model_choices = [*model_choices, 'bivinet_sem_seg', 'brd_head', 'criterion', 'detr', 'encoder', 'fpn', 'gc']
 model_choices = [*model_choices, 'global_decoder', 'ret_head_bla', 'ret_head_fpn', 'sample_decoder', 'sem_seg_head']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
@@ -144,18 +144,16 @@ elif profiling_args.model == 'bivinet_bin_seg':
     forward_stmt = "model(*[images, tgt_dict.copy()])"
     backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
 
-elif profiling_args.model == 'bivinet_ret':
+elif profiling_args.model == 'bivinet_det':
     main_args.num_classes = 80
     main_args.meta_arch = 'BiViNet'
     main_args.bvn_max_downsampling = 7
     main_args.bvn_step_mode = 'single'
     main_args.bvn_sync_heads = False
     main_args.core_type = 'GC'
-    main_args.bla_version = 'main'
-    main_args.bla_num_layers = 4
-    main_args.gc_yaml = './configs/gc/ret_conv_fpn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_ceae_2b3_gn.yaml'
     main_args.det_heads = ['retina']
-    main_args.ret_num_convs = 4
+    main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_bivinet(main_args).to('cuda')
