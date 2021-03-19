@@ -144,11 +144,19 @@ def get_parser():
     parser.add_argument('--dfd_dd_layers', default=1, type=int, help='number of dense detector hidden layers')
     parser.add_argument('--dfd_dd_prior_cls_prob', default=0.01, type=float, help='prior class probability')
 
-    parser.add_argument('--dfd_dd_focal_alpha', default=0.25, type=float, help='dense detector focal alpha value')
-    parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
-
     parser.add_argument('--dfd_dd_delta_range_xy', default=1.0, type=float, help='dense detector location delta range')
     parser.add_argument('--dfd_dd_delta_range_wh', default=8.0, type=float, help='dense detector size delta range')
+
+    parser.add_argument('--dfd_dd_focal_alpha', default=0.25, type=float, help='dense detector focal alpha value')
+    parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
+    parser.add_argument('--dfd_dd_cls_weight', default=1.0, type=float, help='dense detector classification weight')
+
+    parser.add_argument('--dfd_dd_smooth_l1_beta', default=0.0, type=float, help='dense detector smooth L1 beta value')
+    parser.add_argument('--dfd_dd_box_weight', default=1.0, type=float, help='dense detector bounding box weight')
+
+    parser.add_argument('--dfd_dd_nms_candidates', default=1000, type=int, help='dense detector candidates for NMS')
+    parser.add_argument('--dfd_dd_nms_threshold', default=0.5, type=float, help='dense detector NMS threshold')
+    parser.add_argument('--dfd_dd_max_detections', default=100, type=int, help='dense detector max detections')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')

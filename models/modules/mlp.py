@@ -73,7 +73,7 @@ class MLP(nn.Module):
         head (nn.Sequential): Sequence of activation and projection modules.
     """
 
-    def __init__(self, in_size, hidden_size, out_size, num_hidden_layers):
+    def __init__(self, in_size, hidden_size, out_size, num_hidden_layers, **kwargs):
         """
         Initializes the MLP module.
 
