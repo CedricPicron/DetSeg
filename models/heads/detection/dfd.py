@@ -232,8 +232,16 @@ class DFD(nn.Module):
 
                 # Get prediction weights and indices of best target per prediction
                 with torch.no_grad():
+
+                    # Get unnormalized prediciton weights
                     iou_matrix, _ = box_iou(pred_boxes_i, tgt_boxes_i)
                     pred_weights, tgt_ids = torch.max(iou_matrix, dim=1)
+
+                    # Normalize prediction weights
+                    tgt_id_matrix = F.one_hot(tgt_ids, len(tgt_labels))
+                    pred_weights = pred_weights[:, None] * tgt_id_matrix
+                    pred_weights[pred_weights == 0] = float('-inf')
+                    pred_weights = torch.softmax(pred_weights, dim=0).sum(dim=1)
 
                 # Get classification loss
                 cls_logits_i = cls_logits[i]
