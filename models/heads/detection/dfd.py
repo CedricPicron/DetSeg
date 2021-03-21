@@ -27,6 +27,8 @@ class DFD(nn.Module):
         dd_delta_range_xy (float): Value determining the range of object location deltas of the dense detector.
         dd_delta_range_wh (float): Value determining the range of object size deltas of the dense detector.
 
+        dd_weight_power (float): Power used during dense detector prediction weight normalization.
+
         dd_focal_alpha (float): Alpha value of the sigmoid focal loss used during dense detector classification.
         dd_focal_gamma (float): Gamma value of the sigmoid focal loss used during dense detector classification.
         dd_cls_weight (float): Factor weighting the classification loss used during dense detector classification.
@@ -57,6 +59,8 @@ class DFD(nn.Module):
                 - delta_range_xy (float): value determining the range of object location deltas;
                 - delta_range_wh (float): value determining the range of object size deltas;
 
+                - weight_power (float): power used during dense detector prediction weight normalization;
+
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
                 - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
                 - cls_weight (float): factor weighting the classification loss;
@@ -85,6 +89,8 @@ class DFD(nn.Module):
 
         self.dd_delta_range_xy = dd_dict['delta_range_xy']
         self.dd_delta_range_wh = dd_dict['delta_range_wh']
+
+        self.dd_weight_power = dd_dict['weight_power']
 
         self.dd_focal_alpha = dd_dict['focal_alpha']
         self.dd_focal_gamma = dd_dict['focal_gamma']
@@ -224,6 +230,8 @@ class DFD(nn.Module):
 
                 # Skip batch entry if there are no targets
                 if len(tgt_labels) == 0:
+                    loss_dict['dfd_dd_cls_loss'] += 0.0 * cls_logits[i].sum()
+                    loss_dict['dfd_dd_box_loss'] += 0.0 * pred_boxes[i].sum()
                     continue
 
                 # Prepare predicted and target boxes
@@ -238,10 +246,13 @@ class DFD(nn.Module):
                     pred_weights, tgt_ids = torch.max(iou_matrix, dim=1)
 
                     # Normalize prediction weights
+                    pred_weights = pred_weights ** self.dd_weight_power
                     tgt_id_matrix = F.one_hot(tgt_ids, len(tgt_labels))
                     pred_weights = pred_weights[:, None] * tgt_id_matrix
-                    pred_weights[pred_weights == 0] = float('-inf')
-                    pred_weights = torch.softmax(pred_weights, dim=0).sum(dim=1)
+
+                    eps = 1e-5
+                    pred_weights = pred_weights / (pred_weights.sum(dim=0)+eps)
+                    pred_weights = pred_weights.sum(dim=1)
 
                 # Get classification loss
                 cls_logits_i = cls_logits[i]

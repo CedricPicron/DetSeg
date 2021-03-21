@@ -147,6 +147,8 @@ def get_parser():
     parser.add_argument('--dfd_dd_delta_range_xy', default=1.0, type=float, help='dense detector location delta range')
     parser.add_argument('--dfd_dd_delta_range_wh', default=8.0, type=float, help='dense detector size delta range')
 
+    parser.add_argument('--dfd_dd_weight_power', default=2, type=float, help='dense detector prediction weight power')
+
     parser.add_argument('--dfd_dd_focal_alpha', default=0.25, type=float, help='dense detector focal alpha value')
     parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
     parser.add_argument('--dfd_dd_cls_weight', default=1.0, type=float, help='dense detector classification weight')
