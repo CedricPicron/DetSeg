@@ -27,6 +27,7 @@ class DFD(nn.Module):
         dd_delta_range_xy (float): Value determining the range of object location deltas of the dense detector.
         dd_delta_range_wh (float): Value determining the range of object size deltas of the dense detector.
 
+        dd_weight_mode (str): String denoting the prediction weight mode of the dense detector.
         dd_weight_power (float): Power used during dense detector prediction weight normalization.
 
         dd_focal_alpha (float): Alpha value of the sigmoid focal loss used during dense detector classification.
@@ -59,6 +60,7 @@ class DFD(nn.Module):
                 - delta_range_xy (float): value determining the range of object location deltas;
                 - delta_range_wh (float): value determining the range of object size deltas;
 
+                - weight_mode (str): string denoting the prediction weight mode of the dense detector;
                 - weight_power (float): power used during dense detector prediction weight normalization;
 
                 - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
@@ -90,6 +92,7 @@ class DFD(nn.Module):
         self.dd_delta_range_xy = dd_dict['delta_range_xy']
         self.dd_delta_range_wh = dd_dict['delta_range_wh']
 
+        self.dd_weight_mode = dd_dict['weight_mode']
         self.dd_weight_power = dd_dict['weight_power']
 
         self.dd_focal_alpha = dd_dict['focal_alpha']
@@ -177,6 +180,9 @@ class DFD(nn.Module):
                     - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+        Raises:
+            ValueError: Error when dense detector has an unknown prediction weight mode.
         """
 
         # Assume no padded regions when feature masks are missing
@@ -225,11 +231,16 @@ class DFD(nn.Module):
             # Get loss and analysis for each batch entry
             for i in range(batch_size):
 
-                # Get target labels
-                tgt_labels = tgt_dict['labels'][i]
+                # Get classification logits and number of predictions
+                cls_logits_i = cls_logits[i]
+                num_preds = len(cls_logits_i)
+
+                # Get target labels and number of targets
+                tgt_labels_i = tgt_dict['labels'][i]
+                num_tgts = len(tgt_labels_i)
 
                 # Skip batch entry if there are no targets
-                if len(tgt_labels) == 0:
+                if num_tgts == 0:
                     loss_dict['dfd_dd_cls_loss'] += 0.0 * cls_logits[i].sum()
                     loss_dict['dfd_dd_box_loss'] += 0.0 * pred_boxes[i].sum()
                     continue
@@ -238,36 +249,52 @@ class DFD(nn.Module):
                 pred_boxes_i = Boxes(pred_boxes[i], format='cxcywh', normalized=True)
                 tgt_boxes_i = tgt_dict['boxes'][i].to_format('cxcywh')
 
-                # Get prediction weights and indices of best target per prediction
+                # Get prediction weights and corresponding indices
                 with torch.no_grad():
 
-                    # Get unnormalized prediciton weights
+                    # Get IoU-matrix between predictions and targets
                     iou_matrix, _ = box_iou(pred_boxes_i, tgt_boxes_i)
-                    pred_weights, tgt_ids = torch.max(iou_matrix, dim=1)
 
-                    # Normalize prediction weights
-                    pred_weights = pred_weights ** self.dd_weight_power
-                    tgt_id_matrix = F.one_hot(tgt_ids, len(tgt_labels))
-                    pred_weights = pred_weights[:, None] * tgt_id_matrix
+                    # Weight mode 'single'
+                    if self.dd_weight_mode == 'single':
+                        tgt_ids = torch.arange(num_tgts)
+                        _, pred_ids = torch.max(iou_matrix, dim=0)
+                        pred_weights = torch.ones_like(tgt_labels_i)
 
-                    eps = 1e-5
-                    pred_weights = pred_weights / (pred_weights.sum(dim=0)+eps)
-                    pred_weights = pred_weights.sum(dim=1)
+                    # Weight mode 'multiple'
+                    elif self.dd_weight_mode == 'multiple':
+                        pred_ids = torch.arange(num_preds)
+                        pred_weights, tgt_ids = torch.max(iou_matrix, dim=1)
+
+                        pred_weights = pred_weights ** self.dd_weight_power
+                        tgt_id_matrix = F.one_hot(tgt_ids, num_tgts)
+                        pred_weights = pred_weights[:, None] * tgt_id_matrix
+
+                        eps = 1e-5
+                        pred_weights = pred_weights / (pred_weights.sum(dim=0)+eps)
+                        pred_weights = pred_weights.sum(dim=1)
+
+                    # Unknown weight mode
+                    else:
+                        raise ValueError(f"Unknown dense detector weight mode '{self.dd_weight_mode}' was provided.")
 
                 # Get classification loss
-                cls_logits_i = cls_logits[i]
-                cls_targets = F.one_hot(tgt_labels[tgt_ids], num_classes).to(cls_logits_i.dtype)
+                cls_preds = cls_logits_i[pred_ids]
+                cls_tgts = F.one_hot(tgt_labels_i[tgt_ids], num_classes).to(cls_preds.dtype)
 
                 cls_kwargs = {'alpha': self.dd_focal_alpha, 'gamma': self.dd_focal_gamma, 'reduction': 'none'}
-                cls_losses = sigmoid_focal_loss(cls_logits_i, cls_targets, **cls_kwargs)
+                cls_losses = sigmoid_focal_loss(cls_preds, cls_tgts, **cls_kwargs)
 
                 cls_losses = pred_weights * cls_losses.sum(dim=1)
                 cls_loss = self.dd_cls_weight * cls_losses.sum(dim=0, keepdim=True)
                 loss_dict['dfd_dd_cls_loss'] += cls_loss / batch_size
 
                 # Get bounding box loss
+                box_preds = pred_boxes_i.boxes[pred_ids]
+                box_tgts = tgt_boxes_i.boxes[tgt_ids]
+
                 box_kwargs = {'beta': self.dd_smooth_l1_beta, 'reduction': 'none'}
-                box_losses = smooth_l1_loss(pred_boxes_i.boxes, tgt_boxes_i.boxes[tgt_ids], **box_kwargs)
+                box_losses = smooth_l1_loss(box_preds, box_tgts, **box_kwargs)
 
                 box_losses = pred_weights * box_losses.sum(dim=1)
                 box_loss = self.dd_box_weight * box_losses.sum(dim=0, keepdim=True)
@@ -283,7 +310,7 @@ class DFD(nn.Module):
 
                     # Get classification accuracy
                     pred_labels = torch.argmax(cls_logits_i[pred_ids], dim=1)
-                    cls_accuracy = torch.eq(pred_labels, tgt_labels).sum(dim=0, keepdim=True) / len(tgt_labels)
+                    cls_accuracy = torch.eq(pred_labels, tgt_labels_i).sum(dim=0, keepdim=True) / num_tgts
                     analysis_dict['dfd_dd_cls_acc'] += 100 * cls_accuracy / batch_size
 
             return loss_dict, analysis_dict

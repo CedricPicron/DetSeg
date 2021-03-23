@@ -73,6 +73,7 @@ def build_det_heads(args):
             dd_dict = {**dd_dict, 'delta_range_xy': args.dfd_dd_delta_range_xy}
             dd_dict = {**dd_dict, 'delta_range_wh': args.dfd_dd_delta_range_wh}
 
+            dd_dict = {**dd_dict, 'weight_mode': args.dfd_dd_weight_mode}
             dd_dict = {**dd_dict, 'weight_power': args.dfd_dd_weight_power}
 
             dd_dict = {**dd_dict, 'focal_alpha': args.dfd_dd_focal_alpha}
