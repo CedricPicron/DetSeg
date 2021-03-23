@@ -175,7 +175,7 @@ class DFD(nn.Module):
                     - dfd_dd_box_acc (FloatTensor): dense detector bounding box accuracy of shape [1].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
-                pred_dict (Dict): Prediction dictionary containing following keys:
+                pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds_total];
                     - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
@@ -313,8 +313,6 @@ class DFD(nn.Module):
                     cls_accuracy = torch.eq(pred_labels, tgt_labels_i).sum(dim=0, keepdim=True) / num_tgts
                     analysis_dict['dfd_dd_cls_acc'] += 100 * cls_accuracy / batch_size
 
-            return loss_dict, analysis_dict
-
         # Get dense detector predictions (validation/testing)
         if tgt_dict is None:
 
@@ -351,9 +349,18 @@ class DFD(nn.Module):
             pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
             pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
 
-            return pred_dict
+            # Add prediction dictionary to list of prediction dictionaries
+            pred_dicts = [pred_dict]
 
-    def visualize(self, images, pred_dict, tgt_dict, score_treshold=0.4):
+        # Return loss and analysis dictionaries (trainval only)
+        if tgt_dict is not None:
+            return loss_dict, analysis_dict
+
+        # Return prediction dictionaries (validation/testing)
+        if tgt_dict is None:
+            return pred_dicts
+
+    def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.4):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -362,7 +369,7 @@ class DFD(nn.Module):
         Args:
             images (Images): Images structure containing the batched images.
 
-            pred_dict (Dict): Prediction dictionary containing at least following keys:
+            pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
@@ -379,28 +386,43 @@ class DFD(nn.Module):
             images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
         """
 
-        # Prepare predictions
-        pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
-        well_defined = pred_boxes.well_defined()
-        pred_scores = pred_dict['scores'][well_defined]
+        # Get keys found in draw dictionaries
+        draw_dict_keys = ['labels', 'boxes', 'scores', 'sizes']
 
-        pred_labels = pred_dict['labels'][well_defined][pred_scores >= score_treshold]
-        pred_boxes = pred_boxes.boxes[well_defined][pred_scores >= score_treshold]
-        pred_batch_ids = pred_dict['batch_ids'][well_defined][pred_scores >= score_treshold]
-        pred_scores = pred_scores[pred_scores >= score_treshold]
+        # Get draw dictionaries for predictions
+        pred_draw_dicts = []
 
-        # Prepare targets
+        for pred_dict in pred_dicts:
+            pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
+            well_defined = pred_boxes.well_defined()
+
+            pred_scores = pred_dict['scores'][well_defined]
+            sufficient_score = pred_scores >= score_treshold
+
+            pred_labels = pred_dict['labels'][well_defined][sufficient_score]
+            pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
+            pred_scores = pred_scores[sufficient_score]
+            pred_batch_ids = pred_dict['batch_ids'][well_defined][sufficient_score]
+
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+            pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
+
+            draw_dict_values = [pred_labels, pred_boxes, pred_scores, pred_sizes]
+            pred_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            pred_draw_dicts.append(pred_draw_dict)
+
+        # Get draw dictionary for targets
         tgt_labels = torch.cat(tgt_dict['labels'])
         tgt_boxes = Boxes.cat(tgt_dict['boxes']).to_img_scale(images).to_format('xyxy').boxes
+        tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
+        tgt_sizes = tgt_dict['sizes']
 
-        # Concatenate predictions and targets
-        labels = torch.cat([pred_labels, tgt_labels])
-        boxes = torch.cat([pred_boxes, tgt_boxes])
-        scores = torch.cat([pred_scores, torch.ones_like(tgt_labels, dtype=torch.float)])
+        draw_dict_values = [tgt_labels, tgt_boxes, tgt_scores, tgt_sizes]
+        tgt_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
 
-        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
-        pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
-        sizes = torch.cat([pred_sizes, pred_sizes[-1] + tgt_dict['sizes'][1:]])
+        # Combine draw dicationaries and get corresponding dictionary names
+        draw_dicts = [*pred_draw_dicts, tgt_draw_dict]
+        dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
 
         # Get image sizes without padding in (width, height) format
         img_sizes = images.size(with_padding=False)
@@ -414,22 +436,23 @@ class DFD(nn.Module):
         images_dict = {}
 
         # Draw bounding boxes on images and add them to images dictionary
-        for i, i0, i1 in zip(range(2*num_images), sizes[:-1], sizes[1:]):
-            image_id = i % num_images
-            visualizer = Visualizer(images[image_id], metadata=self.metadata)
+        for dict_name, draw_dict in zip(dict_names, draw_dicts):
+            sizes = draw_dict['sizes']
 
-            img_size = img_sizes[image_id]
-            img_size = (img_size[1], img_size[0])
+            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
 
-            img_labels = labels[i0:i1].cpu().numpy()
-            img_boxes = boxes[i0:i1].cpu().numpy()
-            img_scores = scores[i0:i1].cpu().numpy()
+                img_size = img_sizes[image_id]
+                img_size = (img_size[1], img_size[0])
 
-            instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
-            visualizer.draw_instance_predictions(instances)
+                img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
+                img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
+                img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
 
-            annotated_image = visualizer.output.get_image()
-            key = f'pred_{image_id}' if (i // num_images) == 0 else f'tgt_{image_id}'
-            images_dict[f'ret_det_{key}'] = annotated_image[:img_size[0], :img_size[1], :]
+                instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+                visualizer.draw_instance_predictions(instances)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'dfd_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
 
         return images_dict

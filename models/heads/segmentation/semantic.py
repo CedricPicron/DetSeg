@@ -193,7 +193,7 @@ class SemanticSegHead(nn.Module):
                     - sem_seg_acc_obj (FloatTensor): object accuracy of the semantic segmentation of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
-                pred_dict (Dict): Prediction dictionary containing following key:
+                pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                     - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
         """
 
@@ -203,7 +203,9 @@ class SemanticSegHead(nn.Module):
         # Compute and return dictionary with predicted semantic segmentation maps (validation/testing only)
         if tgt_dict is None:
             pred_dict = {'semantic_maps': [torch.argmax(logit_map, dim=1) for logit_map in logit_maps]}
-            return pred_dict
+            pred_dicts = [pred_dict]
+
+            return pred_dicts
 
         # Compute average cross entropy losses corresponding to each map (trainval only)
         tgt_maps = tgt_dict['semantic_maps']
@@ -250,14 +252,14 @@ class SemanticSegHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dict, tgt_dict):
+    def visualize(self, images, pred_dicts, tgt_dict):
         """
         Draws predicted and target semantic segmentations on given full-resolution images.
 
         Args:
             images (Images): Images structure containing the batched images.
 
-            pred_dict (Dict): Prediction dictionary containing at least following key:
+            pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                 - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
@@ -267,10 +269,10 @@ class SemanticSegHead(nn.Module):
             images_dict (Dict): Dictionary of images with drawn predicted and target semantic segmentations.
         """
 
-        # Get desired keys and merge prediction and target semantic maps into single list
-        keys = [f'pred_f{i}' for i in range(len(pred_dict['semantic_maps']))]
-        keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['semantic_maps']))])
-        semantic_maps_list = [*pred_dict['semantic_maps'], *tgt_dict['semantic_maps']]
+        # Combine prediction and target semantic maps and get corresponding map names
+        semantic_maps = [map for p in pred_dicts for map in p['semantic_maps']] + tgt_dict['semantic_maps']
+        map_names = [f'pred_{i}_f{j}' for i, p in enumerate(pred_dicts, 1) for j in range(len(p['semantic_maps']))]
+        map_names.extend([f'tgt_f{j}' for j in range(len(tgt_dict['semantic_maps']))])
 
         # Get possible map sizes in (height, width) format
         map_width, map_height = images.size()
@@ -293,14 +295,14 @@ class SemanticSegHead(nn.Module):
         images_dict = {}
 
         # Get annotated images for each batch of semantic maps
-        for key, semantic_maps in zip(keys, semantic_maps_list):
+        for map_name, semantic_map in zip(map_names, semantic_maps):
 
-            # Get number of times the semantic maps were downsampled
-            map_size = tuple(semantic_maps.shape[-2:])
+            # Get number of times the semantic map was downsampled
+            map_size = tuple(semantic_map.shape[-2:])
             times_downsampled = map_sizes.index(map_size)
 
             # Get class-specific semantic maps
-            class_semantic_maps = torch.stack([semantic_maps == i for i in range(self.num_classes+1)], dim=1).float()
+            class_semantic_maps = torch.stack([semantic_map == i for i in range(self.num_classes+1)], dim=1).float()
 
             # Upsample class-specific semantic maps to image resolution
             for map_id in range(times_downsampled-1, -1, -1):
@@ -311,15 +313,15 @@ class SemanticSegHead(nn.Module):
                 class_semantic_maps = F.interpolate(class_semantic_maps, size=(H+pH, W+pW), **interpolation_kwargs)
                 class_semantic_maps = class_semantic_maps[:, :, :H, :W]
 
-            # Get general (non-class specific) semantic maps anc convert to NumPy ndarray
-            semantic_maps = torch.argmax(class_semantic_maps, dim=1).cpu().numpy()
+            # Get general (non-class specific) semantic map and convert to NumPy ndarray
+            semantic_map = torch.argmax(class_semantic_maps, dim=1).cpu().numpy()
 
-            # Draw semantic masks on corresponding images
-            for i, image, img_size, semantic_map in zip(range(len(images)), images, img_sizes, semantic_maps):
+            # Draw image semantic maps on corresponding images
+            for i, image, img_size, img_semantic_map in zip(range(len(images)), images, img_sizes, semantic_map):
                 visualizer = Visualizer(image, metadata=self.metadata)
-                visualizer.draw_sem_seg(semantic_map)
+                visualizer.draw_sem_seg(img_semantic_map)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'sem_seg_{key}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
+                images_dict[f'sem_seg_{map_name}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
 
         return images_dict

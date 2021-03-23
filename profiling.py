@@ -5,6 +5,7 @@ Profiling script.
 import argparse
 
 from detectron2.data import MetadataCatalog
+from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 import torch
 import torch.autograd.profiler as profiler
 from torch.utils.benchmark import Timer
@@ -383,6 +384,10 @@ elif profiling_args.model == 'ret_head_bla':
     feat_map6 = torch.randn(2, 512, 16, 16).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6]
 
+    anchor_generator = DefaultAnchorGenerator(sizes=[128.0], aspect_ratios=[1.0], strides=[8])
+    anchors = anchor_generator(feat_maps)
+    model.anchors = [Boxes(map_anchors.tensor.to('cuda'), format='xyxy') for map_anchors in anchors]
+
     min_id, max_id = (main_args.bvn_min_downsampling, main_args.bvn_max_downsampling+1)
     num_anchors_total = sum(9 * 4**(10-i) for i in range(min_id, max_id))
     anchor_labels = torch.randint(model.num_classes, size=(2, num_anchors_total)).to('cuda')
@@ -414,6 +419,10 @@ elif profiling_args.model == 'ret_head_fpn':
     feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
     feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    anchor_generator = DefaultAnchorGenerator(sizes=[128.0], aspect_ratios=[1.0], strides=[8])
+    anchors = anchor_generator(feat_maps)
+    model.anchors = [Boxes(map_anchors.tensor.to('cuda'), format='xyxy') for map_anchors in anchors]
 
     min_id, max_id = (main_args.bvn_min_downsampling, main_args.bvn_max_downsampling+1)
     num_anchors_total = sum(9 * 4**(10-i) for i in range(min_id, max_id))

@@ -338,21 +338,22 @@ def main(args):
 
     # If requested, evaluate model from checkpoint and return
     if args.eval:
-        val_stats, evaluator = evaluate(model, val_dataloader, evaluator=evaluator)
+        val_stats, evaluators = evaluate(model, val_dataloader, evaluator=evaluator)
 
         if not checkpoint_path and not args.output_dir:
             return
 
         output_dir = Path(args.output_dir) if args.output_dir else Path(checkpoint_path).parent
         if distributed.is_main_process():
-            if evaluator is None:
+            if evaluators is None:
                 with (output_dir / 'eval.txt').open('w') as eval_file:
                     eval_file.write(json.dumps(val_stats) + "\n")
                     return
 
-            for metric in evaluator.metrics:
-                evaluations = evaluator.sub_evaluators[metric].eval
-                torch.save(evaluations, output_dir / f'eval_{metric}.pth')
+            for i, evaluator in enumerate(evaluators, 1):
+                for metric in evaluator.metrics:
+                    evaluations = evaluator.sub_evaluators[metric].eval
+                    torch.save(evaluations, output_dir / f'eval_{i}_{metric}.pth')
 
         return
 

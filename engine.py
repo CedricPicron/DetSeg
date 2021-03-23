@@ -1,6 +1,7 @@
 """
 Collection of training, evaluation and saving functions.
 """
+from copy import deepcopy
 import json
 import math
 from pathlib import Path
@@ -15,7 +16,7 @@ import utils.distributed as distributed
 
 def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
     """
-    Train model for one epoch.
+    Trains model for one epoch.
 
     Args:
         model (nn.Module): Module computing predictions from images.
@@ -29,12 +30,15 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
         train_stats (Dict): Dictionary containing the epoch training statistics.
     """
 
+    # Get device and set model in training mode
     device = next(model.parameters()).device
     model.train()
 
+    # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ")
     header = f"Train epoch {epoch}:"
 
+    # Iterate over training images
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
 
         # Place images and target dictionary on correct device
@@ -73,7 +77,7 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
 @torch.no_grad()
 def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
     """
-    Evaluate model.
+    Evaluates model.
 
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
@@ -84,18 +88,29 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
 
     Returns:
         val_stats (Dict): Dictionary containing the validation statistics.
-        evaluator (object): Updated evaluator object containing the evaluations (or None if None evaluator was given).
+        evaluators (List): List of updated evaluator objects containing the evaluations (or None).
     """
 
+    # Get device and set model in evaluation mode
     device = next(model.parameters()).device
     model.eval()
 
+    # Initialize evaluators
     if evaluator is not None:
         evaluator.reset()
 
+        sample_images, _ = next(iter(dataloader))
+        num_pred_dicts = len(model(sample_images.to(device)))
+        evaluators = [deepcopy(evaluator) for _ in range(num_pred_dicts)]
+
+    else:
+        evaluators = None
+
+    # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ")
     header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
 
+    # Iterate over validation images
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
 
         # Place images and target dictionary on correct device
@@ -104,7 +119,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
 
         # Get prediction, loss and analysis dictionaries
         val_kwargs = {'extended_analysis': True}
-        pred_dict, loss_dict, analysis_dict = model(images, tgt_dict, **val_kwargs)
+        pred_dicts, loss_dict, analysis_dict = model(images, tgt_dict, **val_kwargs)
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
@@ -120,31 +135,34 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
         # Update logger
         metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
 
-        # Update evaluator
-        if evaluator is not None:
-            evaluator.update(images, pred_dict)
+        # Update evaluators
+        if evaluators is not None:
+            for evaluator, pred_dict in zip(evaluators, pred_dicts):
+                evaluator.update(images, pred_dict)
 
     # Accumulate predictions from all images and summarize
-    if evaluator is not None:
-        evaluator.synchronize_between_processes()
-        evaluator.accumulate()
-        evaluator.summarize()
+    if evaluators is not None:
+        for evaluator in evaluators:
+            evaluator.synchronize_between_processes()
+            evaluator.accumulate()
+            evaluator.summarize()
 
     # Get epoch validation statistics
     metric_logger.synchronize_between_processes()
     val_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    if evaluator is not None:
-        for metric in evaluator.metrics:
-            val_stats[f'eval_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
+    if evaluators is not None:
+        for i, evaluator in enumerate(evaluators, 1):
+            for metric in evaluator.metrics:
+                val_stats[f'eval_{i}_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
 
-    return val_stats, evaluator
+    return val_stats, evaluators
 
 
 @torch.no_grad()
 def visualize(model, dataloader, output_dir):
     """
-    Visualize model predictions and corresponding ground-truth.
+    Visualizes model predictions and corresponding ground-truth.
 
     Args:
         model (nn.Module): Module to be visualized computing predictions from images.
@@ -156,11 +174,11 @@ def visualize(model, dataloader, output_dir):
     device = next(model.parameters()).device
     model.eval()
 
-    # Initialize logger and its logger_every keyword arguments
+    # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ", window_size=1)
     logger_log_every_kwargs = {'print_freq': 1, 'header': 'Visualization:'}
 
-    # Iterate over image batches to be visualized
+    # Iterate over images to be visualized
     for images, tgt_dict in metric_logger.log_every(dataloader, **logger_log_every_kwargs):
 
         # Place images and target dictionary on correct device

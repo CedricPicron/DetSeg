@@ -174,7 +174,7 @@ class BinarySegHead(nn.Module):
                     - bin_seg_error (FloatTensor): average error of the binary segmentation of shape [].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
-                pred_dict (Dict): Prediction dictionary containing following key:
+                pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                     - binary_maps (List): predicted binary segmentation maps of shape [batch_size, fH, fW].
         """
 
@@ -185,7 +185,9 @@ class BinarySegHead(nn.Module):
         # Compute and return dictionary with predicted binary segmentation maps (validation/testing only)
         if tgt_dict is None:
             pred_dict = {'binary_maps': [torch.clamp(logit_map/4 + 0.5, 0.0, 1.0) for logit_map in logit_maps]}
-            return pred_dict
+            pred_dicts = [pred_dict]
+
+            return pred_dicts
 
         # Flatten and concatenate logit and target maps (trainval only)
         logits = torch.cat([logit_map.flatten() for logit_map in logit_maps])
@@ -257,14 +259,14 @@ class BinarySegHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dict, tgt_dict):
+    def visualize(self, images, pred_dicts, tgt_dict):
         """
         Draws predicted and target binary segmentations on given full-resolution images.
 
         Args:
             images (Images): Images structure containing the batched images.
 
-            pred_dict (Dict): Prediction dictionary containing at least following key:
+            pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                 - binary_maps (List): predicted binary segmentation maps of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
@@ -274,10 +276,10 @@ class BinarySegHead(nn.Module):
             images_dict (Dict): Dictionary of images with drawn predicted and target binary segmentations.
         """
 
-        # Get desired keys and merge prediction and target binary maps into single list
-        keys = [f'pred_f{i}' for i in range(len(pred_dict['binary_maps']))]
-        keys.extend([f'tgt_f{i}' for i in range(len(tgt_dict['binary_maps']))])
-        binary_maps_list = [*pred_dict['binary_maps'], *tgt_dict['binary_maps']]
+        # Combine prediction and target binary maps and get corresponding map names
+        binary_maps = [map for p in pred_dicts for map in p['binary_maps']] + tgt_dict['binary_maps']
+        map_names = [f'pred_{i}_f{j}' for i, p in enumerate(pred_dicts, 1) for j in range(len(p['binary_maps']))]
+        map_names.extend([f'tgt_f{j}' for j in range(len(tgt_dict['binary_maps']))])
 
         # Get possible map sizes in (height, width) format
         map_width, map_height = images.size()
@@ -299,31 +301,31 @@ class BinarySegHead(nn.Module):
         interpolation_kwargs = {'mode': 'bilinear', 'align_corners': True}
         images_dict = {}
 
-        # Get annotated images for each batch of binary maps
-        for key, binary_maps in zip(keys, binary_maps_list):
+        # Get annotated images for each binary map
+        for map_name, binary_map in zip(map_names, binary_maps):
 
-            # Get number of times the binary maps were downsampled
-            map_size = tuple(binary_maps.shape[-2:])
+            # Get number of times the binary map was downsampled
+            map_size = tuple(binary_map.shape[-2:])
             times_downsampled = map_sizes.index(map_size)
 
-            # Upsample binary maps to image resolution
+            # Upsample binary map to image resolution
             for map_id in range(times_downsampled-1, -1, -1):
                 H, W = map_sizes[map_id]
                 pH, pW = (int(H % 2 == 0), int(W % 2 == 0))
 
-                binary_maps = F.pad(binary_maps.unsqueeze(1), (0, pW, 0, pH), mode='replicate')
-                binary_maps = F.interpolate(binary_maps, size=(H+pH, W+pW), **interpolation_kwargs)
-                binary_maps = binary_maps[:, :, :H, :W].squeeze(1)
+                binary_map = F.pad(binary_map.unsqueeze(1), (0, pW, 0, pH), mode='replicate')
+                binary_map = F.interpolate(binary_map, size=(H+pH, W+pW), **interpolation_kwargs)
+                binary_map = binary_map[:, :, :H, :W].squeeze(1)
 
-            # Get binary masks and convert them to NumPy ndarray
-            binary_masks = (binary_maps >= 0.5).cpu().numpy()
+            # Get binary mask and convert it to NumPy ndarray
+            binary_mask = (binary_map >= 0.5).cpu().numpy()
 
-            # Draw binary masks on corresponding images
-            for i, image, img_size, binary_mask in zip(range(len(images)), images, img_sizes, binary_masks):
+            # Draw image binary masks on corresponding images
+            for i, image, img_size, img_binary_mask in zip(range(len(images)), images, img_sizes, binary_mask):
                 visualizer = Visualizer(image)
-                visualizer.draw_binary_mask(binary_mask)
+                visualizer.draw_binary_mask(img_binary_mask)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'bin_seg_{key}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
+                images_dict[f'bin_seg_{map_name}_{i}'] = annotated_image[:img_size[1], :img_size[0], :]
 
         return images_dict

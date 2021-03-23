@@ -172,7 +172,7 @@ class BiViNet(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
-                pred_dict (Dict): Dictionary containing different predictions (from last step if in multi-step mode).
+                pred_dicts (List): List of dictionaries with predictions (from last step if in multi-step mode).
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
@@ -182,7 +182,7 @@ class BiViNet(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is None (i.e. during testing):
-                pred_dict (Dict): Dictionary containing different predictions (from last step if in multi-step mode).
+                pred_dicts (List): List of dictionaries with predictions (from last step if in multi-step mode).
         """
 
         # Reset gradients of model parameters (training only)
@@ -247,23 +247,21 @@ class BiViNet(nn.Module):
         # Get prediction dictionary (validation/testing only)
         if optimizer is None:
             pred_heads = self.heads[-1] if self.step_mode == 'multi' else self.heads
-            pred_dict = {k: v for head in pred_heads for k, v in head(feat_maps).items()}
+            pred_dicts = [pred_dict for head in pred_heads for pred_dict in head(feat_maps)]
 
         # Return prediction dictionary (testing only)
         if tgt_dict is None:
-            return pred_dict
+            return pred_dicts
 
         # Return desired dictionaries (validation/visualization only)
         if optimizer is None:
 
             # Return prediction, loss and analysis dictionaries (validation only)
             if not kwargs.setdefault('visualize', False):
-                return pred_dict, loss_dict, analysis_dict
+                return pred_dicts, loss_dict, analysis_dict
 
             # Get and return annotated images, loss and analysis dictionaries (visualization only)
-            images_dict = {}
-            for head in pred_heads:
-                images_dict = {**images_dict, **head.visualize(images, pred_dict, tgt_dict)}
+            images_dict = head.visualize(images, pred_dicts, tgt_dict)
 
             return images_dict, loss_dict, analysis_dict
 
