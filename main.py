@@ -154,12 +154,18 @@ def get_parser():
     parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
     parser.add_argument('--dfd_dd_cls_weight', default=1.0, type=float, help='dense detector classification weight')
 
-    parser.add_argument('--dfd_dd_smooth_l1_beta', default=0.0, type=float, help='dense detector smooth L1 beta value')
+    parser.add_argument('--dfd_dd_box_beta', default=0.0, type=float, help='dense detector smooth L1 beta value')
     parser.add_argument('--dfd_dd_box_weight', default=1.0, type=float, help='dense detector bounding box weight')
 
     parser.add_argument('--dfd_dd_nms_candidates', default=1000, type=int, help='dense detector candidates for NMS')
     parser.add_argument('--dfd_dd_nms_threshold', default=0.5, type=float, help='dense detector NMS threshold')
     parser.add_argument('--dfd_dd_max_detections', default=100, type=int, help='dense detector max detections')
+
+    parser.add_argument('--dfd_abs_hidden_size', default=256, type=int, help='absolute reward predictor hidden size')
+    parser.add_argument('--dfd_abs_layers', default=1, type=int, help='number of layers of absolute reward predictor')
+
+    parser.add_argument('--dfd_abs_beta', default=0.1, type=float, help='smooth L1 beta value of absolute reward loss')
+    parser.add_argument('--dfd_abs_weight', default=1.0, type=float, help='factor weighting the absolute reward loss')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')

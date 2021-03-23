@@ -67,7 +67,7 @@ def build_det_heads(args):
             num_classes = args.num_classes
             assert all(feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
 
-            dd_dict = {'hidden_size': args.dfd_dd_hidden_size, 'num_hidden_layers': args.dfd_dd_layers}
+            dd_dict = {'hidden_size': args.dfd_dd_hidden_size, 'layers': args.dfd_dd_layers}
             dd_dict = {**dd_dict, 'prior_cls_prob': args.dfd_dd_prior_cls_prob}
 
             dd_dict = {**dd_dict, 'delta_range_xy': args.dfd_dd_delta_range_xy}
@@ -80,14 +80,17 @@ def build_det_heads(args):
             dd_dict = {**dd_dict, 'focal_gamma': args.dfd_dd_focal_gamma}
             dd_dict = {**dd_dict, 'cls_weight': args.dfd_dd_cls_weight}
 
-            dd_dict = {**dd_dict, 'smooth_l1_beta': args.dfd_dd_smooth_l1_beta}
+            dd_dict = {**dd_dict, 'box_beta': args.dfd_dd_box_beta}
             dd_dict = {**dd_dict, 'box_weight': args.dfd_dd_box_weight}
 
             dd_dict = {**dd_dict, 'nms_candidates': args.dfd_dd_nms_candidates}
             dd_dict = {**dd_dict, 'nms_threshold': args.dfd_dd_nms_threshold}
             dd_dict = {**dd_dict, 'max_detections': args.dfd_dd_max_detections}
 
-            dfd_head = DFD(feat_size, num_classes, dd_dict, metadata)
+            reward_dict = {'abs_hidden_size': args.dfd_abs_hidden_size, 'abs_layers': args.dfd_abs_layers}
+            reward_dict = {**reward_dict, 'abs_beta': args.dfd_abs_beta, 'abs_weight': args.dfd_abs_weight}
+
+            dfd_head = DFD(feat_size, num_classes, dd_dict, reward_dict, metadata)
             det_heads.append(dfd_head)
 
         elif det_head_type == 'retina':
