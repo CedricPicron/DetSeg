@@ -88,7 +88,8 @@ def build_det_heads(args):
             dd_dict = {**dd_dict, 'max_detections': args.dfd_dd_max_detections}
 
             reward_dict = {'abs_hidden_size': args.dfd_abs_hidden_size, 'abs_layers': args.dfd_abs_layers}
-            reward_dict = {**reward_dict, 'abs_beta': args.dfd_abs_beta, 'abs_weight': args.dfd_abs_weight}
+            reward_dict = {**reward_dict, 'abs_samples': args.dfd_abs_samples, 'abs_beta': args.dfd_abs_beta}
+            reward_dict = {**reward_dict, 'abs_weight': args.dfd_abs_weight}
 
             dfd_head = DFD(feat_size, num_classes, dd_dict, reward_dict, metadata)
             det_heads.append(dfd_head)

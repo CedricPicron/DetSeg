@@ -42,8 +42,9 @@ class DFD(nn.Module):
         dd_max_detections (int): Maximum number of detections retained during dense detector inference.
 
         abs_head (MLP): Module computing the absolute reward predictions.
-        abs_beta: Beta value of the smooth L1 loss used during absolute reward prediction.
-        abs_weight: Factor weighting the absolute reward loss.
+        abs_samples (int): Number of samples taken from both highest absolute reward predictions and targets.
+        abs_beta (float): Beta value of the smooth L1 loss used during absolute reward prediction.
+        abs_weight (float): Factor weighting the absolute reward loss.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
@@ -82,6 +83,7 @@ class DFD(nn.Module):
                 - abs_hidden_size (int): hidden feature size of the MLP operation during absolute reward prediction;
                 - abs_layers (int): number of hidden layers of the MLP operation during absolute reward prediction;
 
+                - abs_samples (int): number of samples taken from both highest absolute reward predictions and targets;
                 - abs_beta (float): beta value of the smooth L1 loss used during absolute reward prediction;
                 - abs_weight (float): factor weighting the absolute reward loss.
 
@@ -123,6 +125,7 @@ class DFD(nn.Module):
         abs_reward_dict['num_hidden_layers'] = abs_reward_dict.pop('layers')
         self.abs_head = MLP(feat_size, out_size=1, **abs_reward_dict)
 
+        self.abs_samples = reward_dict['abs_samples']
         self.abs_beta = reward_dict['abs_beta']
         self.abs_weight = reward_dict['abs_weight']
 
@@ -334,12 +337,19 @@ class DFD(nn.Module):
 
                 # Get absolute reward loss
                 abs_preds = abs_logits[i].sigmoid()
-                pred_ids = torch.arange(num_preds)
 
                 with torch.no_grad():
+                    pred_ids = torch.arange(num_preds)
                     box_rewards, tgt_ids = torch.max(iou_matrix, dim=1)
-                    cls_rewards = cls_logits_i[pred_ids, tgt_ids]
+                    cls_rewards = cls_logits_i[pred_ids, tgt_ids].sigmoid()
                     abs_tgts = cls_rewards * box_rewards
+
+                top_pred_ids = torch.argsort(abs_preds, descending=True)[:self.abs_samples]
+                top_tgt_ids = torch.argsort(abs_tgts, descending=True)[:self.abs_samples]
+
+                loss_ids = torch.cat([top_pred_ids, top_tgt_ids], dim=0)
+                abs_preds = abs_preds[loss_ids]
+                abs_tgts = abs_tgts[loss_ids]
 
                 abs_kwargs = {'beta': self.abs_beta, 'reduction': 'none'}
                 abs_losses = self.abs_weight * smooth_l1_loss(abs_preds, abs_tgts, **abs_kwargs)

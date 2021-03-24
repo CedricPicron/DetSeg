@@ -164,6 +164,7 @@ def get_parser():
     parser.add_argument('--dfd_abs_hidden_size', default=256, type=int, help='absolute reward predictor hidden size')
     parser.add_argument('--dfd_abs_layers', default=1, type=int, help='number of layers of absolute reward predictor')
 
+    parser.add_argument('--dfd_abs_samples', default=100, type=int, help='number of samples for absolute reward loss')
     parser.add_argument('--dfd_abs_beta', default=0.1, type=float, help='smooth L1 beta value of absolute reward loss')
     parser.add_argument('--dfd_abs_weight', default=1.0, type=float, help='factor weighting the absolute reward loss')
 
