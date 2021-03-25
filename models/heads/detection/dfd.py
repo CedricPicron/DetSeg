@@ -341,7 +341,7 @@ class DFD(nn.Module):
                 with torch.no_grad():
                     pred_ids = torch.arange(num_preds)
                     box_rewards, tgt_ids = torch.max(iou_matrix, dim=1)
-                    cls_rewards = cls_logits_i[pred_ids, tgt_ids].sigmoid()
+                    cls_rewards = cls_logits_i[pred_ids, tgt_labels_i[tgt_ids]].sigmoid()
                     abs_tgts = cls_rewards * box_rewards
 
                 top_pred_ids = torch.argsort(abs_preds, descending=True)[:self.abs_samples]
