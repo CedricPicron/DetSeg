@@ -184,7 +184,7 @@ class RetinaHead(nn.Module):
         for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
             tgt_labels = tgt_dict['labels'][i0:i1]
             tgt_boxes = tgt_dict['boxes'][i0:i1]
-            matched_ids, match_labels = self.anchor_matcher(box_iou(tgt_boxes, anchors)[0])
+            matched_ids, match_labels = self.anchor_matcher(box_iou(tgt_boxes, anchors))
 
             if len(tgt_labels) > 0:
                 anchor_labels = tgt_labels[matched_ids]

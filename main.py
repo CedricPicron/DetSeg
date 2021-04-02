@@ -138,35 +138,40 @@ def get_parser():
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')
 
     # *** Duplicate-Free Detector (DFD) head
-    parser.add_argument('--dfd_feat_size', default=256, type=int, help='internal feature size of the DFD head')
+    parser.add_argument('--dfd_cls_feat_size', default=256, type=int, help='classification hidden feature size')
+    parser.add_argument('--dfd_cls_norm', default='group', type=str, help='normalization type of classification head')
+    parser.add_argument('--dfd_cls_prior_prob', default=0.01, type=float, help='prior class probability')
+    parser.add_argument('--dfd_cls_kernel_size', default=1, type=int, help='classification hidden layer kernel size')
+    parser.add_argument('--dfd_cls_bottle_size', default=64, type=int, help='classification bottleneck feature size')
+    parser.add_argument('--dfd_cls_hidden_layers', default=1, type=int, help='number of classification hidden layers')
 
-    parser.add_argument('--dfd_dd_hidden_size', default=256, type=int, help='hidden dense detector feature size')
-    parser.add_argument('--dfd_dd_layers', default=1, type=int, help='number of dense detector hidden layers')
-    parser.add_argument('--dfd_dd_prior_cls_prob', default=0.01, type=float, help='prior class probability')
+    parser.add_argument('--dfd_cls_focal_alpha', default=0.25, type=float, help='classification focal alpha value')
+    parser.add_argument('--dfd_cls_focal_gamma', default=2.0, type=float, help='classification focal gamma value')
+    parser.add_argument('--dfd_cls_weight', default=1.0, type=float, help='classification loss weight')
 
-    parser.add_argument('--dfd_dd_delta_range_xy', default=1.0, type=float, help='dense detector location delta range')
-    parser.add_argument('--dfd_dd_delta_range_wh', default=8.0, type=float, help='dense detector size delta range')
+    parser.add_argument('--dfd_obj_feat_size', default=256, type=int, help='objectness hidden feature size')
+    parser.add_argument('--dfd_obj_norm', default='group', type=str, help='normalization type of objectness head')
+    parser.add_argument('--dfd_obj_prior_prob', default=0.01, type=float, help='prior object probability')
+    parser.add_argument('--dfd_obj_kernel_size', default=1, type=int, help='objectness hidden layer kernel size')
+    parser.add_argument('--dfd_obj_bottle_size', default=64, type=int, help='objectness bottleneck feature size')
+    parser.add_argument('--dfd_obj_hidden_layers', default=1, type=int, help='number of objectness hidden layers')
 
-    parser.add_argument('--dfd_dd_weight_mode', default='single', type=str, help='dense detector weight mode')
-    parser.add_argument('--dfd_dd_weight_power', default=2, type=float, help='dense detector prediction weight power')
+    parser.add_argument('--dfd_obj_focal_alpha', default=0.25, type=float, help='objectness focal alpha value')
+    parser.add_argument('--dfd_obj_focal_gamma', default=2.0, type=float, help='objectness focal gamma value')
+    parser.add_argument('--dfd_obj_weight', default=1.0, type=float, help='objectness loss weight')
 
-    parser.add_argument('--dfd_dd_focal_alpha', default=0.25, type=float, help='dense detector focal alpha value')
-    parser.add_argument('--dfd_dd_focal_gamma', default=2.0, type=float, help='dense detector focal gamma value')
-    parser.add_argument('--dfd_dd_cls_weight', default=1.0, type=float, help='dense detector classification weight')
+    parser.add_argument('--dfd_box_feat_size', default=256, type=int, help='bounding box hidden feature size')
+    parser.add_argument('--dfd_box_norm', default='group', type=str, help='normalization type of bounding box head')
+    parser.add_argument('--dfd_box_kernel_size', default=3, type=int, help='bounding box hidden layer kernel size')
+    parser.add_argument('--dfd_box_bottle_size', default=64, type=int, help='bounding box bottleneck feature size')
+    parser.add_argument('--dfd_box_hidden_layers', default=1, type=int, help='number of bounding box hidden layers')
 
-    parser.add_argument('--dfd_dd_box_beta', default=0.0, type=float, help='dense detector smooth L1 beta value')
-    parser.add_argument('--dfd_dd_box_weight', default=1.0, type=float, help='dense detector bounding box weight')
+    parser.add_argument('--dfd_box_sl1_beta', default=0.0, type=float, help='bounding box smooth L1 beta value')
+    parser.add_argument('--dfd_box_weight', default=1.0, type=float, help='bounding box loss weight')
 
-    parser.add_argument('--dfd_dd_nms_candidates', default=1000, type=int, help='dense detector candidates for NMS')
-    parser.add_argument('--dfd_dd_nms_threshold', default=0.5, type=float, help='dense detector NMS threshold')
-    parser.add_argument('--dfd_dd_max_detections', default=100, type=int, help='dense detector max detections')
-
-    parser.add_argument('--dfd_abs_hidden_size', default=256, type=int, help='absolute reward predictor hidden size')
-    parser.add_argument('--dfd_abs_layers', default=1, type=int, help='number of layers of absolute reward predictor')
-
-    parser.add_argument('--dfd_abs_samples', default=100, type=int, help='number of samples for absolute reward loss')
-    parser.add_argument('--dfd_abs_beta', default=0.1, type=float, help='smooth L1 beta value of absolute reward loss')
-    parser.add_argument('--dfd_abs_weight', default=1.0, type=float, help='factor weighting the absolute reward loss')
+    parser.add_argument('--dfd_inf_nms_candidates', default=1000, type=int, help='max candidates for inference NMS')
+    parser.add_argument('--dfd_inf_iou_threshold', default=0.5, type=float, help='IoU threshold during inference NMS')
+    parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')

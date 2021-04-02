@@ -1,6 +1,8 @@
 """
 Duplicate-Free Detector (DFD) head.
 """
+from collections import OrderedDict
+from copy import deepcopy
 import math
 
 from detectron2.layers import batched_nms
@@ -12,8 +14,8 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.functional.position import sine_pos_encodings
-from models.modules.mlp import MLP
-from structures.boxes import Boxes, box_iou
+from models.modules.convolution import BottleneckConv, ProjConv
+from structures.boxes import apply_box_deltas, Boxes, box_intersection, box_iou, get_box_deltas
 
 
 class DFD(nn.Module):
@@ -21,71 +23,73 @@ class DFD(nn.Module):
     Class implementing the Duplicate-Free Detector (DFD) head.
 
     Attributes:
-        dd_cls_head (MLP): Module computing the classification logits of the dense detector.
-        dd_box_head (MLP): Module computing the bounding box logits of the dense detector.
+        cls_head (nn.Sequential): Module computing the classification logits.
+        cls_focal_alpha (float): Alpha value of the sigmoid focal loss used by the classification head.
+        cls_focal_gamma (float): Gamma value of the sigmoid focal loss used by the classification head.
+        cls_weight (float): Factor weighting the classification loss.
 
-        dd_delta_range_xy (float): Value determining the range of object location deltas of the dense detector.
-        dd_delta_range_wh (float): Value determining the range of object size deltas of the dense detector.
+        obj_head (nn.Sequential): Module computing the objectness logits.
+        obj_focal_alpha (float): Alpha value of the sigmoid focal loss used by the objectness head.
+        obj_focal_gamma (float): Gamma value of the sigmoid focal loss used by the objectness head.
+        obj_weight (float): Factor weighting the objectness loss.
 
-        dd_weight_mode (str): String denoting the prediction weight mode of the dense detector.
-        dd_weight_power (float): Power used during dense detector prediction weight normalization.
+        box_head (nn.Sequential): Module computing the bounding box logits.
+        box_sl1_beta (float): Beta value of the smooth L1 loss used by the bounding box head.
+        box_weight (float): Factor weighting the bounding box loss.
 
-        dd_focal_alpha (float): Alpha value of the sigmoid focal loss used during dense detector classification.
-        dd_focal_gamma (float): Gamma value of the sigmoid focal loss used during dense detector classification.
-        dd_cls_weight (float): Factor weighting the classification loss used during dense detector classification.
-
-        dd_box_beta (float): Beta value of the smooth L1 loss used during dense detector box prediction.
-        dd_box_weight (float): Factor weighting the bounding box loss used during dense detector box prediction.
-
-        dd_nms_candidates (int): Number of candidates retained for NMS during dense detector inference.
-        dd_nms_threshold (float): Value determining the IoU threshold of NMS during dense detector inference.
-        dd_max_detections (int): Maximum number of detections retained during dense detector inference.
-
-        abs_head (MLP): Module computing the absolute reward predictions.
-        abs_samples (int): Number of samples taken from both highest absolute reward predictions and targets.
-        abs_beta (float): Beta value of the smooth L1 loss used during absolute reward prediction.
-        abs_weight (float): Factor weighting the absolute reward loss.
+        inf_nms_candidates (int): Maximum number of candidates retained for NMS during inference.
+        inf_iou_threshold (float): Value determining the IoU threshold of NMS during inference.
+        inf_max_detections (int): Maximum number of detections retained during inference.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, feat_size, num_classes, dd_dict, reward_dict, metadata):
+    def __init__(self, in_feat_size, cls_dict, obj_dict, box_dict, inf_dict, metadata):
         """
         Initializes the DFD module.
 
         Args:
-            feat_size (int): Integer containing the feature size.
-            num_classes (int): Integer containing the number of object classes (without background).
+            in_feat_size (int): Integer containing the feature size of the input feature pyramid.
 
-            dd_dict (Dict): Dense detector dictionary containing following keys:
-                - hidden_size (int): hidden feature size of the MLP classification and bounding box heads;
-                - layers (int): number of hidden layers of the MLP classification and bounding box heads;
-                - prior_cls_prob (float): prior class probability;
+            cls_dict (Dict): Classification head dictionary containing following keys:
+                - feat_size (int): hidden feature size of the classification head;
+                - norm (str): string specifying the type of normalization used within the classification head;
+                - num_classes (int): integer containing the number of object classes (without background);
+                - prior_prob (float): prior class probability;
+                - kernel_size (int): kernel size used by hidden layers of the classification head;
+                - bottle_size (int): bottleneck size used by bottleneck layers of the classification head;
+                - hidden_layers (int): number of hidden layers of the classification head;
 
-                - delta_range_xy (float): value determining the range of object location deltas;
-                - delta_range_wh (float): value determining the range of object size deltas;
+                - focal_alpha (float): alpha value of the sigmoid focal loss used by the classification head;
+                - focal_gamma (float): gamma value of the sigmoid focal loss used by the classification head;
+                - weight (float): factor weighting the classification loss.
 
-                - weight_mode (str): string denoting the prediction weight mode of the dense detector;
-                - weight_power (float): power used during dense detector prediction weight normalization;
+            obj_dict (Dict): Objectness head dictionary containing following keys:
+                - feat_size (int): hidden feature size of the objectness head;
+                - norm (str): string specifying the type of normalization used within the objectness head;
+                - prior_prob (float): prior object probability;
+                - kernel_size (int): kernel size used by hidden layers of the objectness head;
+                - bottle_size (int): bottleneck size used by bottleneck layers of the objectness head;
+                - hidden_layers (int): number of hidden layers of the objectness head;
 
-                - focal_alpha (float): alpha value of the sigmoid focal loss used during classification;
-                - focal_gamma (float): gamma value of the sigmoid focal loss used during classification;
-                - cls_weight (float): factor weighting the classification loss;
+                - focal_alpha (float): alpha value of the sigmoid focal loss used by the objectness head;
+                - focal_gamma (float): gamma value of the sigmoid focal loss used by the objectness head;
+                - weight (float): factor weighting the objectness loss.
 
-                - box_beta (float): beta value of the smooth L1 loss used during box prediction;
-                - box_weight (float): factor weighting the bounding box loss;
+            box_dict (Dict): Bounding box head dictionary containing following keys:
+                - feat_size (int): hidden feature size of the bounding box head;
+                - norm (str): string specifying the type of normalization used within the bounding box head;
+                - kernel_size (int): kernel size used by hidden layers of the bounding box head;
+                - bottle_size (int): bottleneck size used by bottleneck layers of the bounding box head;
+                - hidden_layers (int): number of hidden layers of the bounding box head;
 
-                - nms_candidates (int): number of candidates retained for NMS during inference;
-                - nms_threshold (float): value determining the IoU threshold of NMS during inference;
+                - sl1_beta (float): beta value of the smooth L1 loss used by the bounding box head;
+                - weight (float): factor weighting the bounding box loss.
+
+            inf_dict (Dict): Inference dictionary containing following keys:
+                - nms_candidates (int): maximum number of candidates retained for NMS during inference;
+                - iou_threshold (float): value determining the IoU threshold of NMS during inference;
                 - max_detections (int): maximum number of detections retained during inference.
-
-            reward_dict (Dict): Reward dictionary containing following keys:
-                - abs_hidden_size (int): hidden feature size of the MLP operation during absolute reward prediction;
-                - abs_layers (int): number of hidden layers of the MLP operation during absolute reward prediction;
-
-                - abs_samples (int): number of samples taken from both highest absolute reward predictions and targets;
-                - abs_beta (float): beta value of the smooth L1 loss used during absolute reward prediction;
-                - abs_weight (float): factor weighting the absolute reward loss.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
@@ -93,41 +97,82 @@ class DFD(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Initialization of dense detector
-        dd_dict['num_hidden_layers'] = dd_dict.pop('layers')
-        self.dd_cls_head = MLP(feat_size, out_size=num_classes, **dd_dict)
-        self.dd_box_head = MLP(feat_size, out_size=4, **dd_dict)
+        # Initialization of classification head
+        cls_feat_size = cls_dict['feat_size']
+        cls_norm = cls_dict['norm']
+        num_classes = cls_dict['num_classes']
 
-        prior_cls_prob = dd_dict['prior_cls_prob']
-        bias_value = -(math.log((1 - prior_cls_prob) / prior_cls_prob))
-        torch.nn.init.constant_(self.dd_cls_head.head[-1][-1].bias, bias_value)
-        torch.nn.init.zeros_(self.dd_box_head.head[-1][-1].bias)
+        cls_in_layer = ProjConv(in_feat_size, cls_feat_size, norm=cls_norm, skip=False)
+        cls_out_layer = ProjConv(cls_feat_size, num_classes+1, norm=cls_norm, skip=False)
 
-        self.dd_delta_range_xy = dd_dict['delta_range_xy']
-        self.dd_delta_range_wh = dd_dict['delta_range_wh']
+        cls_prior_prob = cls_dict['prior_prob']
+        bias_value = -(math.log((1 - cls_prior_prob) / cls_prior_prob))
+        torch.nn.init.constant_(cls_out_layer.conv.bias, bias_value)
 
-        self.dd_weight_mode = dd_dict['weight_mode']
-        self.dd_weight_power = dd_dict['weight_power']
+        if cls_dict['kernel_size'] == 1:
+            cls_hidden_layer = ProjConv(cls_feat_size, norm=cls_norm, skip=True)
+        else:
+            bottleneck_kwargs = {'kernel_size': cls_dict['kernel_size'], 'norm': cls_norm, 'skip': True}
+            cls_hidden_layer = BottleneckConv(cls_feat_size, cls_dict['bottle_size'], **bottleneck_kwargs)
 
-        self.dd_focal_alpha = dd_dict['focal_alpha']
-        self.dd_focal_gamma = dd_dict['focal_gamma']
-        self.dd_cls_weight = dd_dict['cls_weight']
+        cls_hidden_layers = nn.Sequential(*[deepcopy(cls_hidden_layer) for _ in range(cls_dict['hidden_layers'])])
+        cls_head_dict = OrderedDict([('in', cls_in_layer), ('hidden', cls_hidden_layers), ('out', cls_out_layer)])
+        self.cls_head = nn.Sequential(cls_head_dict)
 
-        self.dd_box_beta = dd_dict['box_beta']
-        self.dd_box_weight = dd_dict['box_weight']
+        self.cls_focal_alpha = cls_dict['focal_alpha']
+        self.cls_focal_gamma = cls_dict['focal_gamma']
+        self.cls_weight = cls_dict['weight']
 
-        self.dd_nms_candidates = dd_dict['nms_candidates']
-        self.dd_nms_threshold = dd_dict['nms_threshold']
-        self.dd_max_detections = dd_dict['max_detections']
+        # Initialization of objectness head
+        obj_feat_size = obj_dict['feat_size']
+        obj_norm = obj_dict['norm']
 
-        # Initialization of reward predictors
-        abs_reward_dict = {k[4:]: v for k, v in reward_dict.items() if k[:3] == 'abs'}
-        abs_reward_dict['num_hidden_layers'] = abs_reward_dict.pop('layers')
-        self.abs_head = MLP(feat_size, out_size=1, **abs_reward_dict)
+        obj_in_layer = ProjConv(in_feat_size, obj_feat_size, norm=obj_norm, skip=False)
+        obj_out_layer = ProjConv(obj_feat_size, 2, norm=obj_norm, skip=False)
 
-        self.abs_samples = reward_dict['abs_samples']
-        self.abs_beta = reward_dict['abs_beta']
-        self.abs_weight = reward_dict['abs_weight']
+        obj_prior_prob = obj_dict['prior_prob']
+        bias_value = -(math.log((1 - obj_prior_prob) / obj_prior_prob))
+        torch.nn.init.constant_(obj_out_layer.conv.bias, bias_value)
+
+        if obj_dict['kernel_size'] == 1:
+            obj_hidden_layer = ProjConv(obj_feat_size, norm=obj_norm, skip=True)
+        else:
+            bottleneck_kwargs = {'kernel_size': obj_dict['kernel_size'], 'norm': obj_norm, 'skip': True}
+            obj_hidden_layer = BottleneckConv(obj_feat_size, obj_dict['bottle_size'], **bottleneck_kwargs)
+
+        obj_hidden_layers = nn.Sequential(*[deepcopy(obj_hidden_layer) for _ in range(obj_dict['hidden_layers'])])
+        obj_head_dict = OrderedDict([('in', obj_in_layer), ('hidden', obj_hidden_layers), ('out', obj_out_layer)])
+        self.obj_head = nn.Sequential(obj_head_dict)
+
+        self.obj_focal_alpha = obj_dict['focal_alpha']
+        self.obj_focal_gamma = obj_dict['focal_gamma']
+        self.obj_weight = obj_dict['weight']
+
+        # Initialization of bounding box head
+        box_feat_size = box_dict['feat_size']
+        box_norm = box_dict['norm']
+
+        box_in_layer = ProjConv(in_feat_size, box_feat_size, norm=box_norm, skip=False)
+        box_out_layer = ProjConv(box_feat_size, 4, norm=box_norm, skip=False)
+        torch.nn.init.zeros_(box_out_layer.conv.bias)
+
+        if box_dict['kernel_size'] == 1:
+            box_hidden_layer = ProjConv(box_feat_size, norm=box_norm, skip=True)
+        else:
+            bottleneck_kwargs = {'kernel_size': box_dict['kernel_size'], 'norm': box_norm, 'skip': True}
+            box_hidden_layer = BottleneckConv(box_feat_size, box_dict['bottle_size'], **bottleneck_kwargs)
+
+        box_hidden_layers = nn.Sequential(*[deepcopy(box_hidden_layer) for _ in range(box_dict['hidden_layers'])])
+        box_head_dict = OrderedDict([('in', box_in_layer), ('hidden', box_hidden_layers), ('out', box_out_layer)])
+        self.box_head = nn.Sequential(box_head_dict)
+
+        self.box_sl1_beta = box_dict['sl1_beta']
+        self.box_weight = box_dict['weight']
+
+        # Set inference attributes
+        self.inf_nms_candidates = inf_dict['nms_candidates']
+        self.inf_iou_threshold = inf_dict['iou_threshold']
+        self.inf_max_detections = inf_dict['max_detections']
 
         # Set metadata attribute
         self.metadata = metadata
@@ -166,7 +211,7 @@ class DFD(nn.Module):
             return None, {}, {}
 
         # Get normalized bounding boxes
-        norm_boxes = tgt_dict['boxes'].normalize(images)
+        norm_boxes = tgt_dict['boxes'].normalize(images, with_padding=True)
 
         # Update target dictionary
         sizes = tgt_dict['sizes']
@@ -175,13 +220,251 @@ class DFD(nn.Module):
 
         return tgt_dict, {}, {}
 
-    def forward(self, feat_maps, feat_masks=None, tgt_dict=None, **kwargs):
+    def cls_loss(self, cls_logits, tgt_labels, inter_matrices):
+        """
+        Gets classification loss and corresponding classification analysis.
+
+        Args:
+            cls_logits (FloatTensor): Classification logits of shape [batch_size, num_preds, num_classes+1].
+            tgt_labels (List): List [batch_size] with class indices of shape [num_targets].
+            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
+
+        Returns:
+            cls_loss_dict (Dict): Classification loss dictionary containing following key:
+                - dfd_cls_loss (FloatTensor): weighted classification loss of shape [1].
+
+            cls_analysis_dict (Dict): Classification analysis dictionary containing following key:
+                - dfd_cls_acc (FloatTensor): classification accuracy of shape [1].
+        """
+
+        # Initialize empty classification loss and analysis dictionaries
+        tensor_kwargs = {'dtype': cls_logits.dtype, 'device': cls_logits.device}
+        cls_loss_dict = {'dfd_cls_loss': torch.zeros(1, **tensor_kwargs)}
+        cls_analysis_dict = {'dfd_cls_acc': torch.zeros(1, **tensor_kwargs)}
+
+        # Get batch size and number of object classes with background
+        batch_size = len(cls_logits)
+        num_cls_labels = cls_logits.shape[-1]
+
+        # Iterate over every batch entry
+        for cls_logits_i, tgt_labels_i, inter_matrix in zip(cls_logits, tgt_labels, inter_matrices):
+
+            # Append target with background label
+            bg_label = torch.tensor([num_cls_labels-1]).to(tgt_labels_i)
+            tgt_labels_i = torch.cat([tgt_labels_i, bg_label], dim=0)
+
+            # Get classification targets
+            inters, tgt_ids = torch.max(inter_matrix, dim=1)
+            cls_targets_i = tgt_labels_i[tgt_ids]
+            cls_targets_oh_i = F.one_hot(cls_targets_i, num_cls_labels).to(cls_logits_i.dtype)
+
+            # Get unweighted classification losses
+            cls_kwargs = {'alpha': self.cls_focal_alpha, 'gamma': self.cls_focal_gamma, 'reduction': 'none'}
+            cls_losses = sigmoid_focal_loss(cls_logits_i, cls_targets_oh_i, **cls_kwargs)
+
+            # Get weights normalized per target
+            weights = torch.zeros_like(inters)
+
+            for tgt_id in range(len(tgt_labels_i)):
+                tgt_mask = tgt_ids == tgt_id
+                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+
+            # Get weighted classification loss
+            cls_losses = weights * cls_losses.sum(dim=1)
+            cls_loss = self.cls_weight * cls_losses.sum()
+            cls_loss_dict['dfd_cls_loss'] += cls_loss
+
+            # Get classification accuracy
+            with torch.no_grad():
+                cls_preds_i = torch.argmax(cls_logits_i, dim=1)
+                cls_acc = torch.eq(cls_preds_i, cls_targets_i).sum() / len(cls_preds_i)
+                cls_analysis_dict['dfd_cls_acc'] += 100 * cls_acc / batch_size
+
+        return cls_loss_dict, cls_analysis_dict
+
+    def obj_loss(self, obj_logits, tgt_boxes, inter_matrices, prior_boxes):
+        """
+        Gets objectness loss and corresponding objectness analysis.
+
+        It also returns a list with target indices, such that the subsequent 'box_loss' method should not recompute it.
+
+        Args:
+            obj_logits (FloatTensor): Objectness logits of shape [batch_size, num_preds, 2].
+            tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
+            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
+            prior_boxes (Boxes): Boxes structure containing prior boxes (i.e. anchors) of size [num_preds].
+
+        Returns:
+            obj_loss_dict (Dict): Objectness loss dictionary containing following key:
+                - dfd_obj_loss (FloatTensor): weighted objectness loss of shape [1].
+
+            obj_analysis_dict (Dict): Objectness analysis dictionary containing following key:
+                - dfd_obj_acc (FloatTensor): objectness accuracy of shape [1].
+
+            ids (List): List [batch_size] with target indices corresponding to each prediction of shape [num_preds].
+        """
+
+        # Initialize empty objectness loss and analysis dictionaries
+        tensor_kwargs = {'dtype': obj_logits.dtype, 'device': obj_logits.device}
+        obj_loss_dict = {'dfd_obj_loss': torch.zeros(1, **tensor_kwargs)}
+        obj_analysis_dict = {'dfd_obj_acc': torch.zeros(1, **tensor_kwargs)}
+
+        # Initialize empty ids list
+        ids = []
+
+        # Get batch size and areas of prior boxes
+        batch_size = len(obj_logits)
+        prior_areas = prior_boxes.area()
+
+        # Get unique prior box sizes in (width, height) format
+        prior_sizes = prior_boxes.to_format('cxcywh').boxes[:, 2:]
+        prior_sizes, map_numel = torch.unique_consecutive(prior_sizes, return_counts=True, dim=0)
+
+        # Get number of maps and number of predictions
+        num_maps = len(prior_sizes)
+        num_preds = len(prior_boxes)
+
+        # Iterate over every batch entry
+        for obj_logits_i, tgt_boxes_i, inter_matrix in zip(obj_logits, tgt_boxes, inter_matrices):
+
+            # Get number of targets
+            num_tgts = len(tgt_boxes_i)
+
+            # Get map indices for positive maps corresponding to each target
+            if num_tgts > 0:
+
+                tgt_sizes_i = tgt_boxes_i.to_format('cxcywh').boxes[:, 2:]
+                rel_sizes = prior_sizes[:, None] / tgt_sizes_i[None, :]
+                rel_sizes, _ = torch.max(rel_sizes, dim=2)
+
+                maxima, lower_map_ids = torch.where(rel_sizes <= 1, rel_sizes, torch.zeros_like(rel_sizes)).max(dim=0)
+                lower_map_ids[maxima == 0] = -1
+                upper_map_ids = lower_map_ids + 1
+
+                map_ids = torch.stack([lower_map_ids, upper_map_ids], dim=1)
+                map_ids = torch.clamp(map_ids, min=0, max=num_maps-1)
+
+            # Get objectness mask
+            obj_mask = torch.zeros(num_maps, num_tgts+1, dtype=torch.bool, device=obj_logits.device)
+
+            if num_tgts > 0:
+                obj_mask[map_ids, torch.arange(num_tgts)[:, None]] = True
+
+            obj_mask = torch.repeat_interleave(obj_mask, map_numel, dim=0)
+
+            # Get target ids and add them to ids list
+            inters, tgt_ids = torch.max(inter_matrix, dim=1)
+            pred_ids = torch.arange(num_preds).to(tgt_ids)
+            tgt_ids = torch.where(obj_mask[pred_ids, tgt_ids], tgt_ids, num_tgts)
+            ids.append(tgt_ids)
+
+            # Get objectness targets
+            obj_targets_i = torch.where(tgt_ids < num_tgts, 0, 1)
+            obj_targets_oh_i = F.one_hot(obj_targets_i, 2).to(obj_logits_i.dtype)
+
+            # Get unweighted objectness losses
+            obj_kwargs = {'alpha': self.obj_focal_alpha, 'gamma': self.obj_focal_gamma, 'reduction': 'none'}
+            obj_losses = sigmoid_focal_loss(obj_logits_i, obj_targets_oh_i, **obj_kwargs)
+
+            # Get weights normalized per target
+            inters[tgt_ids == num_tgts] = prior_areas[tgt_ids == num_tgts]
+            weights = torch.zeros_like(inters)
+
+            for tgt_id in range(num_tgts+1):
+                tgt_mask = tgt_ids == tgt_id
+                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+
+            # Get weighted objectness loss
+            obj_losses = weights * obj_losses.sum(dim=1)
+            obj_loss = self.obj_weight * obj_losses.sum()
+            obj_loss_dict['dfd_obj_loss'] += obj_loss
+
+            # Get objectness accuracy
+            with torch.no_grad():
+                obj_preds_i = torch.argmax(obj_logits_i, dim=1)
+                obj_acc = torch.eq(obj_preds_i, obj_targets_i).sum() / len(obj_preds_i)
+                obj_analysis_dict['dfd_obj_acc'] += 100 * obj_acc / batch_size
+
+        return obj_loss_dict, obj_analysis_dict, ids
+
+    def box_loss(self, box_logits, tgt_boxes, inter_matrices, prior_boxes, ids):
+        """
+        Gets bounding box loss and corresponding bounding box analysis.
+
+        Args:
+            box_logits (FloatTensor): Bounding box logits of shape [batch_size, num_preds, 4].
+            tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
+            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
+            prior_boxes (Boxes): Boxes structure containing prior boxes (i.e. anchors) of size [num_preds].
+            ids (List): List [batch_size] with target indices corresponding to each prediction of shape [num_preds].
+
+        Returns:
+            box_loss_dict (Dict): Bounding box loss dictionary containing following key:
+                - dfd_box_loss (FloatTensor): weighted bounding box loss of shape [1].
+
+            box_analysis_dict (Dict): Bounding box analysis dictionary containing following key:
+                - dfd_box_acc (FloatTensor): bounding box accuracy of shape [1].
+        """
+
+        # Initialize empty bounding box loss and analysis dictionaries
+        tensor_kwargs = {'dtype': box_logits.dtype, 'device': box_logits.device}
+        box_loss_dict = {'dfd_box_loss': torch.zeros(1, **tensor_kwargs)}
+        box_analysis_dict = {'dfd_box_acc': torch.zeros(1, **tensor_kwargs)}
+
+        # Get batch size
+        batch_size = len(box_logits)
+
+        # Iterate over every batch entry
+        for box_logits_i, tgt_boxes_i, inter_matrix, tgt_ids in zip(box_logits, tgt_boxes, inter_matrices, ids):
+
+            # Get number of targets
+            num_tgts = len(tgt_boxes_i)
+
+            # Skip batch entry if there are no targets
+            if num_tgts == 0:
+                box_loss_dict['dfd_box_loss'] += 0.0 * box_logits_i.sum()
+                continue
+
+            # Get selected bounding box logits
+            box_logits_i = box_logits_i[tgt_ids < num_tgts]
+
+            # Get corresponding bounding box targets
+            prior_boxes_i = prior_boxes[tgt_ids < num_tgts]
+            tgt_boxes_i = tgt_boxes_i[tgt_ids[tgt_ids < num_tgts]]
+            box_targets_i = get_box_deltas(prior_boxes_i, tgt_boxes_i)
+
+            # Get unweighted bounding box losses
+            box_kwargs = {'beta': self.box_sl1_beta, 'reduction': 'none'}
+            box_losses = smooth_l1_loss(box_logits_i, box_targets_i, **box_kwargs)
+
+            # Get weights normalized per target
+            inters, _ = torch.max(inter_matrix, dim=1)
+            inters = inters[tgt_ids < num_tgts]
+            weights = torch.zeros_like(inters)
+
+            for tgt_id in range(num_tgts):
+                tgt_mask = tgt_ids[tgt_ids < num_tgts] == tgt_id
+                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+
+            # Get weighted bounding box loss
+            box_losses = weights * box_losses.sum(dim=1)
+            box_loss = self.box_weight * box_losses.sum()
+            box_loss_dict['dfd_box_loss'] += box_loss
+
+            # Get bounding box accuracy
+            with torch.no_grad():
+                pred_boxes_i = apply_box_deltas(box_logits_i, prior_boxes_i)
+                box_acc = box_iou(pred_boxes_i, tgt_boxes_i).diag().mean()
+                box_analysis_dict['dfd_box_acc'] += 100 * box_acc / batch_size
+
+        return box_loss_dict, box_analysis_dict
+
+    def forward(self, feat_maps, tgt_dict=None, **kwargs):
         """
         Forward method of the DFD module.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-            feat_masks (List): Optional list [num_maps] with masks of active features of shape [batch_size, fH, fW].
 
             tgt_dict (Dict): Optional target dictionary containing at least following keys:
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
@@ -190,14 +473,14 @@ class DFD(nn.Module):
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
                 loss_dict (Dict): Loss dictionary containing following keys:
-                    - dfd_dd_cls_loss (FloatTensor): weighted dense detector classification loss of shape [1];
-                    - dfd_dd_box_loss (FloatTensor): weighted dense detector bounding box loss of shape [1];
-                    - dfd_dd_abs_loss (FloatTensor): weighted absolute reward loss of shape [1].
+                    - dfd_cls_loss (FloatTensor): weighted classification loss of shape [1];
+                    - dfd_obj_loss (FloatTensor): weighted objectness loss of shape [1];
+                    - dfd_box_loss (FloatTensor): weighted bounding box loss of shape [1].
 
                 analysis_dict (Dict): Analysis dictionary containing following keys:
-                    - dfd_dd_cls_acc (FloatTensor): dense detector classification accuracy of shape [1];
-                    - dfd_dd_box_acc (FloatTensor): dense detector bounding box accuracy of shape [1];
-                    - dfd_dd_abs_err (FloatTensor): average error of absolute reward predictor.
+                    - dfd_cls_acc (FloatTensor): classification accuracy of shape [1];
+                    - dfd_obj_acc (FloatTensor): objectness accuracy of shape [1];
+                    - dfd_box_acc (FloatTensor): bounding box accuracy of shape [1].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
@@ -205,214 +488,106 @@ class DFD(nn.Module):
                     - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
-
-        Raises:
-            ValueError: Error when dense detector has an unknown prediction weight mode.
         """
 
-        # Get batch size and number of feature maps
+        # Get batch size, device and number of elements per map
         batch_size = len(feat_maps[0])
-        num_maps = len(feat_maps)
+        device = feat_maps[0].device
+        map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(device)
 
-        # Assume no padded regions when feature masks are missing
-        if feat_masks is None:
-            tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-            feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
+        # Get position feature maps and position id maps
+        pos_feat_maps, pos_id_maps = sine_pos_encodings(feat_maps, normalize=True)
 
-        # Get position feature maps and position ids
-        pos_feat_maps, pos_id_maps = sine_pos_encodings((feat_maps, feat_masks), input_type='pyramid', normalize=True)
+        # Get prior boxes
+        prior_cxcy = torch.cat([pos_id_map.flatten(1).t() for pos_id_map in pos_id_maps], dim=0)
+        prior_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(prior_cxcy)
+        prior_wh = torch.repeat_interleave(prior_wh, map_numel, dim=0)
 
-        # Get set of object and position features
-        obj_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-        _ = torch.cat([pos_feat_map.flatten(2).permute(0, 2, 1) for pos_feat_map in pos_feat_maps], dim=1)
+        prior_boxes = torch.cat([prior_cxcy, prior_wh], dim=1)
+        prior_boxes = Boxes(prior_boxes, format='cxcywh', normalized='img_with_padding')
 
-        # Get prior object locations
-        prior_cxcy = torch.cat([pos_id_map.flatten(2).permute(0, 2, 1) for pos_id_map in pos_id_maps], dim=1)
-
-        # Get prior object sizes
-        prior_w = [(1/feat_mask[:, 0, :].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
-        prior_h = [(1/feat_mask[:, :, 0].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
-        prior_wh = [torch.stack([prior_w[i], prior_h[i]], dim=3) for i in range(num_maps)]
-        prior_wh = torch.cat([prior_wh[i].flatten(0, 1).permute(1, 0, 2) for i in range(num_maps)], dim=1)
-
-        # Get dense detector classification and bounding box logits
-        cls_logits = self.dd_cls_head([obj_feats])[0]
-        box_logits = self.dd_box_head([obj_feats])[0]
-
-        # Get dense detector predicted boxes
-        box_deltas = box_logits.tanh()
-        pred_cxcy = prior_cxcy + self.dd_delta_range_xy * box_deltas[:, :, :2]
-        pred_wh = prior_wh * self.dd_delta_range_wh ** box_deltas[:, :, 2:]
-        pred_boxes = torch.cat([pred_cxcy, pred_wh], dim=2)
-
-        # Get absolute reward logits
-        abs_logits = self.abs_head([obj_feats.detach()])[0]
-        abs_logits = abs_logits.squeeze(dim=2)
+        # Get classification, objectness and bounding box logits
+        cls_logits = torch.cat([cls_map.flatten(2).permute(0, 2, 1) for cls_map in self.cls_head(feat_maps)], dim=1)
+        obj_logits = torch.cat([obj_map.flatten(2).permute(0, 2, 1) for obj_map in self.obj_head(feat_maps)], dim=1)
+        box_logits = torch.cat([box_map.flatten(2).permute(0, 2, 1) for box_map in self.box_head(feat_maps)], dim=1)
 
         # Get loss and analysis dictionaries (trainval only)
         if tgt_dict is not None:
 
-            # Some preparation
-            num_classes = cls_logits.shape[-1]
+            # Get intersection matrices between prior boxes and target boxes
+            inter_matrices = [box_intersection(prior_boxes, tgt_boxes_i) for tgt_boxes_i in tgt_dict['boxes']]
 
-            tensor_kwargs = {'dtype': torch.float, 'device': cls_logits.device}
-            loss_keys = ['dd_cls', 'dd_box', 'abs']
-            loss_dict = {f'dfd_{k}_loss': torch.zeros(1, **tensor_kwargs) for k in loss_keys}
+            # Add column with estimated background intersections (assuming no overlap between target boxes)
+            prior_areas = prior_boxes.area()
 
-            analysis_keys = ['dd_cls_acc', 'dd_box_acc', 'abs_err']
-            analysis_dict = {f'dfd_{k}': torch.zeros(1, **tensor_kwargs) for k in analysis_keys}
-
-            # Get loss and analysis for each batch entry
             for i in range(batch_size):
+                bg_inters = torch.clamp(prior_areas - inter_matrices[i].sum(dim=1), min=0)
+                inter_matrices[i] = torch.cat([inter_matrices[i], bg_inters[:, None]], dim=1)
 
-                # Get classification logits and number of predictions
-                cls_logits_i = cls_logits[i]
-                num_preds = len(cls_logits_i)
+            # Initialize empty loss and analysis dictionaries
+            loss_dict = {}
+            analysis_dict = {}
 
-                # Get target labels and number of targets
-                tgt_labels_i = tgt_dict['labels'][i]
-                num_tgts = len(tgt_labels_i)
+            # Get classification loss and analysis
+            tgt_labels = tgt_dict['labels']
+            cls_loss_dict, cls_analysis_dict = self.cls_loss(cls_logits, tgt_labels, inter_matrices)
+            loss_dict.update(cls_loss_dict)
+            analysis_dict.update(cls_analysis_dict)
 
-                # Skip batch entry if there are no targets
-                if num_tgts == 0:
-                    loss_dict['dfd_dd_cls_loss'] += 0.0 * cls_logits[i].sum()
-                    loss_dict['dfd_dd_box_loss'] += 0.0 * pred_boxes[i].sum()
-                    loss_dict['dfd_abs_loss'] += 0.0 * abs_logits[i].sum()
-                    continue
+            # Get objectness loss and analysis
+            tgt_boxes = tgt_dict['boxes']
+            obj_loss_dict, obj_analysis_dict, ids = self.obj_loss(obj_logits, tgt_boxes, inter_matrices, prior_boxes)
+            loss_dict.update(obj_loss_dict)
+            analysis_dict.update(obj_analysis_dict)
 
-                # Prepare predicted and target boxes
-                pred_boxes_i = Boxes(pred_boxes[i], format='cxcywh', normalized=True)
-                tgt_boxes_i = tgt_dict['boxes'][i].to_format('cxcywh')
+            # Get bounding box loss and analysis
+            box_loss_dict, box_analysis_dict = self.box_loss(box_logits, tgt_boxes, inter_matrices, prior_boxes, ids)
+            loss_dict.update(box_loss_dict)
+            analysis_dict.update(box_analysis_dict)
 
-                # Get prediction weights and corresponding indices
-                with torch.no_grad():
+            return loss_dict, analysis_dict
 
-                    # Get IoU-matrix between predictions and targets
-                    iou_matrix, _ = box_iou(pred_boxes_i, tgt_boxes_i)
-
-                    # Weight mode 'single'
-                    if self.dd_weight_mode == 'single':
-                        tgt_ids = torch.arange(num_tgts)
-                        _, pred_ids = torch.max(iou_matrix, dim=0)
-                        pred_weights = torch.ones_like(tgt_labels_i)
-
-                    # Weight mode 'multiple'
-                    elif self.dd_weight_mode == 'multiple':
-                        pred_ids = torch.arange(num_preds)
-                        pred_weights, tgt_ids = torch.max(iou_matrix, dim=1)
-
-                        pred_weights = pred_weights ** self.dd_weight_power
-                        tgt_id_matrix = F.one_hot(tgt_ids, num_tgts)
-                        pred_weights = pred_weights[:, None] * tgt_id_matrix
-
-                        eps = 1e-5
-                        pred_weights = pred_weights / (pred_weights.sum(dim=0)+eps)
-                        pred_weights = pred_weights.sum(dim=1)
-
-                    # Unknown weight mode
-                    else:
-                        raise ValueError(f"Unknown dense detector weight mode '{self.dd_weight_mode}' was provided.")
-
-                # Get classification loss
-                cls_preds = cls_logits_i[pred_ids]
-                cls_tgts = F.one_hot(tgt_labels_i[tgt_ids], num_classes).to(cls_preds.dtype)
-
-                cls_kwargs = {'alpha': self.dd_focal_alpha, 'gamma': self.dd_focal_gamma, 'reduction': 'none'}
-                cls_losses = sigmoid_focal_loss(cls_preds, cls_tgts, **cls_kwargs)
-
-                cls_losses = pred_weights * cls_losses.sum(dim=1)
-                cls_loss = self.dd_cls_weight * cls_losses.sum(dim=0, keepdim=True)
-                loss_dict['dfd_dd_cls_loss'] += cls_loss / batch_size
-
-                # Get bounding box loss
-                box_preds = pred_boxes_i.boxes[pred_ids]
-                box_tgts = tgt_boxes_i.boxes[tgt_ids]
-
-                box_kwargs = {'beta': self.dd_box_beta, 'reduction': 'none'}
-                box_losses = smooth_l1_loss(box_preds, box_tgts, **box_kwargs)
-
-                box_losses = pred_weights * box_losses.sum(dim=1)
-                box_loss = self.dd_box_weight * box_losses.sum(dim=0, keepdim=True)
-                loss_dict['dfd_dd_box_loss'] += box_loss / batch_size
-
-                # Get absolute reward loss
-                abs_preds = abs_logits[i].sigmoid()
-
-                with torch.no_grad():
-                    pred_ids = torch.arange(num_preds)
-                    box_rewards, tgt_ids = torch.max(iou_matrix, dim=1)
-                    cls_rewards = cls_logits_i[pred_ids, tgt_labels_i[tgt_ids]].sigmoid()
-                    abs_tgts = cls_rewards * box_rewards
-
-                top_pred_ids = torch.argsort(abs_preds, descending=True)[:self.abs_samples]
-                top_tgt_ids = torch.argsort(abs_tgts, descending=True)[:self.abs_samples]
-
-                loss_ids = torch.cat([top_pred_ids, top_tgt_ids], dim=0)
-                abs_preds = abs_preds[loss_ids]
-                abs_tgts = abs_tgts[loss_ids]
-
-                abs_kwargs = {'beta': self.abs_beta, 'reduction': 'none'}
-                abs_losses = self.abs_weight * smooth_l1_loss(abs_preds, abs_tgts, **abs_kwargs)
-
-                abs_loss = abs_losses.mean(dim=0, keepdim=True)
-                loss_dict['dfd_abs_loss'] += abs_loss / batch_size
-
-                # Get classification and box accuracy
-                with torch.no_grad():
-
-                    # Get box accuracy and indices of best prediction per target
-                    box_accuracies, pred_ids = torch.max(iou_matrix, dim=0)
-                    box_accuracy = box_accuracies.mean(dim=0, keepdim=True)
-                    analysis_dict['dfd_dd_box_acc'] += 100 * box_accuracy / batch_size
-
-                    # Get classification accuracy
-                    pred_labels = torch.argmax(cls_logits_i[pred_ids], dim=1)
-                    cls_accuracy = torch.eq(pred_labels, tgt_labels_i).sum(dim=0, keepdim=True) / num_tgts
-                    analysis_dict['dfd_dd_cls_acc'] += 100 * cls_accuracy / batch_size
-
-                    # Get mean of absolute reward error
-                    abs_error = torch.abs(abs_preds - abs_tgts).mean(dim=0, keepdim=True)
-                    analysis_dict['dfd_abs_err'] += abs_error / batch_size
-
-        # Get dense detector predictions (validation/testing)
+        # Get list of prediction dictionaries (validation/testing)
         if tgt_dict is None:
 
             # Get predicted labels and corresponding classification scores
-            cls_scores, labels = cls_logits.max(dim=2)
-            cls_scores = cls_scores.sigmoid_()
+            cls_scores, labels = cls_logits[:, :, :-1].max(dim=2)
+            cls_scores = cls_scores.sigmoid()
 
-            # Get scores estimated by absolute reward predictor
-            abs_scores = abs_logits.sigmoid()
+            # Get objectness scores
+            obj_scores = obj_logits[:, :, 0].sigmoid()
 
             # Initialize list of prediciton dictionaries
             pred_dicts = []
 
             # Get prediction dictionaries corresponding to different scoring mechanisms
-            for scores in [cls_scores, abs_scores]:
+            for scores in [cls_scores, obj_scores]:
 
                 # Initialize prediction dictionary
                 pred_dict = {k: [] for k in ['labels', 'boxes', 'scores', 'batch_ids']}
 
-                # Get predictions for every batch entry
+                # Iterate over every batch entry
                 for i in range(batch_size):
 
                     # Only keep best candidates for NMS
                     scores_i, sort_ids = scores[i].sort(descending=True)
-                    candidate_ids = sort_ids[:self.dd_nms_candidates]
+                    candidate_ids = sort_ids[:self.inf_nms_candidates]
 
+                    # Perform NMS and only keep the requested number of best remaining detections
+                    boxes_i = apply_box_deltas(box_logits[i], prior_boxes)
+                    boxes_i = boxes_i[candidate_ids].to_format('xyxy')
+
+                    scores_i = scores_i[:self.inf_nms_candidates]
                     labels_i = labels[i][candidate_ids]
-                    scores_i = scores_i[candidate_ids]
 
-                    # Perform NMS
-                    boxes_i = Boxes(pred_boxes[i][candidate_ids], format='cxcywh', normalized=True).to_format('xyxy')
-                    keep_ids = batched_nms(boxes_i.boxes, scores_i, labels_i, iou_threshold=self.dd_nms_threshold)
-                    detection_ids = keep_ids[:self.dd_max_detections]
+                    keep_ids = batched_nms(boxes_i.boxes, scores_i, labels_i, iou_threshold=self.inf_iou_threshold)
+                    keep_ids = keep_ids[:self.inf_max_detections]
 
                     # Add final predictions to their corresponding lists
-                    pred_dict['labels'].append(labels_i[detection_ids])
-                    pred_dict['boxes'].append(boxes_i[detection_ids])
-                    pred_dict['scores'].append(scores_i[detection_ids])
-                    pred_dict['batch_ids'].append(torch.full_like(detection_ids, i, dtype=torch.int64))
+                    pred_dict['labels'].append(labels_i[keep_ids])
+                    pred_dict['boxes'].append(boxes_i[keep_ids])
+                    pred_dict['scores'].append(scores_i[keep_ids])
+                    pred_dict['batch_ids'].append(torch.full_like(keep_ids, i, dtype=torch.int64))
 
                 # Concatenate different batch entry predictions
                 pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
@@ -421,12 +596,6 @@ class DFD(nn.Module):
                 # Add prediction dictionary to list of prediction dictionaries
                 pred_dicts.append(pred_dict)
 
-        # Return loss and analysis dictionaries (trainval only)
-        if tgt_dict is not None:
-            return loss_dict, analysis_dict
-
-        # Return prediction dictionaries (validation/testing)
-        if tgt_dict is None:
             return pred_dicts
 
     def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.4):

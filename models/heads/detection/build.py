@@ -63,35 +63,32 @@ def build_det_heads(args):
             det_heads.append(brd_head)
 
         elif det_head_type == 'dfd':
-            feat_size = args.dfd_feat_size
-            num_classes = args.num_classes
-            assert all(feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            in_feat_size = args.core_feat_sizes[0]
+            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
 
-            dd_dict = {'hidden_size': args.dfd_dd_hidden_size, 'layers': args.dfd_dd_layers}
-            dd_dict = {**dd_dict, 'prior_cls_prob': args.dfd_dd_prior_cls_prob}
+            cls_dict = {'feat_size': args.dfd_cls_feat_size, 'norm': args.dfd_cls_norm}
+            cls_dict = {**cls_dict, 'num_classes': args.num_classes, 'prior_prob': args.dfd_cls_prior_prob}
+            cls_dict = {**cls_dict, 'kernel_size': args.dfd_cls_kernel_size, 'bottle_size': args.dfd_cls_bottle_size}
+            cls_dict = {**cls_dict, 'hidden_layers': args.dfd_cls_hidden_layers}
+            cls_dict = {**cls_dict, 'focal_alpha': args.dfd_cls_focal_alpha, 'focal_gamma': args.dfd_cls_focal_gamma}
+            cls_dict = {**cls_dict, 'weight': args.dfd_cls_weight}
 
-            dd_dict = {**dd_dict, 'delta_range_xy': args.dfd_dd_delta_range_xy}
-            dd_dict = {**dd_dict, 'delta_range_wh': args.dfd_dd_delta_range_wh}
+            obj_dict = {'feat_size': args.dfd_obj_feat_size, 'norm': args.dfd_obj_norm}
+            obj_dict = {**obj_dict, 'prior_prob': args.dfd_obj_prior_prob, 'kernel_size': args.dfd_obj_kernel_size}
+            obj_dict = {**obj_dict, 'bottle_size': args.dfd_obj_bottle_size}
+            obj_dict = {**obj_dict, 'hidden_layers': args.dfd_obj_hidden_layers}
+            obj_dict = {**obj_dict, 'focal_alpha': args.dfd_obj_focal_alpha, 'focal_gamma': args.dfd_obj_focal_gamma}
+            obj_dict = {**obj_dict, 'weight': args.dfd_obj_weight}
 
-            dd_dict = {**dd_dict, 'weight_mode': args.dfd_dd_weight_mode}
-            dd_dict = {**dd_dict, 'weight_power': args.dfd_dd_weight_power}
+            box_dict = {'feat_size': args.dfd_box_feat_size, 'norm': args.dfd_box_norm}
+            box_dict = {**box_dict, 'kernel_size': args.dfd_box_kernel_size, 'bottle_size': args.dfd_box_bottle_size}
+            box_dict = {**box_dict, 'hidden_layers': args.dfd_box_hidden_layers, 'sl1_beta': args.dfd_box_sl1_beta}
+            box_dict = {**box_dict, 'weight': args.dfd_box_weight}
 
-            dd_dict = {**dd_dict, 'focal_alpha': args.dfd_dd_focal_alpha}
-            dd_dict = {**dd_dict, 'focal_gamma': args.dfd_dd_focal_gamma}
-            dd_dict = {**dd_dict, 'cls_weight': args.dfd_dd_cls_weight}
+            inf_dict = {'nms_candidates': args.dfd_inf_nms_candidates, 'iou_threshold': args.dfd_inf_iou_threshold}
+            inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
 
-            dd_dict = {**dd_dict, 'box_beta': args.dfd_dd_box_beta}
-            dd_dict = {**dd_dict, 'box_weight': args.dfd_dd_box_weight}
-
-            dd_dict = {**dd_dict, 'nms_candidates': args.dfd_dd_nms_candidates}
-            dd_dict = {**dd_dict, 'nms_threshold': args.dfd_dd_nms_threshold}
-            dd_dict = {**dd_dict, 'max_detections': args.dfd_dd_max_detections}
-
-            reward_dict = {'abs_hidden_size': args.dfd_abs_hidden_size, 'abs_layers': args.dfd_abs_layers}
-            reward_dict = {**reward_dict, 'abs_samples': args.dfd_abs_samples, 'abs_beta': args.dfd_abs_beta}
-            reward_dict = {**reward_dict, 'abs_weight': args.dfd_abs_weight}
-
-            dfd_head = DFD(feat_size, num_classes, dd_dict, reward_dict, metadata)
+            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, inf_dict, metadata)
             det_heads.append(dfd_head)
 
         elif det_head_type == 'retina':

@@ -166,7 +166,7 @@ elif profiling_args.model == 'bivinet_det':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes, 'cxcywh', False, [main_args.num_init_slots] * batch_size)
+    boxes = Boxes(boxes, 'cxcywh', 'false', [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -218,7 +218,7 @@ elif profiling_args.model == 'brd_head':
     num_targets = 10
     labels = [torch.randint(main_args.num_classes, (num_targets,), device='cuda') for _ in range(batch_size)]
     boxes = [torch.abs(torch.randn(num_targets, 4, device='cuda')) for _ in range(batch_size)]
-    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', True) for boxes_i in boxes]
+    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', 'img_with_padding') for boxes_i in boxes]
     tgt_dict = {'labels': labels, 'boxes': boxes}
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
@@ -235,7 +235,7 @@ elif profiling_args.model == 'criterion':
         num_slots_total = batch_size * main_args.num_init_slots
         logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
         boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-        boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+        boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
         sizes = torch.tensor([i*main_args.num_init_slots for i in range(batch_size+1)], device='cuda')
         out_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
 
@@ -244,7 +244,7 @@ elif profiling_args.model == 'criterion':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+    boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -267,7 +267,7 @@ elif profiling_args.model == 'detr':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes/boxes.max(), 'cxcywh', True, [main_args.num_init_slots] * batch_size)
+    boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
     sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
@@ -296,7 +296,7 @@ elif profiling_args.model == 'dfd_head':
     num_targets = 10
     labels = [torch.randint(main_args.num_classes, (num_targets,), device='cuda') for _ in range(batch_size)]
     boxes = [torch.abs(torch.randn(num_targets, 4, device='cuda')) for _ in range(batch_size)]
-    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', True) for boxes_i in boxes]
+    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', 'img_with_padding') for boxes_i in boxes]
     tgt_dict = {'labels': labels, 'boxes': boxes}
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}

@@ -200,7 +200,7 @@ class BRD(nn.Module):
             return None, {}, {}
 
         # Get normalized bounding boxes
-        norm_boxes = tgt_dict['boxes'].normalize(images)
+        norm_boxes = tgt_dict['boxes'].normalize(images, with_padding=True)
 
         # Update target dictionary
         sizes = tgt_dict['sizes']
@@ -268,10 +268,6 @@ class BRD(nn.Module):
                 loss_dict['brd_l1_loss'] += 0.0 * pred_boxes[i].boxes.sum()
                 loss_dict['brd_giou_loss'] += 0.0 * pred_boxes[i].boxes.sum()
                 continue
-
-            # Check whether target boxes are normalized
-            if not tgt_boxes[i].normalized:
-                raise ValueError("Target boxes should be normalized when using BRD loss.")
 
             # Get prediction and target boxes in (center_x, center_y, width, height) format
             pred_boxes_i = pred_boxes[i].to_format('cxcywh')
@@ -512,7 +508,7 @@ class BRD(nn.Module):
                 if self.rel_preds:
                     prior_boxes[i] = pred_boxes_i.detach()
 
-                pred_boxes_i = Boxes(pred_boxes_i, format='cxcywh', normalized=True)
+                pred_boxes_i = Boxes(pred_boxes_i, format='cxcywh', normalized='img_with_padding')
                 pred_boxes.append(pred_boxes_i)
 
             # Continue if desired

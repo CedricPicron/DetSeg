@@ -70,10 +70,10 @@ class MLP(nn.Module):
     Class implementing the MLP module.
 
     Attributes:
-        head (nn.Sequential): Sequence of activation and projection modules.
+        mlp (nn.Sequential): Sequence of activation and projection modules.
     """
 
-    def __init__(self, in_size, hidden_size, out_size, num_hidden_layers, **kwargs):
+    def __init__(self, in_size, hidden_size, out_size, layers, **kwargs):
         """
         Initializes the MLP module.
 
@@ -81,7 +81,7 @@ class MLP(nn.Module):
             in_size (int): Integer containing the input feature size.
             hidden_size (int): Integer containing the hidden feature size.
             out_size (int): Integer containing the output feature size.
-            num_hidden_layers (int): Integer containing the number of hidden layers.
+            layers (int): Integer containing the number of hidden layers.
 
         Raises:
             ValueError: Raised when the requested number of hidden layers is negative.
@@ -91,19 +91,19 @@ class MLP(nn.Module):
         super().__init__()
 
         # Get MLP head depending on the number of hidden layers
-        if num_hidden_layers == 0:
-            self.head = nn.Sequenatial(nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, out_size)))
+        if layers == 0:
+            self.mlp = nn.Sequenatial(nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, out_size)))
 
-        elif num_hidden_layers > 0:
+        elif layers > 0:
             input_block = nn.Sequential(nn.ReLU(inplace=False), nn.Linear(in_size, hidden_size))
             hidden_block = nn.Sequential(nn.ReLU(inplace=True), nn.Linear(hidden_size, hidden_size))
             output_block = nn.Sequential(nn.ReLU(inplace=True), nn.Linear(hidden_size, out_size))
 
-            hidden_blocks = [deepcopy(hidden_block) for _ in range(num_hidden_layers-1)]
-            self.head = nn.Sequential(input_block, *hidden_blocks, output_block)
+            hidden_blocks = [deepcopy(hidden_block) for _ in range(layers-1)]
+            self.mlp = nn.Sequential(input_block, *hidden_blocks, output_block)
 
         else:
-            raise ValueError(f"The number of hidden layers must be non-negative (got {num_hidden_layers}).")
+            raise ValueError(f"The number of hidden layers must be non-negative (got {layers}).")
 
     def forward(self, in_feat_list, **kwargs):
         """
@@ -117,6 +117,6 @@ class MLP(nn.Module):
         """
 
         # Perform MLP-operation on every set of input features
-        out_feat_list = [self.head(in_feats) for in_feats in in_feat_list]
+        out_feat_list = [self.mlp(in_feats) for in_feats in in_feat_list]
 
         return out_feat_list

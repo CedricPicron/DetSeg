@@ -303,8 +303,9 @@ class DETR(nn.Module):
         boxes = self.bbox_head(slots).sigmoid()
 
         # Place predicted bounding box coordinates into Boxes structures
+        normalized = 'img_without_padding'
         boxes_per_img = sizes[:, 1:] - sizes[:, :-1]
-        boxes = [Boxes(boxes[i], 'cxcywh', normalized=True, boxes_per_img=boxes_per_img[i]) for i in range(len(slots))]
+        boxes = [Boxes(boxes[i], 'cxcywh', normalized, boxes_per_img=boxes_per_img[i]) for i in range(len(slots))]
 
         # Build list of output dictionaries
         out_list = [{'logits': logits[i], 'boxes': boxes[i]} for i in range(len(slots))]
@@ -318,7 +319,7 @@ class DETR(nn.Module):
 
         # Normalize target boxes and get loss and analysis dictionaries (trainval only)
         if tgt_dict is not None:
-            tgt_dict['boxes'] = tgt_dict['boxes'].normalize(images)
+            tgt_dict['boxes'] = tgt_dict['boxes'].normalize(images, with_padding=False)
             loss_dict, analysis_dict = self.criterion(out_list, tgt_dict)
 
         # Get prediction dictionary (validation/testing only)

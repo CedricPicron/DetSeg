@@ -324,7 +324,7 @@ class Images(object):
 
         Returns:
             If 'with_padding' is True:
-                img_size (Tuple): Tuple of size [2] containing the image size in (width, height) format.
+                img_size (Tuple): Tuple of size [2] containing the (width, height) image size with padding.
 
             If 'with_padding' is False:
                 img_sizes (List): List of size [num_images] containing the (width, height) image sizes without padding.

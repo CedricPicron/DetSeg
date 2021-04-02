@@ -15,18 +15,18 @@ class Boxes(object):
     Attributes:
         boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
         format (str): String containing the format in which the bounding boxes are expressed.
-        normalized (bool): Boolean indicating whether boxes are normalized or not.
+        normalized (str): String indicating whether and w.r.t. what boxes are normalized.
         boxes_per_img (LongTensor): Tensor of shape [num_images] containing the number of boxes per batched image.
     """
 
-    def __init__(self, boxes, format, normalized=False, boxes_per_img=None):
+    def __init__(self, boxes, format, normalized='false', boxes_per_img=None):
         """
         Initializes the Boxes structure.
 
         Args:
             boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
             format (str): String containing the format in which the bounding boxes are expressed.
-            normalized (bool): Boolean indicating whether boxes are normalized or not (default=False).
+            normalized (str): String indicating whether and w.r.t. what boxes are normalized (default='false').
             boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
         """
 
@@ -367,29 +367,31 @@ class Boxes(object):
 
         return self
 
-    def normalize(self, images):
+    def normalize(self, images, with_padding=True):
         """
-        Normalizes bounding boxes w.r.t. the image sizes within the given Images structure.
+        Normalizes bounding boxes w.r.t. the image sizes from the given Images structure.
 
         It is the inverse operation of 'to_img_scale'.
 
         Args:
             images (Images): Images structure containing batched images with their entire transform history.
+            with_padding (bool): Whether to normalize w.r.t the image sizes with padding or not (default=True).
 
         Returns:
             self (Boxes): Updated Boxes structure with normalized bounding boxes.
         """
 
-        # Normalize bounding box coordinates if necessary
-        if not self.normalized:
+        # Normalize bounding box coordinates if not yet normalized
+        if self.normalized == 'false':
 
-            # Get image sizes without padding in (width, height) format
-            img_sizes = images.size(with_padding=False)
+            # Get image sizes in (width, height) format
+            img_sizes = images.size(with_padding=with_padding)
+            img_sizes = [img_sizes, img_sizes] if with_padding else img_sizes
 
             # Normalize bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
             self.boxes = self.boxes / scales.repeat_interleave(self.boxes_per_img, dim=0)
-            self.normalized = True
+            self.normalized = 'img_with_padding' if with_padding else 'img_without_padding'
 
         return self
 
@@ -470,7 +472,7 @@ class Boxes(object):
 
     def to_img_scale(self, images):
         """
-        Scales normalized bounding boxes w.r.t. the image sizes within the given Images structure.
+        Scales normalized bounding boxes w.r.t. the image sizes from the given Images structure.
 
         It is the inverse operation of 'normalize'.
 
@@ -481,16 +483,17 @@ class Boxes(object):
             self (Boxes): Updated Boxes structure with bounding boxes resized to image scale.
         """
 
-        # Scale if boxes are normalized
-        if self.normalized:
+        # Scale if boxes are normalized w.r.t. image sizes
+        if self.normalized in ['img_with_padding', 'img_without_padding']:
 
-            # Get image sizes without padding in (width, height) format
-            img_sizes = images.size(with_padding=False)
+            # Get image sizes in (width, height) format
+            with_padding = self.normalized == 'img_with_padding'
+            img_sizes = images.size(with_padding=with_padding)
 
             # Scale bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
             self.boxes = self.boxes * scales.repeat_interleave(self.boxes_per_img, dim=0)
-            self.normalized = False
+            self.normalized = 'false'
 
         return self
 
@@ -615,7 +618,7 @@ def box_giou(boxes1, boxes2):
     assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
 
     # Compute 2D IoU's and union areas
-    ious, unions = box_iou(boxes1, boxes2)
+    ious, unions = box_iou(boxes1, boxes2, return_unions=True)
 
     # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
     boxes1 = boxes1.clone().to_format('xyxy').boxes
@@ -633,17 +636,49 @@ def box_giou(boxes1, boxes2):
     return gious
 
 
-def box_iou(boxes1, boxes2):
+def box_intersection(boxes1, boxes2):
     """
-    Function computing the 2D IoU's and union areas between every pair of boxes from two Boxes structures.
+    Function computing the intersection areas between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
         boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
 
     Returns:
+        inters (FloatTensor): The intersection areas between every pair of boxes of shape [N, M].
+    """
+
+    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
+    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
+    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+
+    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
+    boxes1 = boxes1.clone().to_format('xyxy').boxes
+    boxes2 = boxes2.clone().to_format('xyxy').boxes
+
+    # Get intersection areas
+    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
+    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
+    wh = (rb - lt).clamp(min=0)  # [N,M,2]
+    inters = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+
+    return inters
+
+
+def box_iou(boxes1, boxes2, return_unions=False):
+    """
+    Function computing the 2D IoU's and union areas between every pair of boxes from two Boxes structures.
+
+    Args:
+        boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
+        boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
+        return_unions (bool): Whether to return areas of the box unions or not (default=False).
+
+    Returns:
         ious (FloatTensor): The 2D IoU's between every pair of boxes of shape [N, M].
-        unions (FloatTensor): The areas of the box unions between every pair of boxes of shape [N, M].
+
+        If 'return_unions' is True:
+            unions (FloatTensor): The areas of the box unions between every pair of boxes of shape [N, M].
     """
 
     # Compute bounding box areas
@@ -664,7 +699,11 @@ def box_iou(boxes1, boxes2):
     unions = areas1[:, None] + areas2 - inters
     ious = inters / unions
 
-    return ious, unions
+    # Return IoU's and unions if requested
+    if return_unions:
+        return ious, unions
+    else:
+        return ious
 
 
 def get_box_deltas(boxes1, boxes2):

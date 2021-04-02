@@ -128,7 +128,7 @@ class BiViNet(nn.Module):
 
         # Populate loss and analysis dictionaries from head outputs
         for head in heads:
-            head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks, tgt_dict, **kwargs)
+            head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks=feat_masks, tgt_dict=tgt_dict, **kwargs)
 
             if self.step_mode == 'multi':
                 loss_dict.update({f'{k}_{step_id}': v for k, v in head_loss_dict.items()})
