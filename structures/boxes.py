@@ -386,7 +386,7 @@ class Boxes(object):
 
             # Get image sizes in (width, height) format
             img_sizes = images.size(with_padding=with_padding)
-            img_sizes = [img_sizes, img_sizes] if with_padding else img_sizes
+            img_sizes = [img_sizes for _ in range(len(images))] if with_padding else img_sizes
 
             # Normalize bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
