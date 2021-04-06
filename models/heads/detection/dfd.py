@@ -423,6 +423,7 @@ class DFD(nn.Module):
             # Skip batch entry if there are no targets
             if num_tgts == 0:
                 box_loss_dict['dfd_box_loss'] += 0.0 * box_logits_i.sum()
+                box_analysis_dict['dfd_box_acc'] += 100 / batch_size
                 continue
 
             # Get selected bounding box logits

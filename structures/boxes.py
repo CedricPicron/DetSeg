@@ -489,6 +489,7 @@ class Boxes(object):
             # Get image sizes in (width, height) format
             with_padding = self.normalized == 'img_with_padding'
             img_sizes = images.size(with_padding=with_padding)
+            img_sizes = [img_sizes for _ in range(len(images))] if with_padding else img_sizes
 
             # Scale bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
@@ -681,19 +682,16 @@ def box_iou(boxes1, boxes2, return_unions=False):
             unions (FloatTensor): The areas of the box unions between every pair of boxes of shape [N, M].
     """
 
+    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
+    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
+    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+
     # Compute bounding box areas
     areas1 = boxes1.area()
     areas2 = boxes2.area()
 
-    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
-    boxes1 = boxes1.clone().to_format('xyxy').boxes
-    boxes2 = boxes2.clone().to_format('xyxy').boxes
-
     # Get intersection areas
-    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
-    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
-    inters = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+    inters = box_intersection(boxes1, boxes2)
 
     # Get union areas and 2D IoU's
     unions = areas1[:, None] + areas2 - inters
