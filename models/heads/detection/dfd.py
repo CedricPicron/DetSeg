@@ -15,7 +15,7 @@ import torch.nn.functional as F
 
 from models.functional.position import sine_pos_encodings
 from models.modules.convolution import BottleneckConv, ProjConv
-from structures.boxes import apply_box_deltas, Boxes, box_intersection, box_iou, get_box_deltas
+from structures.boxes import apply_edge_dists, Boxes, box_iou, get_edge_dists, pts_inside_boxes
 
 
 class DFD(nn.Module):
@@ -220,14 +220,15 @@ class DFD(nn.Module):
 
         return tgt_dict, {}, {}
 
-    def cls_loss(self, cls_logits, tgt_labels, inter_matrices):
+    def cls_loss(self, cls_logits, tgt_labels, tgt_ids, weights):
         """
         Gets classification loss and corresponding classification analysis.
 
         Args:
-            cls_logits (FloatTensor): Classification logits of shape [batch_size, num_preds, num_classes+1].
+            cls_logits (FloatTensor): Classification logits of shape [batch_size, num_feats, num_classes+1].
             tgt_labels (List): List [batch_size] with class indices of shape [num_targets].
-            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
+            tgt_ids (List): List [batch_size] with target indices corresponding to each feature of shape [num_feats].
+            weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
 
         Returns:
             cls_loss_dict (Dict): Classification loss dictionary containing following key:
@@ -247,15 +248,15 @@ class DFD(nn.Module):
         num_cls_labels = cls_logits.shape[-1]
 
         # Iterate over every batch entry
-        for cls_logits_i, tgt_labels_i, inter_matrix in zip(cls_logits, tgt_labels, inter_matrices):
+        for cls_logits_i, tgt_labels_i, tgt_ids_i, weights_i in zip(cls_logits, tgt_labels, tgt_ids, weights):
 
-            # Append target with background label
+            # Append target with background label and get number of targets
             bg_label = torch.tensor([num_cls_labels-1]).to(tgt_labels_i)
             tgt_labels_i = torch.cat([tgt_labels_i, bg_label], dim=0)
+            num_tgts = len(tgt_labels_i)
 
             # Get classification targets
-            inters, tgt_ids = torch.max(inter_matrix, dim=1)
-            cls_targets_i = tgt_labels_i[tgt_ids]
+            cls_targets_i = tgt_labels_i[tgt_ids_i]
             cls_targets_oh_i = F.one_hot(cls_targets_i, num_cls_labels).to(cls_logits_i.dtype)
 
             # Get unweighted classification losses
@@ -263,14 +264,14 @@ class DFD(nn.Module):
             cls_losses = sigmoid_focal_loss(cls_logits_i, cls_targets_oh_i, **cls_kwargs)
 
             # Get weights normalized per target
-            weights = torch.zeros_like(inters)
+            norm_weights = torch.zeros_like(weights_i)
 
-            for tgt_id in range(len(tgt_labels_i)):
-                tgt_mask = tgt_ids == tgt_id
-                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+            for tgt_id in range(num_tgts):
+                tgt_mask = tgt_ids_i == tgt_id
+                norm_weights[tgt_mask] = weights_i[tgt_mask] / weights_i[tgt_mask].sum()
 
             # Get weighted classification loss
-            cls_losses = weights * cls_losses.sum(dim=1)
+            cls_losses = norm_weights * cls_losses.sum(dim=1)
             cls_loss = self.cls_weight * cls_losses.sum()
             cls_loss_dict['dfd_cls_loss'] += cls_loss
 
@@ -282,17 +283,18 @@ class DFD(nn.Module):
 
         return cls_loss_dict, cls_analysis_dict
 
-    def obj_loss(self, obj_logits, tgt_boxes, inter_matrices, prior_boxes):
+    def obj_loss(self, obj_logits, tgt_boxes, tgt_ids, weights, feat_wh):
         """
         Gets objectness loss and corresponding objectness analysis.
 
-        It also returns a list with target indices, such that the subsequent 'box_loss' method should not recompute it.
+        It also returns a list with objectness indices corresponding to non-objects (0) and objects (1).
 
         Args:
-            obj_logits (FloatTensor): Objectness logits of shape [batch_size, num_preds, 2].
+            obj_logits (FloatTensor): Objectness logits of shape [batch_size, num_feats, 2].
             tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
-            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
-            prior_boxes (Boxes): Boxes structure containing prior boxes (i.e. anchors) of size [num_preds].
+            tgt_ids (List): List [batch_size] with target indices corresponding to each feature of shape [num_feats].
+            weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
+            feat_wh (FloatTensor): Feature widths and heights of shape [num_feats, 2].
 
         Returns:
             obj_loss_dict (Dict): Objectness loss dictionary containing following key:
@@ -301,7 +303,7 @@ class DFD(nn.Module):
             obj_analysis_dict (Dict): Objectness analysis dictionary containing following key:
                 - dfd_obj_acc (FloatTensor): objectness accuracy of shape [1].
 
-            ids (List): List [batch_size] with target indices corresponding to each prediction of shape [num_preds].
+            obj_ids (List): List [batch_size] with objectness indices of shape [num_feats].
         """
 
         # Initialize empty objectness loss and analysis dictionaries
@@ -309,94 +311,92 @@ class DFD(nn.Module):
         obj_loss_dict = {'dfd_obj_loss': torch.zeros(1, **tensor_kwargs)}
         obj_analysis_dict = {'dfd_obj_acc': torch.zeros(1, **tensor_kwargs)}
 
-        # Initialize empty ids list
-        ids = []
+        # Initialize empty list for objectness indices
+        obj_ids = []
 
-        # Get batch size and areas of prior boxes
+        # Get batch size, feature indices and feature areas
         batch_size = len(obj_logits)
-        prior_areas = prior_boxes.area()
+        feat_ids = torch.arange(len(feat_wh))
+        feat_areas = feat_wh[:, 0] * feat_wh[:, 1]
 
-        # Get unique prior box sizes in (width, height) format
-        prior_sizes = prior_boxes.to_format('cxcywh').boxes[:, 2:]
-        prior_sizes, map_numel = torch.unique_consecutive(prior_sizes, return_counts=True, dim=0)
-
-        # Get number of maps and number of predictions
-        num_maps = len(prior_sizes)
-        num_preds = len(prior_boxes)
+        # Get unique feature widths and heights and get number of maps
+        feat_wh, map_numel = torch.unique_consecutive(feat_wh, return_counts=True, dim=0)
+        num_maps = len(feat_wh)
 
         # Iterate over every batch entry
-        for obj_logits_i, tgt_boxes_i, inter_matrix in zip(obj_logits, tgt_boxes, inter_matrices):
+        for obj_logits_i, tgt_boxes_i, tgt_ids_i, weights_i in zip(obj_logits, tgt_boxes, tgt_ids, weights):
 
             # Get number of targets
             num_tgts = len(tgt_boxes_i)
 
-            # Get map indices for positive maps corresponding to each target
+            # Get objectness ids
             if num_tgts > 0:
-
                 tgt_sizes_i = tgt_boxes_i.to_format('cxcywh').boxes[:, 2:]
-                rel_sizes = prior_sizes[:, None] / tgt_sizes_i[None, :]
+                rel_sizes = feat_wh[:, None] / tgt_sizes_i[None, :]
                 rel_sizes, _ = torch.max(rel_sizes, dim=2)
 
-                maxima, lower_map_ids = torch.where(rel_sizes <= 1, rel_sizes, torch.zeros_like(rel_sizes)).max(dim=0)
-                lower_map_ids[maxima == 0] = -1
+                rel_sizes[rel_sizes > 1] = 0
+                max_values, lower_map_ids = torch.max(rel_sizes, dim=0)
+                lower_map_ids[max_values == 0] = -1
                 upper_map_ids = lower_map_ids + 1
 
                 map_ids = torch.stack([lower_map_ids, upper_map_ids], dim=1)
                 map_ids = torch.clamp(map_ids, min=0, max=num_maps-1)
 
-            # Get objectness mask
-            obj_mask = torch.zeros(num_maps, num_tgts+1, dtype=torch.bool, device=obj_logits.device)
+                obj_ids_i = torch.zeros(num_maps, num_tgts+1).to(tgt_ids_i)
+                obj_ids_i[map_ids, torch.arange(num_tgts)[:, None]] = 1
+                obj_ids_i = torch.repeat_interleave(obj_ids_i, map_numel, dim=0)
+                obj_ids_i = obj_ids_i[feat_ids, tgt_ids_i]
 
-            if num_tgts > 0:
-                obj_mask[map_ids, torch.arange(num_tgts)[:, None]] = True
+            else:
+                obj_ids_i = torch.zeros_like(tgt_ids_i)
 
-            obj_mask = torch.repeat_interleave(obj_mask, map_numel, dim=0)
-
-            # Get target ids and add them to ids list
-            inters, tgt_ids = torch.max(inter_matrix, dim=1)
-            pred_ids = torch.arange(num_preds).to(tgt_ids)
-            tgt_ids = torch.where(obj_mask[pred_ids, tgt_ids], tgt_ids, num_tgts)
-            ids.append(tgt_ids)
+            # Add objectness ids to corresponding list
+            obj_ids.append(obj_ids_i)
 
             # Get objectness targets
-            obj_targets_i = torch.where(tgt_ids < num_tgts, 0, 1)
-            obj_targets_oh_i = F.one_hot(obj_targets_i, 2).to(obj_logits_i.dtype)
+            obj_targets_oh_i = F.one_hot(obj_ids_i, 2).to(obj_logits_i.dtype)
 
             # Get unweighted objectness losses
             obj_kwargs = {'alpha': self.obj_focal_alpha, 'gamma': self.obj_focal_gamma, 'reduction': 'none'}
             obj_losses = sigmoid_focal_loss(obj_logits_i, obj_targets_oh_i, **obj_kwargs)
 
             # Get weights normalized per target
-            inters[tgt_ids == num_tgts] = prior_areas[tgt_ids == num_tgts]
-            weights = torch.zeros_like(inters)
+            obj_tgt_ids = torch.where(obj_ids_i == 1, tgt_ids_i, -1)
+            norm_weights = torch.zeros_like(weights_i)
 
-            for tgt_id in range(num_tgts+1):
-                tgt_mask = tgt_ids == tgt_id
-                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+            for obj_tgt_id in range(num_tgts):
+                obj_tgt_mask = obj_tgt_ids == obj_tgt_id
+                norm_weights[obj_tgt_mask] = weights_i[obj_tgt_mask] / weights_i[obj_tgt_mask].sum()
+
+            non_obj_mask = obj_tgt_ids == -1
+            norm_weights[non_obj_mask] = feat_areas[non_obj_mask] / feat_areas[non_obj_mask].sum()
 
             # Get weighted objectness loss
-            obj_losses = weights * obj_losses.sum(dim=1)
+            obj_losses = norm_weights * obj_losses.sum(dim=1)
             obj_loss = self.obj_weight * obj_losses.sum()
             obj_loss_dict['dfd_obj_loss'] += obj_loss
 
             # Get objectness accuracy
             with torch.no_grad():
                 obj_preds_i = torch.argmax(obj_logits_i, dim=1)
-                obj_acc = torch.eq(obj_preds_i, obj_targets_i).sum() / len(obj_preds_i)
+                obj_acc = torch.eq(obj_preds_i, obj_ids_i).sum() / len(obj_preds_i)
                 obj_analysis_dict['dfd_obj_acc'] += 100 * obj_acc / batch_size
 
-        return obj_loss_dict, obj_analysis_dict, ids
+        return obj_loss_dict, obj_analysis_dict, obj_ids
 
-    def box_loss(self, box_logits, tgt_boxes, inter_matrices, prior_boxes, ids):
+    def box_loss(self, box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_ids):
         """
         Gets bounding box loss and corresponding bounding box analysis.
 
         Args:
             box_logits (FloatTensor): Bounding box logits of shape [batch_size, num_preds, 4].
             tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
-            inter_matrices (List): List [batch_size] with intersection matrices of shape [num_preds, num_targets+1].
-            prior_boxes (Boxes): Boxes structure containing prior boxes (i.e. anchors) of size [num_preds].
-            ids (List): List [batch_size] with target indices corresponding to each prediction of shape [num_preds].
+            tgt_ids (List): List [batch_size] with target indices corresponding to each feature of shape [num_feats].
+            weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
+            feat_cts (FloatTensor): Feature centers in (x, y) format of shape [num_feats, 2].
+            feat_wh (FloatTensor): Feature widths and heights of shape [num_feats, 2].
+            obj_ids (List): List [batch_size] with objectness indices of shape [num_feats].
 
         Returns:
             box_loss_dict (Dict): Bounding box loss dictionary containing following key:
@@ -411,11 +411,12 @@ class DFD(nn.Module):
         box_loss_dict = {'dfd_box_loss': torch.zeros(1, **tensor_kwargs)}
         box_analysis_dict = {'dfd_box_acc': torch.zeros(1, **tensor_kwargs)}
 
-        # Get batch size
+        # Get batch size and zip tuple
         batch_size = len(box_logits)
+        zip_tuple = (box_logits, tgt_boxes, tgt_ids, weights, obj_ids)
 
         # Iterate over every batch entry
-        for box_logits_i, tgt_boxes_i, inter_matrix, tgt_ids in zip(box_logits, tgt_boxes, inter_matrices, ids):
+        for box_logits_i, tgt_boxes_i, tgt_ids_i, weights_i, obj_ids_i in zip(*zip_tuple):
 
             # Get number of targets
             num_tgts = len(tgt_boxes_i)
@@ -427,36 +428,38 @@ class DFD(nn.Module):
                 continue
 
             # Get selected bounding box logits
-            box_logits_i = box_logits_i[tgt_ids < num_tgts]
+            box_mask = obj_ids_i == 1
+            box_logits_i = box_logits_i[box_mask]
 
             # Get corresponding bounding box targets
-            prior_boxes_i = prior_boxes[tgt_ids < num_tgts]
-            tgt_boxes_i = tgt_boxes_i[tgt_ids[tgt_ids < num_tgts]]
-            box_targets_i = get_box_deltas(prior_boxes_i, tgt_boxes_i)
+            box_tgt_ids = tgt_ids_i[box_mask]
+            tgt_boxes_i = tgt_boxes_i[box_tgt_ids]
+            box_targets_i = get_edge_dists(feat_cts[box_mask], tgt_boxes_i, scales=feat_wh[box_mask])
 
             # Get unweighted bounding box losses
             box_kwargs = {'beta': self.box_sl1_beta, 'reduction': 'none'}
             box_losses = smooth_l1_loss(box_logits_i, box_targets_i, **box_kwargs)
 
             # Get weights normalized per target
-            inters, _ = torch.max(inter_matrix, dim=1)
-            inters = inters[tgt_ids < num_tgts]
-            weights = torch.zeros_like(inters)
+            weights_i = weights_i[box_mask]
+            norm_weights = torch.zeros_like(weights_i)
 
             for tgt_id in range(num_tgts):
-                tgt_mask = tgt_ids[tgt_ids < num_tgts] == tgt_id
-                weights[tgt_mask] = inters[tgt_mask] / inters[tgt_mask].sum()
+                tgt_mask = box_tgt_ids == tgt_id
+                norm_weights[tgt_mask] = weights_i[tgt_mask] / weights_i[tgt_mask].sum()
 
             # Get weighted bounding box loss
-            box_losses = weights * box_losses.sum(dim=1)
+            box_losses = norm_weights * box_losses.sum(dim=1)
             box_loss = self.box_weight * box_losses.sum()
             box_loss_dict['dfd_box_loss'] += box_loss
 
             # Get bounding box accuracy
             with torch.no_grad():
-                pred_boxes_i = apply_box_deltas(box_logits_i, prior_boxes_i)
-                box_acc = box_iou(pred_boxes_i, tgt_boxes_i).diag().mean()
-                box_analysis_dict['dfd_box_acc'] += 100 * box_acc / batch_size
+                if box_mask.sum() > 0:
+                    pred_kwargs = {'scales': feat_wh[box_mask], 'normalized': 'img_with_padding'}
+                    pred_boxes_i = apply_edge_dists(box_logits_i, feat_cts[box_mask], **pred_kwargs)
+                    box_acc = box_iou(pred_boxes_i, tgt_boxes_i).diag().mean()
+                    box_analysis_dict['dfd_box_acc'] += 100 * box_acc / batch_size
 
         return box_loss_dict, box_analysis_dict
 
@@ -491,21 +494,17 @@ class DFD(nn.Module):
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
-        # Get batch size, device and number of elements per map
+        # Get batch size
         batch_size = len(feat_maps[0])
-        device = feat_maps[0].device
-        map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(device)
 
-        # Get position feature maps and position id maps
-        pos_feat_maps, pos_id_maps = sine_pos_encodings(feat_maps, normalize=True)
+        # Get feature centers
+        _, feat_cts_maps = sine_pos_encodings(feat_maps, normalize=True)
+        feat_cts = torch.cat([feat_cts_map.flatten(1).t() for feat_cts_map in feat_cts_maps], dim=0)
 
-        # Get prior boxes
-        prior_cxcy = torch.cat([pos_id_map.flatten(1).t() for pos_id_map in pos_id_maps], dim=0)
-        prior_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(prior_cxcy)
-        prior_wh = torch.repeat_interleave(prior_wh, map_numel, dim=0)
-
-        prior_boxes = torch.cat([prior_cxcy, prior_wh], dim=1)
-        prior_boxes = Boxes(prior_boxes, format='cxcywh', normalized='img_with_padding')
+        # Get feature widths and heights
+        map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(feat_cts.device)
+        feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_cts)
+        feat_wh = torch.repeat_interleave(feat_wh, map_numel, dim=0)
 
         # Get classification, objectness and bounding box logits
         cls_logits = torch.cat([cls_map.flatten(2).permute(0, 2, 1) for cls_map in self.cls_head(feat_maps)], dim=1)
@@ -515,15 +514,54 @@ class DFD(nn.Module):
         # Get loss and analysis dictionaries (trainval only)
         if tgt_dict is not None:
 
-            # Get intersection matrices between prior boxes and target boxes
-            inter_matrices = [box_intersection(prior_boxes, tgt_boxes_i) for tgt_boxes_i in tgt_dict['boxes']]
+            # Get total number of features and feature indices
+            num_feats = len(feat_cts)
+            feat_ids = torch.arange(num_feats, device=feat_cts.device)
 
-            # Add column with estimated background intersections (assuming no overlap between target boxes)
-            prior_areas = prior_boxes.area()
+            # Get feature boxes and corresponding areas
+            feat_boxes = torch.cat([feat_cts, feat_wh], dim=1)
+            feat_boxes = Boxes(feat_boxes, format='cxcywh', normalized='img_with_padding')
+            feat_areas = feat_boxes.area()
 
-            for i in range(batch_size):
-                bg_inters = torch.clamp(prior_areas - inter_matrices[i].sum(dim=1), min=0)
-                inter_matrices[i] = torch.cat([inter_matrices[i], bg_inters[:, None]], dim=1)
+            # Initialize empty lists
+            tgt_ids = []
+            weights = []
+
+            # Iterate over every batch entry
+            for tgt_boxes_i in tgt_dict['boxes']:
+
+                # Get number of targets
+                num_tgts = len(tgt_boxes_i)
+
+                # Get target indices and weights when there are targets
+                if num_tgts > 0:
+
+                    # Check which feature centers lie inside target boxes
+                    inside_tgt_boxes_i = pts_inside_boxes(feat_cts, tgt_boxes_i)
+
+                    # Get IoU and intersection matrices between feature boxes and target boxes
+                    ious_i, inters_i = box_iou(feat_boxes, tgt_boxes_i, return_inters=True)
+
+                    # Get target ids and weights corresponding to each feature
+                    max_values, tgt_ids_i = torch.max(inside_tgt_boxes_i * ious_i, dim=1)
+                    weights_i = inters_i[feat_ids, tgt_ids_i]
+
+                    # Assign features with center outside every target box to background
+                    background = max_values == 0
+                    num_tgts = len(tgt_boxes_i)
+                    tgt_ids_i[background] = num_tgts
+
+                    bg_weights_i = torch.clamp(feat_areas - inters_i.sum(dim=1), min=0)
+                    weights_i[background] = bg_weights_i[background]
+
+                # Get target indices and weights when there are no targets
+                else:
+                    tgt_ids_i = torch.zeros_like(feat_ids)
+                    weights_i = feat_areas
+
+                # Add results to their corresponding lists
+                tgt_ids.append(tgt_ids_i)
+                weights.append(weights_i)
 
             # Initialize empty loss and analysis dictionaries
             loss_dict = {}
@@ -531,18 +569,19 @@ class DFD(nn.Module):
 
             # Get classification loss and analysis
             tgt_labels = tgt_dict['labels']
-            cls_loss_dict, cls_analysis_dict = self.cls_loss(cls_logits, tgt_labels, inter_matrices)
+            cls_loss_dict, cls_analysis_dict = self.cls_loss(cls_logits, tgt_labels, tgt_ids, weights)
             loss_dict.update(cls_loss_dict)
             analysis_dict.update(cls_analysis_dict)
 
             # Get objectness loss and analysis
             tgt_boxes = tgt_dict['boxes']
-            obj_loss_dict, obj_analysis_dict, ids = self.obj_loss(obj_logits, tgt_boxes, inter_matrices, prior_boxes)
+            obj_loss_dict, obj_analysis_dict, obj_ids = self.obj_loss(obj_logits, tgt_boxes, tgt_ids, weights, feat_wh)
             loss_dict.update(obj_loss_dict)
             analysis_dict.update(obj_analysis_dict)
 
             # Get bounding box loss and analysis
-            box_loss_dict, box_analysis_dict = self.box_loss(box_logits, tgt_boxes, inter_matrices, prior_boxes, ids)
+            box_args = (box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_ids)
+            box_loss_dict, box_analysis_dict = self.box_loss(*box_args)
             loss_dict.update(box_loss_dict)
             analysis_dict.update(box_analysis_dict)
 
@@ -556,7 +595,7 @@ class DFD(nn.Module):
             cls_scores = cls_scores.sigmoid()
 
             # Get objectness scores
-            obj_scores = obj_logits[:, :, 0].sigmoid()
+            obj_scores = obj_logits[:, :, 1].sigmoid()
 
             # Initialize list of prediciton dictionaries
             pred_dicts = []
@@ -575,7 +614,7 @@ class DFD(nn.Module):
                     candidate_ids = sort_ids[:self.inf_nms_candidates]
 
                     # Perform NMS and only keep the requested number of best remaining detections
-                    boxes_i = apply_box_deltas(box_logits[i], prior_boxes)
+                    boxes_i = apply_edge_dists(box_logits[i], feat_cts, scales=feat_wh, normalized='img_with_padding')
                     boxes_i = boxes_i[candidate_ids].to_format('xyxy')
 
                     scores_i = scores_i[:self.inf_nms_candidates]
