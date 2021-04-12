@@ -37,6 +37,12 @@ class DFD(nn.Module):
         box_sl1_beta (float): Beta value of the smooth L1 loss used by the bounding box head.
         box_weight (float): Factor weighting the bounding box loss.
 
+        pos_head (nn.Sequential): Module computing the position encodings.
+        ins_head (nn.Sequential): Module computing the instance features.
+        ins_focal_alpha (float): Alpha value of the sigmoid focal loss used by the instance head.
+        ins_focal_gamma (float): Gamma value of the sigmoid focal loss used by the instance head.
+        ins_weight (float): Factor weighting the instance loss.
+
         inf_nms_candidates (int): Maximum number of candidates retained for NMS during inference.
         inf_iou_threshold (float): Value determining the IoU threshold of NMS during inference.
         inf_max_detections (int): Maximum number of detections retained during inference.
@@ -44,7 +50,7 @@ class DFD(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, in_feat_size, cls_dict, obj_dict, box_dict, inf_dict, metadata):
+    def __init__(self, in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata):
         """
         Initializes the DFD module.
 
@@ -85,6 +91,25 @@ class DFD(nn.Module):
 
                 - sl1_beta (float): beta value of the smooth L1 loss used by the bounding box head;
                 - weight (float): factor weighting the bounding box loss.
+
+            pos_dict (Dict): Position head dictionary containing following keys:
+                - feat_size (int): hidden and output feature size of the position head;
+                - norm (str): string specifying the type of normalization used within the position head;
+                - kernel_size (int): kernel size used by the position head for both input and hidden layers;
+                - bottle_size (int): bottleneck size used by bottleneck layers of the position head;
+                - hidden_layers (int): number of hidden layers of the position head.
+
+            ins_dict (Dict): Instance head dictionary containing following keys:
+                - feat_size (int): hidden feature size of the instance head;
+                - norm (str): string specifying the type of normalization used within the instance head;
+                - kernel_size (int): kernel size used by hidden layers of the instance head;
+                - bottle_size (int): bottleneck size used by bottleneck layers of the instance head;
+                - hidden_layers (int): number of hidden layers of the instance head;
+                - out_size (int): output feature size of the instance head;
+
+                - focal_alpha (float): alpha value of the sigmoid focal loss used by the instance head;
+                - focal_gamma (float): gamma value of the sigmoid focal loss used by the instance head;
+                - weight (float): factor weighting the instance loss.
 
             inf_dict (Dict): Inference dictionary containing following keys:
                 - nms_candidates (int): maximum number of candidates retained for NMS during inference;
@@ -168,6 +193,45 @@ class DFD(nn.Module):
 
         self.box_sl1_beta = box_dict['sl1_beta']
         self.box_weight = box_dict['weight']
+
+        # Initialization of position head
+        pos_feat_size = pos_dict['feat_size']
+        pos_norm = pos_dict['norm']
+
+        if pos_dict['kernel_size'] == 1:
+            pos_hidden_layer = ProjConv(pos_feat_size, norm=pos_norm, skip=True)
+        else:
+            bottleneck_kwargs = {'kernel_size': pos_dict['kernel_size'], 'norm': pos_norm, 'skip': True}
+            pos_hidden_layer = BottleneckConv(pos_feat_size, pos_dict['bottle_size'], **bottleneck_kwargs)
+
+        pos_in_layer = ProjConv(2, pos_feat_size, pos_dict['kernel_size'], norm=pos_norm, skip=False)
+        pos_hidden_layers = nn.Sequential(*[deepcopy(pos_hidden_layer) for _ in range(pos_dict['hidden_layers'])])
+        pos_head_dict = OrderedDict([('in', pos_in_layer), ('hidden', pos_hidden_layers)])
+        self.pos_head = nn.Sequential(pos_head_dict)
+
+        # Initialization of instance head
+        ins_feat_size = ins_dict['feat_size']
+        ins_norm = ins_dict['norm']
+
+        ins_in_size = in_feat_size + pos_feat_size
+        ins_out_size = ins_dict['out_size']
+
+        ins_in_layer = ProjConv(ins_in_size, ins_feat_size, norm=ins_norm, skip=False)
+        ins_out_layer = ProjConv(ins_feat_size, ins_out_size, norm=ins_norm, skip=False)
+
+        if ins_dict['kernel_size'] == 1:
+            ins_hidden_layer = ProjConv(ins_feat_size, norm=ins_norm, skip=True)
+        else:
+            bottleneck_kwargs = {'kernel_size': ins_dict['kernel_size'], 'norm': ins_norm, 'skip': True}
+            ins_hidden_layer = BottleneckConv(ins_feat_size, ins_dict['bottle_size'], **bottleneck_kwargs)
+
+        ins_hidden_layers = nn.Sequential(*[deepcopy(ins_hidden_layer) for _ in range(ins_dict['hidden_layers'])])
+        ins_head_dict = OrderedDict([('in', ins_in_layer), ('hidden', ins_hidden_layers), ('out', ins_out_layer)])
+        self.ins_head = nn.Sequential(ins_head_dict)
+
+        self.ins_focal_alpha = ins_dict['focal_alpha']
+        self.ins_focal_gamma = ins_dict['focal_gamma']
+        self.ins_weight = ins_dict['weight']
 
         # Set inference attributes
         self.inf_nms_candidates = inf_dict['nms_candidates']
@@ -303,7 +367,8 @@ class DFD(nn.Module):
             obj_analysis_dict (Dict): Objectness analysis dictionary containing following key:
                 - dfd_obj_acc (FloatTensor): objectness accuracy of shape [1].
 
-            obj_ids (List): List [batch_size] with objectness indices of shape [num_feats].
+            tgt_map_ids (List): List [batch_size] with map indices corresponding to each target of shape [num_targets].
+            obj_targets (List): List [batch_size] with objectness target labels of shape [num_feats].
         """
 
         # Initialize empty objectness loss and analysis dictionaries
@@ -311,8 +376,9 @@ class DFD(nn.Module):
         obj_loss_dict = {'dfd_obj_loss': torch.zeros(1, **tensor_kwargs)}
         obj_analysis_dict = {'dfd_obj_acc': torch.zeros(1, **tensor_kwargs)}
 
-        # Initialize empty list for objectness indices
-        obj_ids = []
+        # Initialize empty lists for target map ids and objectness targets
+        tgt_map_ids = []
+        obj_targets = []
 
         # Get batch size, feature indices and feature areas
         batch_size = len(obj_logits)
@@ -329,40 +395,37 @@ class DFD(nn.Module):
             # Get number of targets
             num_tgts = len(tgt_boxes_i)
 
-            # Get objectness ids
+            # Get target map ids and objectness targets
             if num_tgts > 0:
                 tgt_sizes_i = tgt_boxes_i.to_format('cxcywh').boxes[:, 2:]
                 rel_sizes = feat_wh[:, None] / tgt_sizes_i[None, :]
                 rel_sizes, _ = torch.max(rel_sizes, dim=2)
 
                 rel_sizes[rel_sizes > 1] = 0
-                max_values, lower_map_ids = torch.max(rel_sizes, dim=0)
-                lower_map_ids[max_values == 0] = -1
-                upper_map_ids = lower_map_ids + 1
+                tgt_map_ids_i = torch.argmax(rel_sizes, dim=0)
 
-                map_ids = torch.stack([lower_map_ids, upper_map_ids], dim=1)
-                map_ids = torch.clamp(map_ids, min=0, max=num_maps-1)
-
-                obj_ids_i = torch.zeros(num_maps, num_tgts+1).to(tgt_ids_i)
-                obj_ids_i[map_ids, torch.arange(num_tgts)[:, None]] = 1
-                obj_ids_i = torch.repeat_interleave(obj_ids_i, map_numel, dim=0)
-                obj_ids_i = obj_ids_i[feat_ids, tgt_ids_i]
+                obj_targets_i = torch.zeros(num_maps, num_tgts+1).to(tgt_ids_i)
+                obj_targets_i[tgt_map_ids_i, torch.arange(num_tgts)] = 1
+                obj_targets_i = torch.repeat_interleave(obj_targets_i, map_numel, dim=0)
+                obj_targets_i = obj_targets_i[feat_ids, tgt_ids_i]
 
             else:
-                obj_ids_i = torch.zeros_like(tgt_ids_i)
+                tgt_map_ids_i = torch.zeros(0, device=tgt_ids_i.device)
+                obj_targets_i = torch.zeros_like(tgt_ids_i)
 
-            # Add objectness ids to corresponding list
-            obj_ids.append(obj_ids_i)
+            # Add target map ids and objectness targets to their corresponding lists
+            tgt_map_ids.append(tgt_map_ids_i)
+            obj_targets.append(obj_targets_i)
 
-            # Get objectness targets
-            obj_targets_oh_i = F.one_hot(obj_ids_i, 2).to(obj_logits_i.dtype)
+            # Get one-hot objectness targets
+            obj_targets_oh_i = F.one_hot(obj_targets_i, 2).to(obj_logits_i.dtype)
 
             # Get unweighted objectness losses
             obj_kwargs = {'alpha': self.obj_focal_alpha, 'gamma': self.obj_focal_gamma, 'reduction': 'none'}
             obj_losses = sigmoid_focal_loss(obj_logits_i, obj_targets_oh_i, **obj_kwargs)
 
             # Get weights normalized per target
-            obj_tgt_ids = torch.where(obj_ids_i == 1, tgt_ids_i, -1)
+            obj_tgt_ids = torch.where(obj_targets_i == 1, tgt_ids_i, -1)
             norm_weights = torch.zeros_like(weights_i)
 
             for obj_tgt_id in range(num_tgts):
@@ -380,12 +443,12 @@ class DFD(nn.Module):
             # Get objectness accuracy
             with torch.no_grad():
                 obj_preds_i = torch.argmax(obj_logits_i, dim=1)
-                obj_acc = torch.eq(obj_preds_i, obj_ids_i).sum() / len(obj_preds_i)
+                obj_acc = torch.eq(obj_preds_i, obj_targets_i).sum() / len(obj_preds_i)
                 obj_analysis_dict['dfd_obj_acc'] += 100 * obj_acc / batch_size
 
-        return obj_loss_dict, obj_analysis_dict, obj_ids
+        return obj_loss_dict, obj_analysis_dict, tgt_map_ids, obj_targets
 
-    def box_loss(self, box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_ids):
+    def box_loss(self, box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_targets):
         """
         Gets bounding box loss and corresponding bounding box analysis.
 
@@ -396,7 +459,7 @@ class DFD(nn.Module):
             weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
             feat_cts (FloatTensor): Feature centers in (x, y) format of shape [num_feats, 2].
             feat_wh (FloatTensor): Feature widths and heights of shape [num_feats, 2].
-            obj_ids (List): List [batch_size] with objectness indices of shape [num_feats].
+            obj_targets (List): List [batch_size] with objectness target labels of shape [num_feats].
 
         Returns:
             box_loss_dict (Dict): Bounding box loss dictionary containing following key:
@@ -413,10 +476,10 @@ class DFD(nn.Module):
 
         # Get batch size and zip tuple
         batch_size = len(box_logits)
-        zip_tuple = (box_logits, tgt_boxes, tgt_ids, weights, obj_ids)
+        zip_tuple = (box_logits, tgt_boxes, tgt_ids, weights, obj_targets)
 
         # Iterate over every batch entry
-        for box_logits_i, tgt_boxes_i, tgt_ids_i, weights_i, obj_ids_i in zip(*zip_tuple):
+        for box_logits_i, tgt_boxes_i, tgt_ids_i, weights_i, obj_targets_i in zip(*zip_tuple):
 
             # Get number of targets
             num_tgts = len(tgt_boxes_i)
@@ -428,7 +491,7 @@ class DFD(nn.Module):
                 continue
 
             # Get selected bounding box logits
-            box_mask = obj_ids_i == 1
+            box_mask = obj_targets_i == 1
             box_logits_i = box_logits_i[box_mask]
 
             # Get corresponding bounding box targets
@@ -511,6 +574,14 @@ class DFD(nn.Module):
         obj_logits = torch.cat([obj_map.flatten(2).permute(0, 2, 1) for obj_map in self.obj_head(feat_maps)], dim=1)
         box_logits = torch.cat([box_map.flatten(2).permute(0, 2, 1) for box_map in self.box_head(feat_maps)], dim=1)
 
+        # Get feature maps augmented with position encodings
+        pos_maps = [self.pos_head(feat_cts_map[None, :]) for feat_cts_map in feat_cts_maps]
+        pos_maps = [pos_map.expand(batch_size, -1, -1, -1) for pos_map in pos_maps]
+        aug_maps = [torch.cat([feat_map, pos_map], dim=1) for feat_map, pos_map in zip(feat_maps, pos_maps)]
+
+        # Get instance features
+        _ = torch.cat([ins_map.flatten(2).permute(0, 2, 1) for ins_map in self.ins_head(aug_maps)], dim=1)
+
         # Get loss and analysis dictionaries (trainval only)
         if tgt_dict is not None:
 
@@ -575,12 +646,13 @@ class DFD(nn.Module):
 
             # Get objectness loss and analysis
             tgt_boxes = tgt_dict['boxes']
-            obj_loss_dict, obj_analysis_dict, obj_ids = self.obj_loss(obj_logits, tgt_boxes, tgt_ids, weights, feat_wh)
+            obj_args = (obj_logits, tgt_boxes, tgt_ids, weights, feat_wh)
+            obj_loss_dict, obj_analysis_dict, tgt_map_ids, obj_targets = self.obj_loss(*obj_args)
             loss_dict.update(obj_loss_dict)
             analysis_dict.update(obj_analysis_dict)
 
             # Get bounding box loss and analysis
-            box_args = (box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_ids)
+            box_args = (box_logits, tgt_boxes, tgt_ids, weights, feat_cts, feat_wh, obj_targets)
             box_loss_dict, box_analysis_dict = self.box_loss(*box_args)
             loss_dict.update(box_loss_dict)
             analysis_dict.update(box_analysis_dict)

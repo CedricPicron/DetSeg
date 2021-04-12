@@ -85,10 +85,20 @@ def build_det_heads(args):
             box_dict = {**box_dict, 'hidden_layers': args.dfd_box_hidden_layers, 'sl1_beta': args.dfd_box_sl1_beta}
             box_dict = {**box_dict, 'weight': args.dfd_box_weight}
 
+            pos_dict = {'feat_size': args.dfd_pos_feat_size, 'norm': args.dfd_pos_norm}
+            pos_dict = {**pos_dict, 'kernel_size': args.dfd_pos_kernel_size, 'bottle_size': args.dfd_pos_bottle_size}
+            pos_dict = {**pos_dict, 'hidden_layers': args.dfd_pos_hidden_layers}
+
+            ins_dict = {'feat_size': args.dfd_ins_feat_size, 'norm': args.dfd_ins_norm}
+            ins_dict = {**ins_dict, 'kernel_size': args.dfd_ins_kernel_size, 'bottle_size': args.dfd_ins_bottle_size}
+            ins_dict = {**ins_dict, 'hidden_layers': args.dfd_ins_hidden_layers, 'out_size': args.dfd_ins_out_size}
+            ins_dict = {**ins_dict, 'focal_alpha': args.dfd_ins_focal_alpha, 'focal_gamma': args.dfd_ins_focal_gamma}
+            ins_dict = {**ins_dict, 'weight': args.dfd_ins_weight}
+
             inf_dict = {'nms_candidates': args.dfd_inf_nms_candidates, 'iou_threshold': args.dfd_inf_iou_threshold}
             inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
 
-            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, inf_dict, metadata)
+            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata)
             det_heads.append(dfd_head)
 
         elif det_head_type == 'retina':
