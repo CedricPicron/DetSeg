@@ -591,11 +591,12 @@ class DFD(nn.Module):
         if tgt_dict is None:
 
             # Get predicted labels and corresponding classification scores
-            cls_scores, labels = cls_logits[:, :, :-1].max(dim=2)
-            cls_scores = cls_scores.sigmoid()
+            cls_scores = cls_logits.softmax(dim=2)
+            cls_scores, labels = cls_scores[:, :, :-1].max(dim=2)
 
             # Get objectness scores
-            obj_scores = obj_logits[:, :, 1].sigmoid()
+            obj_scores = obj_logits.softmax(dim=2)
+            obj_scores = obj_logits[:, :, 1]
 
             # Initialize list of prediciton dictionaries
             pred_dicts = []
