@@ -90,12 +90,15 @@ def build_det_heads(args):
             pos_dict = {**pos_dict, 'hidden_layers': args.dfd_pos_hidden_layers}
 
             ins_dict = {'feat_size': args.dfd_ins_feat_size, 'norm': args.dfd_ins_norm}
-            ins_dict = {**ins_dict, 'kernel_size': args.dfd_ins_kernel_size, 'bottle_size': args.dfd_ins_bottle_size}
+            ins_dict = {**ins_dict, 'prior_prob': args.dfd_ins_prior_prob, 'kernel_size': args.dfd_ins_kernel_size}
+            ins_dict = {**ins_dict, 'bottle_size': args.dfd_ins_bottle_size}
             ins_dict = {**ins_dict, 'hidden_layers': args.dfd_ins_hidden_layers, 'out_size': args.dfd_ins_out_size}
             ins_dict = {**ins_dict, 'focal_alpha': args.dfd_ins_focal_alpha, 'focal_gamma': args.dfd_ins_focal_gamma}
             ins_dict = {**ins_dict, 'weight': args.dfd_ins_weight}
 
-            inf_dict = {'nms_candidates': args.dfd_inf_nms_candidates, 'iou_threshold': args.dfd_inf_iou_threshold}
+            inf_dict = {'nms_candidates': args.dfd_inf_nms_candidates, 'nms_threshold': args.dfd_inf_nms_threshold}
+            inf_dict = {**inf_dict, 'ins_candidates': args.dfd_inf_ins_candidates}
+            inf_dict = {**inf_dict, 'ins_threshold': args.dfd_inf_ins_threshold}
             inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
 
             dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata)

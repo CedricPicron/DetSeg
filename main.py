@@ -147,7 +147,7 @@ def get_parser():
 
     parser.add_argument('--dfd_cls_focal_alpha', default=0.25, type=float, help='classification focal alpha value')
     parser.add_argument('--dfd_cls_focal_gamma', default=2.0, type=float, help='classification focal gamma value')
-    parser.add_argument('--dfd_cls_weight', default=1.0, type=float, help='classification loss weight')
+    parser.add_argument('--dfd_cls_weight', default=1e0, type=float, help='classification loss weight')
 
     parser.add_argument('--dfd_obj_feat_size', default=256, type=int, help='objectness hidden feature size')
     parser.add_argument('--dfd_obj_norm', default='group', type=str, help='normalization type of objectness head')
@@ -158,7 +158,7 @@ def get_parser():
 
     parser.add_argument('--dfd_obj_focal_alpha', default=0.25, type=float, help='objectness focal alpha value')
     parser.add_argument('--dfd_obj_focal_gamma', default=2.0, type=float, help='objectness focal gamma value')
-    parser.add_argument('--dfd_obj_weight', default=1.0, type=float, help='objectness loss weight')
+    parser.add_argument('--dfd_obj_weight', default=1e1, type=float, help='objectness loss weight')
 
     parser.add_argument('--dfd_box_feat_size', default=256, type=int, help='bounding box hidden feature size')
     parser.add_argument('--dfd_box_norm', default='group', type=str, help='normalization type of bounding box head')
@@ -167,7 +167,7 @@ def get_parser():
     parser.add_argument('--dfd_box_hidden_layers', default=1, type=int, help='number of bounding box hidden layers')
 
     parser.add_argument('--dfd_box_sl1_beta', default=0.0, type=float, help='bounding box smooth L1 beta value')
-    parser.add_argument('--dfd_box_weight', default=1.0, type=float, help='bounding box loss weight')
+    parser.add_argument('--dfd_box_weight', default=2e-1, type=float, help='bounding box loss weight')
 
     parser.add_argument('--dfd_pos_feat_size', default=64, type=int, help='position encoding feature size')
     parser.add_argument('--dfd_pos_norm', default='', type=str, help='normalization type of position head')
@@ -177,6 +177,7 @@ def get_parser():
 
     parser.add_argument('--dfd_ins_feat_size', default=256, type=int, help='instance hidden feature size')
     parser.add_argument('--dfd_ins_norm', default='group', type=str, help='normalization type of instance head')
+    parser.add_argument('--dfd_ins_prior_prob', default=0.01, type=float, help='prior instance probability')
     parser.add_argument('--dfd_ins_kernel_size', default=3, type=int, help='instance hidden layer kernel size')
     parser.add_argument('--dfd_ins_bottle_size', default=64, type=int, help='instance bottleneck feature size')
     parser.add_argument('--dfd_ins_hidden_layers', default=1, type=int, help='number of instance hidden layers')
@@ -184,10 +185,12 @@ def get_parser():
 
     parser.add_argument('--dfd_ins_focal_alpha', default=0.25, type=float, help='instance focal alpha value')
     parser.add_argument('--dfd_ins_focal_gamma', default=2.0, type=float, help='instance focal gamma value')
-    parser.add_argument('--dfd_ins_weight', default=1.0, type=float, help='instance loss weight')
+    parser.add_argument('--dfd_ins_weight', default=5e0, type=float, help='instance loss weight')
 
     parser.add_argument('--dfd_inf_nms_candidates', default=1000, type=int, help='max candidates for inference NMS')
-    parser.add_argument('--dfd_inf_iou_threshold', default=0.5, type=float, help='IoU threshold during inference NMS')
+    parser.add_argument('--dfd_inf_nms_threshold', default=0.5, type=float, help='IoU threshold during inference NMS')
+    parser.add_argument('--dfd_inf_ins_candidates', default=1000, type=int, help='max candidates for instance head')
+    parser.add_argument('--dfd_inf_ins_threshold', default=0.5, type=float, help='instance threshold during inference')
     parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
 
     # *** Retina head

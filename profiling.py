@@ -217,8 +217,9 @@ elif profiling_args.model == 'brd_head':
     batch_size = 2
     num_targets = 10
     labels = [torch.randint(main_args.num_classes, (num_targets,), device='cuda') for _ in range(batch_size)]
-    boxes = [torch.abs(torch.randn(num_targets, 4, device='cuda')) for _ in range(batch_size)]
-    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', 'img_with_padding') for boxes_i in boxes]
+    boxes = [torch.abs(torch.randn(num_targets, 2, device='cuda')) for _ in range(batch_size)]
+    boxes = [torch.cat([boxes_i, boxes_i+1], dim=1) for boxes_i in boxes]
+    boxes = [Boxes(boxes_i/boxes_i.max(), 'xyxy', 'img_with_padding') for boxes_i in boxes]
     tgt_dict = {'labels': labels, 'boxes': boxes}
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
@@ -295,8 +296,9 @@ elif profiling_args.model == 'dfd_head':
     batch_size = 2
     num_targets = 10
     labels = [torch.randint(main_args.num_classes, (num_targets,), device='cuda') for _ in range(batch_size)]
-    boxes = [torch.abs(torch.randn(num_targets, 4, device='cuda')) for _ in range(batch_size)]
-    boxes = [Boxes(boxes_i/boxes_i.max(), 'cxcywh', 'img_with_padding') for boxes_i in boxes]
+    boxes = [torch.abs(torch.randn(num_targets, 2, device='cuda')) for _ in range(batch_size)]
+    boxes = [torch.cat([boxes_i, boxes_i+1], dim=1) for boxes_i in boxes]
+    boxes = [Boxes(boxes_i/boxes_i.max(), 'xyxy', 'img_with_padding') for boxes_i in boxes]
     tgt_dict = {'labels': labels, 'boxes': boxes}
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}

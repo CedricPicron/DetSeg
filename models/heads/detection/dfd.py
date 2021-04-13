@@ -12,6 +12,7 @@ from fvcore.nn import sigmoid_focal_loss, smooth_l1_loss
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 
 from models.functional.position import sine_pos_encodings
 from models.modules.convolution import BottleneckConv, ProjConv
@@ -38,13 +39,17 @@ class DFD(nn.Module):
         box_weight (float): Factor weighting the bounding box loss.
 
         pos_head (nn.Sequential): Module computing the position encodings.
+
         ins_head (nn.Sequential): Module computing the instance features.
+        ins_bias (nn.Parameter): Bias value related to the probability of two features belonging to the same instance.
         ins_focal_alpha (float): Alpha value of the sigmoid focal loss used by the instance head.
         ins_focal_gamma (float): Gamma value of the sigmoid focal loss used by the instance head.
         ins_weight (float): Factor weighting the instance loss.
 
         inf_nms_candidates (int): Maximum number of candidates retained for NMS during inference.
-        inf_iou_threshold (float): Value determining the IoU threshold of NMS during inference.
+        inf_nms_threshold (float): Value determining the IoU threshold of NMS during inference.
+        inf_ins_candidates (int): Maximum number of candidates retained for instance head duplicate removal.
+        inf_ins_threshold (float): Value determining whether two features are considered duplicates or not.
         inf_max_detections (int): Maximum number of detections retained during inference.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -102,6 +107,7 @@ class DFD(nn.Module):
             ins_dict (Dict): Instance head dictionary containing following keys:
                 - feat_size (int): hidden feature size of the instance head;
                 - norm (str): string specifying the type of normalization used within the instance head;
+                - prior_prob (float): prior instance probability;
                 - kernel_size (int): kernel size used by hidden layers of the instance head;
                 - bottle_size (int): bottleneck size used by bottleneck layers of the instance head;
                 - hidden_layers (int): number of hidden layers of the instance head;
@@ -113,7 +119,9 @@ class DFD(nn.Module):
 
             inf_dict (Dict): Inference dictionary containing following keys:
                 - nms_candidates (int): maximum number of candidates retained for NMS during inference;
-                - iou_threshold (float): value determining the IoU threshold of NMS during inference;
+                - nms_threshold (float): value determining the IoU threshold of NMS during inference;
+                - ins_candidates (int): maximum number of candidates retained for instance head duplicate removal;
+                - ins_threshold (float): value determining whether two features are considered duplicates or not;
                 - max_detections (int): maximum number of detections retained during inference.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -229,13 +237,19 @@ class DFD(nn.Module):
         ins_head_dict = OrderedDict([('in', ins_in_layer), ('hidden', ins_hidden_layers), ('out', ins_out_layer)])
         self.ins_head = nn.Sequential(ins_head_dict)
 
+        ins_prior_prob = ins_dict['prior_prob']
+        bias_value = -(math.log((1 - ins_prior_prob) / ins_prior_prob))
+        self.ins_bias = Parameter(torch.tensor([bias_value]))
+
         self.ins_focal_alpha = ins_dict['focal_alpha']
         self.ins_focal_gamma = ins_dict['focal_gamma']
         self.ins_weight = ins_dict['weight']
 
         # Set inference attributes
         self.inf_nms_candidates = inf_dict['nms_candidates']
-        self.inf_iou_threshold = inf_dict['iou_threshold']
+        self.inf_nms_threshold = inf_dict['nms_threshold']
+        self.inf_ins_candidates = inf_dict['ins_candidates']
+        self.inf_ins_threshold = inf_dict['ins_threshold']
         self.inf_max_detections = inf_dict['max_detections']
 
         # Set metadata attribute
@@ -453,7 +467,7 @@ class DFD(nn.Module):
         Gets bounding box loss and corresponding bounding box analysis.
 
         Args:
-            box_logits (FloatTensor): Bounding box logits of shape [batch_size, num_preds, 4].
+            box_logits (FloatTensor): Bounding box logits of shape [batch_size, num_feats, 4].
             tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
             tgt_ids (List): List [batch_size] with target indices corresponding to each feature of shape [num_feats].
             weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
@@ -526,6 +540,106 @@ class DFD(nn.Module):
 
         return box_loss_dict, box_analysis_dict
 
+    def ins_loss(self, ins_feats, tgt_boxes, tgt_ids, weights, feat_wh, tgt_map_ids):
+        """
+        Gets instance loss and corresponding instance analysis.
+
+        Args:
+            ins_feats (FloatTensor): Features for instance separation of shape [batch_size, num_feats, ins_feat_size].
+            tgt_boxes (List): List [batch_size] with normalized Boxes structure of size [num_targets].
+            tgt_ids (List): List [batch_size] with target indices corresponding to each feature of shape [num_feats].
+            weights (List): List [batch_size] with weights corresponding to each feature of shape [num_feats].
+            feat_wh (FloatTensor): Feature widths and heights of shape [num_feats, 2].
+            tgt_map_ids (List): List [batch_size] with map indices corresponding to each target of shape [num_targets].
+
+        Returns:
+            ins_loss_dict (Dict): Instance loss dictionary containing following key:
+                - dfd_ins_loss (FloatTensor): weighted instance loss of shape [1].
+
+            ins_analysis_dict (Dict): Instance analysis dictionary containing following key:
+                - dfd_ins_acc (FloatTensor): instance accuracy of shape [1].
+        """
+
+        # Initialize empty instance loss and analysis dictionaries
+        tensor_kwargs = {'dtype': ins_feats.dtype, 'device': ins_feats.device}
+        ins_loss_dict = {'dfd_ins_loss': torch.zeros(1, **tensor_kwargs)}
+        ins_analysis_dict = {'dfd_ins_acc': torch.zeros(1, **tensor_kwargs)}
+
+        # Get batch size, number of features in total and zip tuple
+        batch_size = len(ins_feats)
+        num_feats = len(feat_wh)
+        zip_tuple = (ins_feats, tgt_boxes, tgt_ids, weights, tgt_map_ids)
+
+        # Get feature areas and get unique feature widths and heights
+        feat_areas = feat_wh[:, 0] * feat_wh[:, 1]
+        feat_wh, map_numel = torch.unique_consecutive(feat_wh, return_counts=True, dim=0)
+
+        # Get cumulative number of elements per map
+        cum_map_numel = torch.tensor([0, *map_numel.tolist()]).to(map_numel)
+        cum_map_numel = torch.cumsum(cum_map_numel[:-1], dim=0)
+
+        # Iterate over every batch entry
+        for ins_feats_i, tgt_boxes_i, tgt_ids_i, weights_i, tgt_map_ids_i in zip(*zip_tuple):
+
+            # Get number of targets
+            num_tgts = len(tgt_boxes_i)
+
+            # Skip batch entry if there are no targets
+            if num_tgts == 0:
+                ins_loss_dict['dfd_ins_loss'] += 0.0 * ins_feats_i.sum()
+                ins_analysis_dict['dfd_ins_acc'] += 100 / batch_size
+                continue
+
+            # Get ids of center feature for each target
+            tgt_cts_i = tgt_boxes_i.to_format('cxcywh').boxes[:, :2]
+            feat_wh_i = feat_wh[tgt_map_ids_i]
+            ct_feat_ids_i = (tgt_cts_i // feat_wh_i).to(torch.int64)
+
+            numel_row_i = (1/feat_wh_i[:, 0]).to(torch.int64)
+            ct_feat_ids_i = ct_feat_ids_i[:, 0] + numel_row_i * ct_feat_ids_i[:, 1]
+            ct_feat_ids_i = cum_map_numel[tgt_map_ids_i] + ct_feat_ids_i
+
+            # Get instance logits
+            ct_feats_i = ins_feats_i[ct_feat_ids_i]
+            ins_logits_i = torch.mm(ct_feats_i, ins_feats_i.t()) + self.ins_bias
+            ins_logits_i = ins_logits_i.view(-1, 1)
+
+            # Get instance targets
+            ins_targets_i = tgt_ids_i[ct_feat_ids_i, None] == tgt_ids_i[None, :]
+            ins_targets_i = ins_targets_i.view(-1, 1).to(ins_logits_i.dtype)
+
+            # Get unweighted instance losses
+            ins_kwargs = {'alpha': self.ins_focal_alpha, 'gamma': self.ins_focal_gamma, 'reduction': 'none'}
+            ins_losses = sigmoid_focal_loss(ins_logits_i, ins_targets_i, **ins_kwargs).squeeze(dim=1)
+
+            # Get weights normalized per target
+            ins_tgt_ids = tgt_ids_i[ct_feat_ids_i, None].expand(-1, num_feats).flatten()
+            ins_tgt_ids = torch.where(ins_targets_i.squeeze(dim=1) == 1, ins_tgt_ids, -1)
+
+            weights_i = weights_i[None, :].expand(num_tgts, -1).flatten()
+            norm_weights = torch.zeros_like(weights_i)
+
+            for ins_tgt_id in range(num_tgts):
+                ins_tgt_mask = ins_tgt_ids == ins_tgt_id
+                norm_weights[ins_tgt_mask] = weights_i[ins_tgt_mask] / weights_i[ins_tgt_mask].sum()
+
+            non_ins_mask = ins_tgt_ids == -1
+            feat_areas_i = feat_areas[None, :].expand(num_tgts, -1).flatten()
+            norm_weights[non_ins_mask] = feat_areas_i[non_ins_mask] / feat_areas_i[non_ins_mask].sum()
+
+            # Get weighted instance loss
+            ins_losses = norm_weights * ins_losses
+            ins_loss = self.ins_weight * ins_losses.sum()
+            ins_loss_dict['dfd_ins_loss'] += ins_loss
+
+            # Get instance accuracy
+            with torch.no_grad():
+                ins_preds_i = ins_logits_i >= 0
+                ins_acc = torch.eq(ins_preds_i, ins_targets_i).sum() / len(ins_preds_i)
+                ins_analysis_dict['dfd_ins_acc'] += 100 * ins_acc / batch_size
+
+        return ins_loss_dict, ins_analysis_dict
+
     def forward(self, feat_maps, tgt_dict=None, **kwargs):
         """
         Forward method of the DFD module.
@@ -542,12 +656,14 @@ class DFD(nn.Module):
                 loss_dict (Dict): Loss dictionary containing following keys:
                     - dfd_cls_loss (FloatTensor): weighted classification loss of shape [1];
                     - dfd_obj_loss (FloatTensor): weighted objectness loss of shape [1];
-                    - dfd_box_loss (FloatTensor): weighted bounding box loss of shape [1].
+                    - dfd_box_loss (FloatTensor): weighted bounding box loss of shape [1];
+                    - dfd_ins_loss (FloatTensor): weighted instance loss of shape [1].
 
                 analysis_dict (Dict): Analysis dictionary containing following keys:
                     - dfd_cls_acc (FloatTensor): classification accuracy of shape [1];
                     - dfd_obj_acc (FloatTensor): objectness accuracy of shape [1];
-                    - dfd_box_acc (FloatTensor): bounding box accuracy of shape [1].
+                    - dfd_box_acc (FloatTensor): bounding box accuracy of shape [1];
+                    - dfd_ins_acc (FloatTensor): instance accuracy of shape [1].
 
             * If tgt_dict is None (i.e. during testing and possibly during validation):
                 pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
@@ -580,7 +696,7 @@ class DFD(nn.Module):
         aug_maps = [torch.cat([feat_map, pos_map], dim=1) for feat_map, pos_map in zip(feat_maps, pos_maps)]
 
         # Get instance features
-        _ = torch.cat([ins_map.flatten(2).permute(0, 2, 1) for ins_map in self.ins_head(aug_maps)], dim=1)
+        ins_feats = torch.cat([ins_map.flatten(2).permute(0, 2, 1) for ins_map in self.ins_head(aug_maps)], dim=1)
 
         # Get loss and analysis dictionaries (trainval only)
         if tgt_dict is not None:
@@ -657,57 +773,139 @@ class DFD(nn.Module):
             loss_dict.update(box_loss_dict)
             analysis_dict.update(box_analysis_dict)
 
+            # Get instance loss and analysis
+            ins_args = (ins_feats, tgt_boxes, tgt_ids, weights, feat_wh, tgt_map_ids)
+            ins_loss_dict, ins_analysis_dict = self.ins_loss(*ins_args)
+            loss_dict.update(ins_loss_dict)
+            analysis_dict.update(ins_analysis_dict)
+
             return loss_dict, analysis_dict
 
         # Get list of prediction dictionaries (validation/testing)
         if tgt_dict is None:
 
-            # Get predicted labels and corresponding classification scores
+            # Get predicted classification labels
             cls_scores = cls_logits.softmax(dim=2)
-            cls_scores, labels = cls_scores[:, :, :-1].max(dim=2)
+            labels = cls_scores[:, :, :-1].argmax(dim=2)
 
             # Get objectness scores
             obj_scores = obj_logits.softmax(dim=2)
             obj_scores = obj_logits[:, :, 1]
 
             # Initialize list of prediciton dictionaries
-            pred_dicts = []
+            pred_dict = {k: [] for k in ['labels', 'boxes', 'scores', 'batch_ids']}
+            pred_dicts = [deepcopy(pred_dict) for _ in range(4)]
 
-            # Get prediction dictionaries corresponding to different scoring mechanisms
-            for scores in [cls_scores, obj_scores]:
+            # Iterate over every batch entry
+            for i in range(batch_size):
 
-                # Initialize prediction dictionary
-                pred_dict = {k: [] for k in ['labels', 'boxes', 'scores', 'batch_ids']}
+                # Get ids of highest object scores and get bounding boxes from box logits
+                sort_ids = obj_scores[i].argsort(descending=True)
+                boxes_i = apply_edge_dists(box_logits[i], feat_cts, scales=feat_wh, normalized='img_with_padding')
 
-                # Iterate over every batch entry
-                for i in range(batch_size):
+                # 1.1 Remove duplicate detections using NMS
+                nms_candidate_ids = sort_ids[:self.inf_nms_candidates]
+                nms_boxes = boxes_i[nms_candidate_ids].to_format('xyxy')
+                nms_scores = obj_scores[i][nms_candidate_ids]
+                nms_labels = labels[i][nms_candidate_ids]
 
-                    # Only keep best candidates for NMS
-                    scores_i, sort_ids = scores[i].sort(descending=True)
-                    candidate_ids = sort_ids[:self.inf_nms_candidates]
+                nms_ids = batched_nms(nms_boxes.boxes, nms_scores, nms_labels, iou_threshold=self.inf_nms_threshold)
+                nms_ids = nms_ids[:self.inf_max_detections]
 
-                    # Perform NMS and only keep the requested number of best remaining detections
-                    boxes_i = apply_edge_dists(box_logits[i], feat_cts, scales=feat_wh, normalized='img_with_padding')
-                    boxes_i = boxes_i[candidate_ids].to_format('xyxy')
+                nms_labels = nms_labels[nms_ids]
+                nms_box_boxes = nms_boxes[nms_ids]
+                nms_scores = nms_scores[nms_ids]
 
-                    scores_i = scores_i[:self.inf_nms_candidates]
-                    labels_i = labels[i][candidate_ids]
+                pred_dicts[0]['labels'].append(nms_labels)
+                pred_dicts[0]['boxes'].append(nms_box_boxes)
+                pred_dicts[0]['scores'].append(nms_scores)
+                pred_dicts[0]['batch_ids'].append(torch.full_like(nms_ids, i, dtype=torch.int64))
 
-                    keep_ids = batched_nms(boxes_i.boxes, scores_i, labels_i, iou_threshold=self.inf_iou_threshold)
-                    keep_ids = keep_ids[:self.inf_max_detections]
+                # 1.2 Remove duplicate detections using instance head
+                ins_candidate_ids = sort_ids[:self.inf_ins_candidates]
+                ins_ins_feats = ins_feats[i][ins_candidate_ids]
 
-                    # Add final predictions to their corresponding lists
-                    pred_dict['labels'].append(labels_i[keep_ids])
-                    pred_dict['boxes'].append(boxes_i[keep_ids])
-                    pred_dict['scores'].append(scores_i[keep_ids])
-                    pred_dict['batch_ids'].append(torch.full_like(keep_ids, i, dtype=torch.int64))
+                ins_dup_matrix = torch.mm(ins_ins_feats, ins_ins_feats.t()) + self.ins_bias
+                ins_dup_matrix = ins_dup_matrix.sigmoid() >= self.inf_ins_threshold
+                ins_dup_matrix = torch.tril(ins_dup_matrix, diagonal=-1)
+                non_duplicates = ins_dup_matrix.sum(dim=1) == 0
 
-                # Concatenate different batch entry predictions
+                ins_ids = torch.arange(len(ins_candidate_ids)).to(ins_candidate_ids)
+                ins_ids = ins_ids[non_duplicates]
+                ins_ids = ins_ids[:self.inf_max_detections]
+
+                ins_labels = labels[i][ins_candidate_ids][ins_ids]
+                ins_box_boxes = boxes_i[ins_candidate_ids][ins_ids].to_format('xyxy')
+                ins_scores = obj_scores[i][ins_candidate_ids][ins_ids]
+
+                pred_dicts[1]['labels'].append(ins_labels)
+                pred_dicts[1]['boxes'].append(ins_box_boxes)
+                pred_dicts[1]['scores'].append(ins_scores)
+                pred_dicts[1]['batch_ids'].append(torch.full_like(ins_ids, i, dtype=torch.int64))
+
+                # 2. Use instance head to infer instance segmenations and corresponding bounding boxes
+                bg_logits = cls_logits[i, :, -1:]
+                ins_boxes_dict = {}
+
+                nms_feat_cts = feat_cts[nms_candidate_ids][nms_ids]
+                nms_feat_wh = feat_wh[nms_candidate_ids][nms_ids]
+                nms_left_top = nms_feat_cts - nms_feat_wh/2
+                nms_right_bottom = nms_feat_cts + nms_feat_wh/2
+                ins_boxes_dict['nms'] = torch.cat([nms_left_top, nms_right_bottom], dim=1)
+
+                ins_feat_cts = feat_cts[ins_candidate_ids][ins_ids]
+                ins_feat_wh = feat_wh[ins_candidate_ids][ins_ids]
+                ins_left_top = ins_feat_cts - ins_feat_wh/2
+                ins_right_bottom = ins_feat_cts + ins_feat_wh/2
+                ins_boxes_dict['ins'] = torch.cat([ins_left_top, ins_right_bottom], dim=1)
+
+                nms_ins_feats = ins_feats[i][nms_candidate_ids][nms_ids]
+                ins_ins_feats = ins_ins_feats[ins_ids]
+                ins_feats_list = [nms_ins_feats, ins_ins_feats]
+
+                for key, obj_ins_feats in zip(('nms', 'ins'), ins_feats_list):
+                    ins_boxes = ins_boxes_dict[key]
+
+                    ins_logits = torch.mm(ins_feats[i], obj_ins_feats.t()) + self.ins_bias
+                    ins_logits = torch.cat([ins_logits, bg_logits], dim=1)
+
+                    ins_scores = torch.softmax(ins_logits, dim=1)
+                    det_ids = torch.argmax(ins_scores, dim=1)
+                    num_dets = len(obj_ins_feats)
+
+                    for det_id in range(num_dets):
+                        det_mask = det_ids == det_id
+                        det_feat_cts = feat_cts[det_mask]
+                        det_feat_wh = feat_wh[det_mask]
+
+                        if len(det_feat_cts) > 1:
+                            left_top_ct, left_top_ids = torch.min(det_feat_cts, dim=0)
+                            right_bottom_ct, right_bottom_ids = torch.max(det_feat_cts, dim=0)
+
+                            left_top_wh = det_feat_wh[left_top_ids, torch.arange(2)]
+                            right_bottom_wh = det_feat_wh[right_bottom_ids, torch.arange(2)]
+
+                            ins_boxes[det_id, :2] = left_top_ct - left_top_wh/2
+                            ins_boxes[det_id, 2:] = right_bottom_ct + right_bottom_wh/2
+
+                    ins_boxes = Boxes(ins_boxes, format='xyxy', normalized='img_with_padding')
+                    ins_boxes_dict[key] = ins_boxes
+
+                pred_dicts[2]['labels'].append(nms_labels)
+                pred_dicts[2]['boxes'].append(ins_boxes_dict['nms'])
+                pred_dicts[2]['scores'].append(nms_scores)
+                pred_dicts[2]['batch_ids'].append(torch.full_like(nms_ids, i, dtype=torch.int64))
+
+                pred_dicts[3]['labels'].append(ins_labels)
+                pred_dicts[3]['boxes'].append(ins_boxes_dict['ins'])
+                pred_dicts[3]['scores'].append(ins_scores)
+                pred_dicts[3]['batch_ids'].append(torch.full_like(ins_ids, i, dtype=torch.int64))
+
+            # Concatenate different batch entry predictions
+            for i, pred_dict in enumerate(pred_dicts):
                 pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
                 pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
-
-                # Add prediction dictionary to list of prediction dictionaries
-                pred_dicts.append(pred_dict)
+                pred_dicts[i] = pred_dict
 
             return pred_dicts
 
