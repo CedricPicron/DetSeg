@@ -253,6 +253,8 @@ class DFD(nn.Module):
         self.inf_max_detections = inf_dict['max_detections']
 
         # Set metadata attribute
+        metadata.stuff_classes = metadata.thing_classes
+        metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
     @torch.no_grad()
@@ -651,6 +653,9 @@ class DFD(nn.Module):
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
 
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
+                - visualize (bool): boolean indicating whether in visualization mode or not.
+
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):
                 loss_dict (Dict): Loss dictionary containing following keys:
@@ -671,6 +676,12 @@ class DFD(nn.Module):
                     - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+                During visualization, the first prediction dictionary additionally contains following keys:
+                    - cls_logits (List): List [num_maps] with cls logits of shape [batch_size, num_classes+1, fH, fW];
+                    - obj_logits (List): List [num_maps] with objectness logits of shape [batch_size, 2, fH, fW];
+                    - nms_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW];
+                    - ins_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW].
         """
 
         # Get batch size
@@ -790,11 +801,22 @@ class DFD(nn.Module):
 
             # Get objectness scores
             obj_scores = obj_logits.softmax(dim=2)
-            obj_scores = obj_logits[:, :, 1]
+            obj_scores = obj_scores[:, :, 1]
 
             # Initialize list of prediciton dictionaries
             pred_dict = {k: [] for k in ['labels', 'boxes', 'scores', 'batch_ids']}
             pred_dicts = [deepcopy(pred_dict) for _ in range(4)]
+
+            # Add additional keys to first prediction dictionary during visualization
+            if kwargs.setdefault('visualize', False):
+                cls_logit_maps = self.cls_head(feat_maps)
+                ins_maps = self.ins_head(aug_maps)
+                bg_logit_maps = [cls_map[:, -1:, :, :] for cls_map in cls_logit_maps]
+
+                pred_dicts[0]['cls_logits'] = cls_logit_maps
+                pred_dicts[0]['obj_logits'] = self.obj_head(feat_maps)
+                pred_dicts[0]['nms_ins_logits'] = []
+                pred_dicts[0]['ins_ins_logits'] = []
 
             # Iterate over every batch entry
             for i in range(batch_size):
@@ -900,9 +922,22 @@ class DFD(nn.Module):
                 pred_dicts[3]['scores'].append(ins_scores)
                 pred_dicts[3]['batch_ids'].append(torch.full_like(ins_ids, i, dtype=torch.int64))
 
+                # Add instance logits to first prediction dictionary during visualization
+                if kwargs.setdefault('visualize', False):
+                    ins_weight = nms_ins_feats[:, :, None, None]
+                    ins_logits = [F.conv2d(ins_map[i][None], ins_weight)[0] + self.ins_bias for ins_map in ins_maps]
+                    ins_logits = [torch.cat([map0, map1[i]], dim=0) for map0, map1 in zip(ins_logits, bg_logit_maps)]
+                    pred_dicts[0]['nms_ins_logits'].append(ins_logits)
+
+                    ins_weight = ins_ins_feats[:, :, None, None]
+                    ins_logits = [F.conv2d(ins_map[i][None], ins_weight)[0] + self.ins_bias for ins_map in ins_maps]
+                    ins_logits = [torch.cat([map0, map1[i]], dim=0) for map0, map1 in zip(ins_logits, bg_logit_maps)]
+                    pred_dicts[0]['ins_ins_logits'].append(ins_logits)
+
             # Concatenate different batch entry predictions
             for i, pred_dict in enumerate(pred_dicts):
-                pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
+                cat_keys = ('labels', 'scores', 'batch_ids')
+                pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k in cat_keys})
                 pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
                 pred_dicts[i] = pred_dict
 
@@ -913,6 +948,7 @@ class DFD(nn.Module):
         Draws predicted and target bounding boxes on given full-resolution images.
 
         Boxes must have a score of at least the score threshold to be drawn. Target boxes get a default 100% score.
+        Additionally, the classification, objecteness and instance segmentations are also drawn for each pyramid level.
 
         Args:
             images (Images): Images structure containing the batched images.
@@ -922,6 +958,12 @@ class DFD(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+            The first prediction dictionary additionally contains following keys:
+                - cls_logits (List): List [num_maps] with cls logits of shape [batch_size, num_classes+1, fH, fW];
+                - obj_logits (List): List [num_maps] with objectness logits of shape [batch_size, 2, fH, fW];
+                - nms_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW];
+                - ins_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW].
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
@@ -972,8 +1014,9 @@ class DFD(nn.Module):
         draw_dicts = [*pred_draw_dicts, tgt_draw_dict]
         dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
 
-        # Get image sizes without padding in (width, height) format
-        img_sizes = images.size(with_padding=False)
+        # Get image sizes with and without padding in (width, height) format
+        img_size_with_padding = images.size(with_padding=True)
+        img_sizes_without_padding = images.size(with_padding=False)
 
         # Get and convert tensor with images
         images = images.images.clone().permute(0, 2, 3, 1)
@@ -988,19 +1031,77 @@ class DFD(nn.Module):
             sizes = draw_dict['sizes']
 
             for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
-
-                img_size = img_sizes[image_id]
+                img_size = img_sizes_without_padding[image_id]
                 img_size = (img_size[1], img_size[0])
 
                 img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
                 img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
                 img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
 
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
                 instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
                 visualizer.draw_instance_predictions(instances)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'dfd_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+                images_dict[f'dfd_box_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        # Draw class segmentation on images and add them to images dicationary
+        for map_id, cls_maps in enumerate(pred_dicts[0]['cls_logits']):
+            for image_id, cls_map in enumerate(cls_maps):
+                iW, iH = img_size_with_padding
+
+                cls_map = F.interpolate(cls_map[None], size=(iH, iW), mode='bilinear', align_corners=True)[0]
+                cls_map = torch.argmax(cls_map, dim=0).cpu().numpy()
+
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                visualizer.draw_sem_seg(cls_map)
+                annotated_image = visualizer.output.get_image()
+
+                iW, iH = img_sizes_without_padding[image_id]
+                images_dict[f'dfd_cls_{map_id}_{image_id}'] = annotated_image[:iH, :iW, :]
+
+        # Draw objectness segmentation on images and add them to images dicationary
+        for map_id, obj_maps in enumerate(pred_dicts[0]['obj_logits']):
+            for image_id, obj_map in enumerate(obj_maps):
+                iW, iH = img_size_with_padding
+
+                obj_map = F.interpolate(obj_map[None], size=(iH, iW), mode='bilinear', align_corners=True)[0]
+                obj_map = torch.argmax(obj_map, dim=0).cpu().numpy()
+
+                visualizer = Visualizer(images[image_id])
+                visualizer.draw_binary_mask(obj_map)
+                annotated_image = visualizer.output.get_image()
+
+                iW, iH = img_sizes_without_padding[image_id]
+                images_dict[f'dfd_obj_{map_id}_{image_id}'] = annotated_image[:iH, :iW, :]
+
+        # Draw instance segmentation on images and add them to images dicationary
+        for i, key in enumerate(['nms', 'ins']):
+            labels = pred_dicts[i]['labels']
+            scores = pred_dicts[i]['scores']
+            batch_ids = pred_dicts[i]['batch_ids']
+
+            for image_id, ins_maps in enumerate(pred_dicts[0][f'{key}_ins_logits']):
+                for map_id, ins_map in enumerate(ins_maps):
+                    img_size = img_sizes_without_padding[image_id]
+                    img_size = (img_size[1], img_size[0])
+
+                    img_mask = batch_ids == image_id
+                    img_labels = labels[img_mask].cpu().numpy()
+                    img_scores = scores[img_mask].cpu().numpy()
+
+                    iW, iH = img_size_with_padding
+                    ins_map = F.interpolate(ins_map[None], size=(iH, iW), mode='bilinear', align_corners=True)[0]
+                    ins_map = torch.argmax(ins_map, dim=0)
+
+                    ins_masks = F.one_hot(ins_map, len(img_labels)+1).to(torch.bool)
+                    ins_masks = ins_masks.permute(2, 0, 1)[:-1].cpu().numpy()
+
+                    visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                    instances = Instances(img_size, pred_classes=img_labels, scores=scores, pred_masks=ins_masks)
+                    visualizer.draw_instance_predictions(instances)
+
+                    annotated_image = visualizer.output.get_image()
+                    images_dict[f'dfd_ins_{key}_{map_id}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
 
         return images_dict

@@ -244,12 +244,12 @@ class BiViNet(nn.Module):
                 train_eval_args = (feat_masks, tgt_dict, optimizer)
                 loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, **kwargs)
 
-        # Get prediction dictionary (validation/testing only)
+        # Get prediction dictionaries (validation/testing only)
         if optimizer is None:
             pred_heads = self.heads[-1] if self.step_mode == 'multi' else self.heads
-            pred_dicts = [pred_dict for head in pred_heads for pred_dict in head(feat_maps)]
+            pred_dicts = [pred_dict for head in pred_heads for pred_dict in head(feat_maps, **kwargs)]
 
-        # Return prediction dictionary (testing only)
+        # Return prediction dictionaries (testing only)
         if tgt_dict is None:
             return pred_dicts
 
