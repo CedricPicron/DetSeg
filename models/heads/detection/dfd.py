@@ -869,8 +869,7 @@ class DFD(nn.Module):
                     ins_logits = torch.mm(ins_feats[i], obj_ins_feats.t()) + self.ins_bias
                     ins_logits = torch.cat([ins_logits, bg_logits], dim=1)
 
-                    ins_scores = torch.softmax(ins_logits, dim=1)
-                    det_ids = torch.argmax(ins_scores, dim=1)
+                    det_ids = torch.argmax(ins_logits, dim=1)
                     num_dets = len(obj_ins_feats)
 
                     for det_id in range(num_dets):
