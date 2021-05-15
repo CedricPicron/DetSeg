@@ -193,6 +193,26 @@ def get_parser():
     parser.add_argument('--dfd_inf_ins_threshold', default=0.5, type=float, help='instance threshold during inference')
     parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
 
+    # *** Dense Object Discovery (DOD) head
+    parser.add_argument('--dod_feat_size', default=256, type=int, help='DOD hidden feature size')
+    parser.add_argument('--dod_norm', default='group', type=str, help='normalization type of DOD head')
+    parser.add_argument('--dod_kernel_size', default=3, type=int, help='DOD hidden layer kernel size')
+    parser.add_argument('--dod_bottle_size', default=64, type=int, help='DOD bottleneck feature size')
+    parser.add_argument('--dod_hidden_layers', default=1, type=int, help='number of DOD hidden layers')
+    parser.add_argument('--dod_rel_preds', action='store_true', help='make relative predictions')
+    parser.add_argument('--dod_prior_prob', default=0.01, type=float, help='prior object probability of DOD network')
+
+    parser.add_argument('--dod_ftm_metric', default='iou', type=str, help='DOD feature-target matching metric')
+    parser.add_argument('--dod_ftm_decision', default='rel', type=str, help='DOD decision maker type')
+    parser.add_argument('--dod_ftm_abs_threshold', default=0.5, type=float, help='DOD absolute decision threshold')
+    parser.add_argument('--dod_ftm_rel_threshold', default=5, type=int, help='DOD relative decision threshold')
+
+    parser.add_argument('--dod_loss_type', default='sigmoid_focal', type=str, help='type of loss used by DOD head')
+    parser.add_argument('--dod_focal_alpha', default=0.25, type=float, help='DOD focal alpha value')
+    parser.add_argument('--dod_focal_gamma', default=2.0, type=float, help='DOD focal gamma value')
+    parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive targets')
+    parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative targets')
+
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')

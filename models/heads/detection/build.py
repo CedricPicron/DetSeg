@@ -4,6 +4,7 @@ General build function for detection heads.
 
 from .brd import BRD
 from .dfd import DFD
+from .dod import DOD
 from .retina import RetinaHead
 
 
@@ -103,6 +104,25 @@ def build_det_heads(args):
 
             dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata)
             det_heads.append(dfd_head)
+
+        elif det_head_type == 'dod':
+            in_feat_size = args.core_feat_sizes[0]
+            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+
+            net_dict = {'feat_size': args.dod_feat_size, 'norm': args.dod_norm, 'kernel_size': args.dod_kernel_size}
+            net_dict = {**net_dict, 'bottle_size': args.dod_bottle_size, 'hidden_layers': args.dod_hidden_layers}
+            net_dict = {**net_dict, 'rel_preds': args.dod_rel_preds, 'prior_prob': args.dod_prior_prob}
+
+            ftm_dict = {'metric': args.dod_ftm_metric, 'decision': args.dod_ftm_decision}
+            ftm_dict = {**ftm_dict, 'abs_threshold': args.dod_ftm_abs_threshold}
+            ftm_dict = {**ftm_dict, 'rel_threshold': args.dod_ftm_rel_threshold}
+
+            loss_dict = {'type': args.dod_loss_type, 'focal_alpha': args.dod_focal_alpha}
+            loss_dict = {**loss_dict, 'focal_gamma': args.dod_focal_gamma, 'pos_weight': args.dod_pos_weight}
+            loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight}
+
+            dod_head = DOD(in_feat_size, net_dict, ftm_dict, loss_dict, metadata)
+            det_heads.append(dod_head)
 
         elif det_head_type == 'retina':
             num_classes = args.num_classes

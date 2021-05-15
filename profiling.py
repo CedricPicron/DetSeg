@@ -28,9 +28,9 @@ from structures.images import Images
 
 # Lists of model and sort choices
 model_choices = ['backbone', 'bla_init', 'bla_update', 'bin_seg_head', 'bivinet_bin_seg', 'bivinet_det']
-model_choices = [*model_choices, 'bivinet_sem_seg', 'brd_head', 'criterion', 'detr', 'dfd_head', 'encoder', 'fpn']
-model_choices = [*model_choices, 'gc', 'global_decoder', 'ret_head_bla', 'ret_head_fpn', 'sample_decoder']
-model_choices = [*model_choices, 'sem_seg_head']
+model_choices = [*model_choices, 'bivinet_sem_seg', 'brd_head', 'criterion', 'detr', 'dod_pred', 'dod_train']
+model_choices = [*model_choices, 'dfd_head', 'encoder', 'fpn', 'gc', 'global_decoder', 'ret_head_bla', 'ret_head_fpn']
+model_choices = [*model_choices, 'sample_decoder', 'sem_seg_head']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -302,6 +302,65 @@ elif profiling_args.model == 'dfd_head':
     tgt_dict = {'labels': labels, 'boxes': boxes}
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
+
+elif profiling_args.model == 'dod_pred':
+    main_args.num_classes = 80
+    main_args.bvn_max_downsampling = 7
+    main_args.core_type = 'FPN'
+    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.det_heads = ['dod']
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
+    model = build_det_heads(main_args)[0].to('cuda')
+
+    feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 256, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
+    feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    inputs = {'feat_maps': feat_maps, 'mode': 'pred'}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[2].sum().backward()"
+
+elif profiling_args.model == 'dod_train':
+    main_args.num_classes = 80
+    main_args.bvn_max_downsampling = 7
+    main_args.core_type = 'FPN'
+    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.det_heads = ['dod']
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
+    model = build_det_heads(main_args)[0].to('cuda')
+
+    feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 256, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
+    feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    batch_size = 2
+    num_targets = 10
+    labels = [torch.randint(main_args.num_classes, (num_targets,), device='cuda') for _ in range(batch_size)]
+    boxes = [torch.abs(torch.randn(num_targets, 2, device='cuda')) for _ in range(batch_size)]
+    boxes = [torch.cat([boxes_i, boxes_i+1], dim=1) for boxes_i in boxes]
+    boxes = [Boxes(boxes_i/boxes_i.max(), 'xyxy', 'img_with_padding') for boxes_i in boxes]
+    tgt_dict = {'labels': labels, 'boxes': boxes}
+
+    num_feats = sum(feat_map.flatten(2).shape[2] for feat_map in feat_maps)
+    tensor_kwargs = {'device': 'cuda', 'dtype': torch.bool}
+
+    train_dict = {}
+    train_dict['logits'] = torch.randn(batch_size, num_feats, 1, device='cuda', requires_grad=True)
+    train_dict['pos_preds'] = torch.randint(2, size=(batch_size, num_feats), **tensor_kwargs)
+    train_dict['pos_useful'] = torch.randint(2, size=(batch_size, num_feats), **tensor_kwargs)
+    train_dict['tgt_found'] = [torch.randint(2, size=(num_targets,), **tensor_kwargs) for _ in range(batch_size)]
+
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'mode': 'train', 'train_dict': train_dict}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
