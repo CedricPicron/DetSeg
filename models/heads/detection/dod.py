@@ -224,10 +224,21 @@ class DOD(nn.Module):
             raise ValueError(error_msg)
 
         ftm_masks = torch.split(ftm_mask, tgts_per_img, dim=1)
-        ftm_masks = [torch.sum(ftm_mask, dim=1) > 0 for ftm_mask in ftm_masks]
-        matched_feats = torch.stack(ftm_masks, dim=0)
+        matched_feats = torch.stack([torch.sum(ftm_mask, dim=1) > 0 for ftm_mask in ftm_masks], dim=0)
 
-        return matched_feats
+        # Return matched features if no positive prediction mask is provided
+        if pos_preds is None:
+            return matched_feats
+
+        # Get useful positives and found targets
+        pos_useful = pos_preds & matched_feats
+        tgt_found = [(ftm_masks[i] & pos_preds[i, :, None]).sum(dim=0) > 0 for i in range(batch_size)]
+
+        # Get missing targets matched features
+        ftm_masks = [ftm_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
+        matched_feats = torch.stack([torch.sum(ftm_mask, dim=1) > 0 for ftm_mask in ftm_masks], dim=0)
+
+        return pos_useful, tgt_found, matched_feats
 
     def forward(self, feat_maps, tgt_dict=None, mode='self', train_dict=None, **kwargs):
         """
@@ -293,8 +304,7 @@ class DOD(nn.Module):
                 error_msg = f"Logits should have size 1 or 2, but got size {logits.shape[-1]}."
                 raise RuntimeError(error_msg)
 
-            analysis_dict['pos_preds_num'] = torch.sum(pos_preds)[None]
-            analysis_dict['pos_preds_ratio'] = 100 * analysis_dict['pos_preds_num'] / torch.numel(pos_preds)
+            analysis_dict['pos_preds'] = torch.sum(pos_preds)[None]
 
         # Return if in 'pred' mode
         if mode == 'pred':
@@ -333,15 +343,16 @@ class DOD(nn.Module):
         else:
             pos_useful, tgt_found, matched_feats = self.ft_matching(feat_maps, tgt_dict['boxes'], pos_preds=pos_preds)
 
-        analysis_dict['pos_useful_num'] = torch.sum(pos_useful)[None]
-        analysis_dict['pos_useful_ratio'] = 100 * analysis_dict['pos_useful_num'] / torch.numel(pos_useful)
+        analysis_dict['pos_useful'] = torch.sum(pos_useful)[None]
+        analysis_dict['matched_feats'] = torch.sum(matched_feats)[None]
 
         tgt_found = torch.cat(tgt_found, dim=0)
-        analysis_dict['tgt_found_num'] = torch.sum(tgt_found)[None]
-        analysis_dict['tgt_found_ratio'] = 100 * analysis_dict['tgt_found_num'] / torch.numel(tgt_found)
+        num_tgts = len(tgt_found)
 
-        analysis_dict['matched_feats_num'] = torch.sum(matched_feats)[None]
-        analysis_dict['matched_feats_ratio'] = 100 * analysis_dict['matched_feats_num'] / torch.numel(matched_feats)
+        if num_tgts > 0:
+            analysis_dict['tgt_found'] = 100 * torch.sum(tgt_found)[None] / num_tgts
+        else:
+            analysis_dict['tgt_found'] = 100 * torch.ones(1).to(tgt_found)
 
         # Get targets
         pos_tgts = pos_useful | matched_feats
@@ -351,11 +362,8 @@ class DOD(nn.Module):
         targets[pos_tgts] = 1
         targets[neg_tgts] = 0
 
-        analysis_dict['pos_tgts_num'] = torch.sum(pos_tgts)[None]
-        analysis_dict['pos_tgts_ratio'] = 100 * analysis_dict['pos_tgts_num'] / torch.numel(pos_tgts)
-
-        analysis_dict['neg_tgts_num'] = torch.sum(neg_tgts)[None]
-        analysis_dict['neg_tgts_ratio'] = 100 * analysis_dict['neg_tgts_num'] / torch.numel(neg_tgts)
+        analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None]
+        analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None]
 
         # Recover logits from training dictionary when in 'train' mode
         if mode == 'train':
