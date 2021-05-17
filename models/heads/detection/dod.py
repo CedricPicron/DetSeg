@@ -281,7 +281,8 @@ class DOD(nn.Module):
             ValueError: Error when unknown loss type is present in 'loss_type' attribute.
         """
 
-        # Initialize empty analysis dictionary
+        # Get batch size and initialize empty analysis dictionary
+        batch_size = len(feat_maps[0])
         analysis_dict = {}
 
         # Check provided mode
@@ -304,7 +305,7 @@ class DOD(nn.Module):
                 error_msg = f"Logits should have size 1 or 2, but got size {logits.shape[-1]}."
                 raise RuntimeError(error_msg)
 
-            analysis_dict['pos_preds'] = torch.sum(pos_preds)[None]
+            analysis_dict['pos_preds'] = torch.sum(pos_preds)[None] / batch_size
 
         # Return if in 'pred' mode
         if mode == 'pred':
@@ -343,8 +344,8 @@ class DOD(nn.Module):
         else:
             pos_useful, tgt_found, matched_feats = self.ft_matching(feat_maps, tgt_dict['boxes'], pos_preds=pos_preds)
 
-        analysis_dict['pos_useful'] = torch.sum(pos_useful)[None]
-        analysis_dict['matched_feats'] = torch.sum(matched_feats)[None]
+        analysis_dict['pos_useful'] = torch.sum(pos_useful)[None] / batch_size
+        analysis_dict['matched_feats'] = torch.sum(matched_feats)[None] / batch_size
 
         tgt_found = torch.cat(tgt_found, dim=0)
         num_tgts = len(tgt_found)
@@ -356,14 +357,14 @@ class DOD(nn.Module):
 
         # Get targets
         pos_tgts = pos_useful | matched_feats
-        neg_tgts = pos_preds & ~pos_tgts
+        neg_tgts = pos_preds & ~pos_useful
 
         targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)
         targets[pos_tgts] = 1
         targets[neg_tgts] = 0
 
-        analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None]
-        analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None]
+        analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None] / batch_size
+        analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None] / batch_size
 
         # Recover logits from training dictionary when in 'train' mode
         if mode == 'train':

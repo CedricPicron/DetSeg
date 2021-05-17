@@ -187,7 +187,7 @@ class BiViNet(nn.Module):
 
         # Reset gradients of model parameters (training only)
         if optimizer is not None:
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
         # Get backbone feature maps
         feat_maps, _ = self.backbone(images)
