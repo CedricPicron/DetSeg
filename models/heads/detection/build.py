@@ -113,15 +113,17 @@ def build_det_heads(args):
             net_dict = {**net_dict, 'bottle_size': args.dod_bottle_size, 'hidden_layers': args.dod_hidden_layers}
             net_dict = {**net_dict, 'rel_preds': args.dod_rel_preds, 'prior_prob': args.dod_prior_prob}
 
-            ftm_dict = {'metric': args.dod_ftm_metric, 'decision': args.dod_ftm_decision}
-            ftm_dict = {**ftm_dict, 'abs_threshold': args.dod_ftm_abs_threshold}
-            ftm_dict = {**ftm_dict, 'rel_threshold': args.dod_ftm_rel_threshold}
+            pred_dict = {'pos_pred': args.dod_pos_pred, 'neg_pred': args.dod_neg_pred}
+
+            tgt_dict = {'metric': args.dod_tgt_metric, 'decision': args.dod_tgt_decision}
+            tgt_dict = {**tgt_dict, 'abs_pos_tgt': args.dod_abs_pos_tgt, 'abs_neg_tgt': args.dod_abs_neg_tgt}
+            tgt_dict = {**tgt_dict, 'rel_pos_tgt': args.dod_rel_pos_tgt, 'rel_neg_tgt': args.dod_rel_neg_tgt}
 
             loss_dict = {'type': args.dod_loss_type, 'focal_alpha': args.dod_focal_alpha}
             loss_dict = {**loss_dict, 'focal_gamma': args.dod_focal_gamma, 'pos_weight': args.dod_pos_weight}
-            loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight}
+            loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight, 'hill_weight': args.dod_hill_weight}
 
-            dod_head = DOD(in_feat_size, net_dict, ftm_dict, loss_dict, metadata)
+            dod_head = DOD(in_feat_size, net_dict, pred_dict, tgt_dict, loss_dict, metadata)
             det_heads.append(dod_head)
 
         elif det_head_type == 'retina':

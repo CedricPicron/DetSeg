@@ -326,7 +326,7 @@ elif profiling_args.model == 'dod_pred':
     inputs = {'feat_maps': feat_maps, 'mode': 'pred'}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)[2].sum().backward()"
+    backward_stmt = "model(**inputs)[0].sum().backward()"
 
 elif profiling_args.model == 'dod_self':
     main_args.num_classes = 80
@@ -390,6 +390,7 @@ elif profiling_args.model == 'dod_train':
     train_dict = {}
     train_dict['logits'] = torch.randn(batch_size, num_feats, 1, device='cuda', requires_grad=True)
     train_dict['pos_preds'] = torch.randint(2, size=(batch_size, num_feats), **tensor_kwargs)
+    train_dict['neg_preds'] = torch.randint(2, size=(batch_size, num_feats), **tensor_kwargs)
     train_dict['pos_useful'] = torch.randint(2, size=(batch_size, num_feats), **tensor_kwargs)
     train_dict['tgt_found'] = [torch.randint(2, size=(num_targets,), **tensor_kwargs) for _ in range(batch_size)]
 

@@ -202,16 +202,22 @@ def get_parser():
     parser.add_argument('--dod_rel_preds', action='store_true', help='make relative predictions')
     parser.add_argument('--dod_prior_prob', default=0.01, type=float, help='prior object probability of DOD network')
 
-    parser.add_argument('--dod_ftm_metric', default='iou', type=str, help='DOD feature-target matching metric')
-    parser.add_argument('--dod_ftm_decision', default='rel', type=str, help='DOD decision maker type')
-    parser.add_argument('--dod_ftm_abs_threshold', default=0.5, type=float, help='DOD absolute decision threshold')
-    parser.add_argument('--dod_ftm_rel_threshold', default=5, type=int, help='DOD relative decision threshold')
+    parser.add_argument('--dod_pos_pred', default=0.6, type=float, help='DOD positive prediction threshold')
+    parser.add_argument('--dod_neg_pred', default=0.4, type=float, help='DOD negative prediction threshold')
+
+    parser.add_argument('--dod_tgt_metric', default='iou', type=str, help='DOD feature-target matching metric')
+    parser.add_argument('--dod_tgt_decision', default='rel', type=str, help='DOD target decision maker type')
+    parser.add_argument('--dod_abs_pos_tgt', default=0.5, type=float, help='DOD absolute positive target threshold')
+    parser.add_argument('--dod_abs_neg_tgt', default=0.3, type=float, help='DOD absolute negative target threshold')
+    parser.add_argument('--dod_rel_pos_tgt', default=5, type=int, help='DOD relative positive target threshold')
+    parser.add_argument('--dod_rel_neg_tgt', default=10, type=int, help='DOD relative negative target threshold')
 
     parser.add_argument('--dod_loss_type', default='sigmoid_focal', type=str, help='type of loss used by DOD head')
     parser.add_argument('--dod_focal_alpha', default=0.25, type=float, help='DOD focal alpha value')
     parser.add_argument('--dod_focal_gamma', default=2.0, type=float, help='DOD focal gamma value')
     parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive targets')
     parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative targets')
+    parser.add_argument('--dod_hill_weight', default=1.0, type=float, help='loss term weight for sigmoid hill losses')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')

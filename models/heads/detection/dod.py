@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 from models.modules.convolution import BottleneckConv, ProjConv
+from models.modules.loss import SigmoidHillLoss
 from models.utils import get_feat_boxes
 from structures.boxes import Boxes, box_iou
 
@@ -20,22 +21,29 @@ class DOD(nn.Module):
 
     Attributes:
         net (nn.Sequential): DOD network computing the logits.
+        hill_loss (SigmoidHillLoss): Module computing the sigmoid hill losses from logits.
 
-        ftm_metric (str): String containing feature-target metric used during feature-target matching.
-        ftm_decision (str): String containing decision maker type used during feature-target matching.
-        ftm_abs_threshold (float): Absolute threshold used by decision maker during feature-target matching.
-        ftm_rel_threshold (int): Relative threshold used by decision maker during feature-target matching.
+        pos_pred (float): Threshold determining positive predictions.
+        neg_pred (float): Threshold determining negative predictions.
+
+        tgt_metric (str): String containing the feature-target matching metric.
+        tgt_decision (str): String containing the target decision maker type.
+        abs_pos_tgt (float): Absolute threshold used during positive target decision making.
+        abs_neg_tgt (float): Absolute threshold used during negative target decision making.
+        rel_pos_tgt (int): Relative threshold used during positive target decision making.
+        rel_neg_tgt (int): Relative threshold used during negative target decision making.
 
         loss_type (str): String containing the type of loss.
         focal_alpha (float): Alpha value of the sigmoid focal loss.
         focal_gamma (float): Gamma value of the sigmoid focal loss.
         pos_weight (float): Factor weighting the loss terms with positive targets.
         neg_weight (float): Factor weighting the loss terms with negative targets.
+        hill_weight (float): Factor weighting the sigmoid hill loss terms.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, in_feat_size, net_dict, ftm_dict, loss_dict, metadata):
+    def __init__(self, in_feat_size, net_dict, pred_dict, tgt_dict, loss_dict, metadata):
         """
         Initializes the DOD module.
 
@@ -51,18 +59,25 @@ class DOD(nn.Module):
                 - rel_preds (bool): whether or not DOD network should make relative predictions;
                 - prior_prob (float): prior object probability determining the initial output layer bias value(s).
 
-            ftm_dict (Dict): Feature-target matching dictionary containing following keys:
-                - metric (str): string containing feature-target metric used during feature-target matching;
-                - decision (str): string containing decision maker type used during feature-target matching;
-                - abs_threshold (float): absolute threshold used by decision maker during feature-target matching;
-                - rel_threshold (int): relative threshold used by decision maker during feature-target matching.
+            pred_dict (Dict): Dictionary with items used during prediction containing following keys:
+                - pos_pred (float): threshold determining positive predictions;
+                - neg_pred (float): threshold determining negative predictions.
+
+            tgt_dict (Dict): Dictionary with items used during target computation containing following keys:
+                - metric (str): string containing the feature-target matching metric;
+                - decision (str): string containing the target decision maker type;
+                - abs_pos_tgt (float): absolute threshold used during positive target decision making;
+                - abs_neg_tgt (float): absolute threshold used during negative target decision making;
+                - rel_pos_tgt (int): relative threshold used during positive target decision making;
+                - rel_neg_tgt (int): relative threshold used during negative target decision making.
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - type (str): string containing the type of loss;
                 - focal_alpha (float): alpha value of the sigmoid focal loss;
                 - focal_gamma (float): gamma value of the sigmoid focal loss;
                 - pos_weight (float): factor weighting the loss terms with positive targets;
-                - neg_weight (float): factor weighting the loss terms with negative targets.
+                - neg_weight (float): factor weighting the loss terms with negative targets;
+                - hill_weight (float): factor weighting the sigmoid hill loss terms.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
@@ -98,11 +113,20 @@ class DOD(nn.Module):
         net_dict = OrderedDict([('in', in_layer), ('hidden', hidden_layers), ('out', out_layer)])
         self.net = nn.Sequential(net_dict)
 
-        # Set feature-target matching attributes
-        self.ftm_metric = ftm_dict['metric']
-        self.ftm_decision = ftm_dict['decision']
-        self.ftm_abs_threshold = ftm_dict['abs_threshold']
-        self.ftm_rel_threshold = ftm_dict['rel_threshold']
+        # Initialization of the sigmoid hill loss
+        self.hill_loss = SigmoidHillLoss()
+
+        # Set prediction-related attributes
+        self.pos_pred = pred_dict['pos_pred']
+        self.neg_pred = pred_dict['neg_pred']
+
+        # Set target-related attributes
+        self.tgt_metric = tgt_dict['metric']
+        self.tgt_decision = tgt_dict['decision']
+        self.abs_pos_tgt = tgt_dict['abs_pos_tgt']
+        self.abs_neg_tgt = tgt_dict['abs_neg_tgt']
+        self.rel_pos_tgt = tgt_dict['rel_pos_tgt']
+        self.rel_neg_tgt = tgt_dict['rel_neg_tgt']
 
         # Set loss-related attributes
         self.loss_type = loss_dict['type']
@@ -110,6 +134,7 @@ class DOD(nn.Module):
         self.focal_gamma = loss_dict['focal_gamma']
         self.pos_weight = loss_dict['pos_weight']
         self.neg_weight = loss_dict['neg_weight']
+        self.hill_weight = loss_dict['hill_weight']
 
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
@@ -159,28 +184,52 @@ class DOD(nn.Module):
 
         return tgt_dict, {}, {}
 
-    def ft_matching(self, feat_maps, tgt_boxes, pos_preds=None):
+    @torch.no_grad()
+    def get_target_masks(self, feat_maps, tgt_boxes, neg_preds, mode='self', pos_preds=None, tgt_found=None):
         """
-        Perform feature-target matching.
+        Get positive and negative target masks.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
             tgt_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_targets].
-            pos_preds (BoolTensor): Mask with positive predictions of shape [batch_size, num_feats] (default=None).
+            neg_preds (BoolTensor): Mask with negative predictions of shape [batch_size, num_feats].
+            mode (str): Mode of DOD forward method, with modes {'self', 'train'} allowed (default='self').
+            pos_preds (BoolTensor): mask with positive predictions of shape [batch_size, num_feats] (default=None).
+            tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets] (default=None).
 
         Returns:
-            * If pos_preds is None:
-                matched_feats (BoolTensor): Mask with matched features of shape [batch_size, num_feats].
-
-            * If pos_preds is not None:
+            * If mode is 'self':
                 pos_useful (BoolTensor): Mask with useful positives predictions of shape [batch_size, num_feats].
                 tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
-                matched_feats (BoolTensor): Mask of missing targets matched features of shape [batch_size, num_feats].
+                pos_tgts (BoolTensor): Mask with positive targets of shape [batch_size, num_feats].
+                neg_tgts (BoolTensor): Mask with negative targets of shape [batch_size, num_feats].
+
+            * If mode is 'train':
+                pos_tgts (BoolTensor): Mask with positive targets of shape [batch_size, num_feats].
+                neg_tgts (BoolTensor): Mask with negative targets of shape [batch_size, num_feats].
 
         Raises:
-            ValueError: Error when unknown feature-target metric is present in 'ftm_metric' attribute.
-            ValueError: Error when unknown feature-target decision maker type is present in 'ftm_decision' attribute.
+            ValueError: Error when positive predictions mask is not provided while in 'self' mode.
+            ValueError: Error when found targets mask is not provided while in 'train' mode.
+            ValueError: Error when invalid forward DOD mode is provided.
+            ValueError: Error when unknown feature-target metric is present in 'tgt_metric' attribute.
+            ValueError: Error when unknown target decision maker type is present in 'tgt_decision' attribute.
         """
+
+        # Check inputs
+        if mode == 'self':
+            if pos_preds is None:
+                error_msg = "The positive predictions mask should be provided when in 'self' mode, but got None."
+                raise ValueError(error_msg)
+
+        elif mode == 'train':
+            if tgt_found is None:
+                error_msg = "The found targets mask should be provided when in 'train' mode, but got None."
+                raise ValueError(error_msg)
+
+        else:
+            error_msg = f"Mode should be chosen from {{'self', 'train'}} , but got '{mode}'."
+            raise ValueError(error_msg)
 
         # Get batch size, feature boxes and concatenated targets boxes
         batch_size = len(tgt_boxes)
@@ -189,56 +238,68 @@ class DOD(nn.Module):
 
         # Return if there are no target boxes
         if len(tgt_boxes) == 0:
-            num_feats = len(feat_boxes)
-            tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-            matched_feats = torch.zeros(batch_size, num_feats, **tensor_kwargs)
+            pos_tgts = torch.zeros_like(neg_preds)
+            neg_tgts = ~neg_preds
 
-            if pos_preds is None:
-                return matched_feats
+            if mode == 'train':
+                return pos_tgts, neg_tgts
 
-            pos_useful = torch.zeros_like(matched_feats)
-            tgt_found = [torch.zeros(0, **tensor_kwargs) for _ in range(batch_size)]
+            pos_useful = torch.zeros_like(neg_preds)
+            tgt_found = [torch.zeros(0).to(neg_preds) for _ in range(batch_size)]
 
-            return pos_useful, tgt_found, matched_feats
+            return pos_useful, tgt_found, pos_tgts, neg_tgts
 
         # Get feature-target similarity matrices
-        if self.ftm_metric == 'iou':
+        if self.tgt_metric == 'iou':
             sim_matrix = box_iou(feat_boxes, tgt_boxes)
             tgts_per_img = tgt_boxes.boxes_per_img.tolist()
 
         else:
-            error_msg = f"Unknown feature-target metric '{self.ftm_metric}' during feature-target matching."
+            error_msg = f"Unknown feature-target metric '{self.tgt_metric}'."
             raise ValueError(error_msg)
 
-        # Get masks of matching feature-target pairs
-        if self.ftm_decision == 'abs':
-            ftm_mask = sim_matrix > self.ftm_abs_threshold
+        # Get initial positive and negative target masks
+        if self.tgt_decision == 'abs':
+            pos_mask = sim_matrix >= self.abs_pos_tgt
+            non_neg_mask = sim_matrix >= self.abs_neg_tgt
 
-        elif self.ftm_decision == 'rel':
-            ftm_ids = torch.argsort(sim_matrix, dim=0)[-self.ftm_rel_threshold:, :]
-            ftm_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
-            ftm_mask[ftm_ids, torch.arange(ftm_ids.shape[1])] = True
+        elif self.tgt_decision == 'rel':
+            sorted_ids = torch.argsort(sim_matrix, dim=0)
+            num_tgts = sorted_ids.shape[1]
+
+            pos_ids = sorted_ids[-self.rel_pos_tgt:, :]
+            pos_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
+            pos_mask[pos_ids, torch.arange(num_tgts)] = True
+
+            non_neg_ids = sorted_ids[-self.rel_neg_tgt:, :]
+            non_neg_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
+            non_neg_mask[non_neg_ids, torch.arange(num_tgts)] = True
 
         else:
-            error_msg = f"Unknown decision maker type '{self.ftm_decision}' during feature-target matching."
+            error_msg = f"Unknown target decision maker type '{self.tgt_decision}'."
             raise ValueError(error_msg)
 
-        ftm_masks = torch.split(ftm_mask, tgts_per_img, dim=1)
-        matched_feats = torch.stack([torch.sum(ftm_mask, dim=1) > 0 for ftm_mask in ftm_masks], dim=0)
+        pos_masks = torch.split(pos_mask, tgts_per_img, dim=1)
+        pos_tgts = torch.stack([torch.sum(pos_mask, dim=1) > 0 for pos_mask in pos_masks], dim=0)
 
-        # Return matched features if no positive prediction mask is provided
-        if pos_preds is None:
-            return matched_feats
+        non_neg_masks = torch.split(non_neg_mask, tgts_per_img, dim=1)
+        neg_tgts = torch.stack([torch.sum(non_neg_mask, dim=1) == 0 for non_neg_mask in non_neg_masks], dim=0)
 
-        # Get useful positives and found targets
-        pos_useful = pos_preds & matched_feats
-        tgt_found = [(ftm_masks[i] & pos_preds[i, :, None]).sum(dim=0) > 0 for i in range(batch_size)]
+        # Get useful positives and found targets if in 'self' mode
+        if mode == 'self':
+            pos_useful = pos_preds & pos_tgts
+            tgt_found = [(pos_masks[i] & pos_preds[i, :, None]).sum(dim=0) > 0 for i in range(batch_size)]
 
-        # Get missing targets matched features
-        ftm_masks = [ftm_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
-        matched_feats = torch.stack([torch.sum(ftm_mask, dim=1) > 0 for ftm_mask in ftm_masks], dim=0)
+        # Get final positive and negative target masks
+        pos_masks = [pos_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
+        pos_tgts = torch.stack([torch.sum(pos_mask, dim=1) > 0 for pos_mask in pos_masks], dim=0)
+        neg_tgts = ~neg_preds & neg_tgts
 
-        return pos_useful, tgt_found, matched_feats
+        # Return desired items depending on mode
+        if mode == 'self':
+            return pos_useful, tgt_found, pos_tgts, neg_tgts
+        else:
+            return pos_tgts, neg_tgts
 
     def forward(self, feat_maps, tgt_dict=None, mode='self', train_dict=None, **kwargs):
         """
@@ -251,11 +312,12 @@ class DOD(nn.Module):
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
 
-            mode (str): Mode of forward DOD method chosen from {'self', 'pred', 'train'}.
+            mode (str): Mode of forward DOD method chosen from {'pred', 'self', 'train'}.
 
             train_dict (Dict): Dictionary needed during 'train' mode requiring following keys:
                 - logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}];
-                - pos_preds (BoolTensor): mask with positives predictions of shape [batch_size, num_feats];
+                - pos_preds (BoolTensor): mask with positive predictions of shape [batch_size, num_feats];
+                - neg_preds (BoolTensor): mask with negative predictions of shape [batch_size, num_feats];
                 - pos_useful (BoolTensor): mask with useful positives predictions of shape [batch_size, num_feats];
                 - tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets].
 
@@ -263,14 +325,15 @@ class DOD(nn.Module):
                 - visualize (bool): boolean indicating whether in visualization mode or not.
 
         Returns:
+            * If mode is 'pred':
+                logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}].
+                pos_preds (BoolTensor): Mask with positive predictions of shape [batch_size, num_feats].
+                neg_preds (BoolTensor): Mask with negative predictions of shape [batch_size, num_feats].
+                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
+
             * If mode is 'self' or 'train':
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
-
-            * If mode is 'pred':
-                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
-                pos_preds (BoolTensor): Mask with positives predictions of shape [batch_size, num_feats].
-                logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}].
 
         Raises:
             ValueError: Error when unknown forward DOD mode is provided.
@@ -286,32 +349,36 @@ class DOD(nn.Module):
         analysis_dict = {}
 
         # Check provided mode
-        if mode not in ('self', 'pred', 'train'):
-            error_msg = f"Mode should be chosen from {{'self', 'pred', 'train'}} , but got '{mode}'."
+        if mode not in ('pred', 'self', 'train'):
+            error_msg = f"Mode should be chosen from {{'pred', 'self', 'train'}} , but got '{mode}'."
             raise ValueError(error_msg)
 
-        # Get logits and mask with positive predictions if desired
-        if mode in ('self', 'pred'):
+        # Make predictions
+        if mode in ('pred', 'self'):
 
             # Get logits
             logits = torch.cat([logit_map.flatten(2).permute(0, 2, 1) for logit_map in self.net(feat_maps)], dim=1)
 
-            # Get mask with positive predictions
+            # Get positive and negative prediction masks
             if logits.shape[-1] == 1:
-                pos_preds = logits[:, :, 0] > 0.5
+                obj_probs = torch.sigmoid(logits)[:, :, 0]
             elif logits.shape[-1] == 2:
-                pos_preds = logits[:, :, 0] > logits[:, :, 1]
+                obj_probs = torch.softmax(logits, dim=2)[:, :, 0]
             else:
                 error_msg = f"Logits should have size 1 or 2, but got size {logits.shape[-1]}."
                 raise RuntimeError(error_msg)
 
+            pos_preds = obj_probs >= self.pos_pred
+            neg_preds = obj_probs < self.neg_pred
+
             analysis_dict['pos_preds'] = torch.sum(pos_preds)[None] / batch_size
+            analysis_dict['neg_preds'] = torch.sum(neg_preds)[None] / batch_size
 
         # Return if in 'pred' mode
         if mode == 'pred':
             analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
 
-            return analysis_dict, pos_preds, logits
+            return logits, pos_preds, neg_preds, analysis_dict
 
         # Handle case where no target dictionary is provided
         if tgt_dict is None:
@@ -327,25 +394,31 @@ class DOD(nn.Module):
                 error_msg = "A training dictionary must be provided when in 'train' mode."
                 raise ValueError(error_msg)
 
-            for required_key in ('logits', 'pos_preds', 'pos_useful', 'tgt_found'):
+            for required_key in ('logits', 'pos_preds', 'neg_preds', 'pos_useful', 'tgt_found'):
                 if required_key not in train_dict:
                     error_msg = f"The key '{required_key}' is missing from the training dictionary."
                     raise ValueError(error_msg)
 
-        # Get useful positives, found targets and matched features of missing targets
-        if mode == 'train':
+            logits = train_dict['logits']
             pos_preds = train_dict['pos_preds']
+            neg_preds = train_dict['neg_preds']
             pos_useful = train_dict['pos_useful']
             tgt_found = train_dict['tgt_found']
 
-            missed_tgt_boxes = [boxes_i[~found_i] for boxes_i, found_i in zip(tgt_dict['boxes'], tgt_found)]
-            matched_feats = self.ft_matching(feat_maps, missed_tgt_boxes)
+        # Get useful positives, found targets and positive and negative target masks
+        if mode == 'self':
+            args = (feat_maps, tgt_dict['boxes'], neg_preds)
+            kwargs = {'mode': mode, 'pos_preds': pos_preds}
+            pos_useful, tgt_found, pos_tgts, neg_tgts = self.get_target_masks(*args, **kwargs)
 
         else:
-            pos_useful, tgt_found, matched_feats = self.ft_matching(feat_maps, tgt_dict['boxes'], pos_preds=pos_preds)
+            args = (feat_maps, tgt_dict['boxes'], neg_preds)
+            kwargs = {'mode': mode, 'tgt_found': tgt_found}
+            pos_tgts, neg_tgts = self.get_target_masks(*args, **kwargs)
 
         analysis_dict['pos_useful'] = torch.sum(pos_useful)[None] / batch_size
-        analysis_dict['matched_feats'] = torch.sum(matched_feats)[None] / batch_size
+        analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None] / batch_size
+        analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None] / batch_size
 
         tgt_found = torch.cat(tgt_found, dim=0)
         num_tgts = len(tgt_found)
@@ -355,22 +428,11 @@ class DOD(nn.Module):
         else:
             analysis_dict['tgt_found'] = 100 * torch.ones(1).to(tgt_found)
 
-        # Get targets
-        pos_tgts = pos_useful | matched_feats
-        neg_tgts = pos_preds & ~pos_useful
-
+        # Get weighted positive, negative and hill losses
         targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)
         targets[pos_tgts] = 1
         targets[neg_tgts] = 0
 
-        analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None] / batch_size
-        analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None] / batch_size
-
-        # Recover logits from training dictionary when in 'train' mode
-        if mode == 'train':
-            logits = train_dict['logits']
-
-        # Get weighted positive and negative losses
         loss_feats = targets != -1
         logits = logits[loss_feats, :]
         targets = targets[loss_feats]
@@ -394,6 +456,7 @@ class DOD(nn.Module):
         loss_dict = {}
         loss_dict['pos_loss'] = self.pos_weight * losses[targets == 1].sum(dim=0, keepdim=True)
         loss_dict['neg_loss'] = self.neg_weight * losses[targets == 0].sum(dim=0, keepdim=True)
+        loss_dict['hill_loss'] = self.hill_weight * self.hill_loss(logits, reduction='sum')
 
         # Return loss and analysis dictionaries with 'dod' tags
         loss_dict = {f'dod_{k}': v for k, v in loss_dict.items()}
