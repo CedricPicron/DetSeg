@@ -118,6 +118,7 @@ def build_det_heads(args):
             tgt_dict = {'metric': args.dod_tgt_metric, 'decision': args.dod_tgt_decision}
             tgt_dict = {**tgt_dict, 'abs_pos_tgt': args.dod_abs_pos_tgt, 'abs_neg_tgt': args.dod_abs_neg_tgt}
             tgt_dict = {**tgt_dict, 'rel_pos_tgt': args.dod_rel_pos_tgt, 'rel_neg_tgt': args.dod_rel_neg_tgt}
+            tgt_dict = {**tgt_dict, 'static_tgt': args.dod_static_tgt}
 
             loss_dict = {'type': args.dod_loss_type, 'focal_alpha': args.dod_focal_alpha}
             loss_dict = {**loss_dict, 'focal_gamma': args.dod_focal_gamma, 'pos_weight': args.dod_pos_weight}

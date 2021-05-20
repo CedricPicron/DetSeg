@@ -32,6 +32,7 @@ class DOD(nn.Module):
         abs_neg_tgt (float): Absolute threshold used during negative target decision making.
         rel_pos_tgt (int): Relative threshold used during positive target decision making.
         rel_neg_tgt (int): Relative threshold used during negative target decision making.
+        static_tgt (bool): Boolean indicating whether targets are static, i.e. independent of predictions.
 
         loss_type (str): String containing the type of loss.
         focal_alpha (float): Alpha value of the sigmoid focal loss.
@@ -69,7 +70,8 @@ class DOD(nn.Module):
                 - abs_pos_tgt (float): absolute threshold used during positive target decision making;
                 - abs_neg_tgt (float): absolute threshold used during negative target decision making;
                 - rel_pos_tgt (int): relative threshold used during positive target decision making;
-                - rel_neg_tgt (int): relative threshold used during negative target decision making.
+                - rel_neg_tgt (int): relative threshold used during negative target decision making;
+                - static_tgt (bool): boolean indicating whether targets are static, i.e. independent of predictions.
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - type (str): string containing the type of loss;
@@ -127,6 +129,7 @@ class DOD(nn.Module):
         self.abs_neg_tgt = tgt_dict['abs_neg_tgt']
         self.rel_pos_tgt = tgt_dict['rel_pos_tgt']
         self.rel_neg_tgt = tgt_dict['rel_neg_tgt']
+        self.static_tgt = tgt_dict['static_tgt']
 
         # Set loss-related attributes
         self.loss_type = loss_dict['type']
@@ -258,7 +261,7 @@ class DOD(nn.Module):
             error_msg = f"Unknown feature-target metric '{self.tgt_metric}'."
             raise ValueError(error_msg)
 
-        # Get initial positive and negative target masks
+        # Get static positive and negative target masks
         if self.tgt_decision == 'abs':
             pos_mask = sim_matrix >= self.abs_pos_tgt
             non_neg_mask = sim_matrix >= self.abs_neg_tgt
@@ -290,10 +293,11 @@ class DOD(nn.Module):
             pos_useful = pos_preds & pos_tgts
             tgt_found = [(pos_masks[i] & pos_preds[i, :, None]).sum(dim=0) > 0 for i in range(batch_size)]
 
-        # Get final positive and negative target masks
-        pos_masks = [pos_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
-        pos_tgts = torch.stack([torch.sum(pos_mask, dim=1) > 0 for pos_mask in pos_masks], dim=0)
-        neg_tgts = ~neg_preds & neg_tgts
+        # Get dynamic positive and negative target masks if desired
+        if not self.static_tgt:
+            pos_masks = [pos_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
+            pos_tgts = torch.stack([torch.sum(pos_mask, dim=1) > 0 for pos_mask in pos_masks], dim=0)
+            neg_tgts = ~neg_preds & neg_tgts
 
         # Return desired items depending on mode
         if mode == 'self':

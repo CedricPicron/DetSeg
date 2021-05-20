@@ -211,6 +211,7 @@ def get_parser():
     parser.add_argument('--dod_abs_neg_tgt', default=0.3, type=float, help='DOD absolute negative target threshold')
     parser.add_argument('--dod_rel_pos_tgt', default=5, type=int, help='DOD relative positive target threshold')
     parser.add_argument('--dod_rel_neg_tgt', default=10, type=int, help='DOD relative negative target threshold')
+    parser.add_argument('--dod_static_tgt', action='store_true', help='static DOD targets independent of predictions')
 
     parser.add_argument('--dod_loss_type', default='sigmoid_focal', type=str, help='type of loss used by DOD head')
     parser.add_argument('--dod_focal_alpha', default=0.25, type=float, help='DOD focal alpha value')

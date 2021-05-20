@@ -335,7 +335,8 @@ elif profiling_args.model == 'dod_self':
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
     main_args.dod_rel_preds = False
-    main_args.dod_ftm_decision = 'rel'
+    main_args.dod_tgt_decision = 'rel'
+    main_args.dod_static_tgt = False
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)[0].to('cuda')
 
@@ -365,7 +366,8 @@ elif profiling_args.model == 'dod_train':
     main_args.core_type = 'FPN'
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
-    main_args.dod_ftm_decision = 'rel'
+    main_args.dod_tgt_decision = 'rel'
+    main_args.dod_static_tgt = False
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)[0].to('cuda')
 
