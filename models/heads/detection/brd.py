@@ -15,7 +15,8 @@ import torch.nn.functional as F
 from models.functional.position import sine_pos_encodings
 from models.modules.attention import SelfAttn1d
 from models.modules.container import Sequential
-from models.modules.mlp import FFN, MLP
+from models.modules.ffn import FFN
+from models.modules.mlp import MLP
 from models.modules.policy import PolicyNet
 from structures.boxes import Boxes, box_giou
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
@@ -77,7 +78,7 @@ class BRD(nn.Module):
             head_dict (Dict): Head dictionary containing following keys:
                 - num_classes (int): integer containing the number of object classes (without background);
                 - hidden_size (int): integer containing the hidden feature size used during the MLP operation;
-                - num_hidden_layers (int): number of hidden layers of the MLP head;
+                - layers (int): number of hidden layers of the MLP head;
                 - prior_cls_prob (float): prior class probability.
 
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -164,8 +165,8 @@ class BRD(nn.Module):
         """
 
         bias_value = -(math.log((1 - prior_cls_prob) / prior_cls_prob))
-        torch.nn.init.constant_(self.cls_head.head[-1][-1].bias, bias_value)
-        torch.nn.init.zeros_(self.box_head.head[-1][-1].bias)
+        torch.nn.init.constant_(self.cls_head.mlp[-1][-1].bias, bias_value)
+        torch.nn.init.zeros_(self.box_head.mlp[-1][-1].bias)
 
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """
@@ -432,9 +433,8 @@ class BRD(nn.Module):
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
-        # Get batch size and number of feature maps
+        # Get batch size
         batch_size = len(feat_maps[0])
-        num_maps = len(feat_maps)
 
         # Assume no padded regions when feature masks are missing
         if feat_masks is None:
@@ -442,34 +442,33 @@ class BRD(nn.Module):
             feat_masks = [torch.ones(*feat_map[:, 0].shape, **tensor_kwargs) for feat_map in feat_maps]
 
         # Get position feature maps and position ids
-        pos_feat_maps, pos_id_maps = sine_pos_encodings((feat_maps, feat_masks), input_type='pyramid', normalize=True)
+        pos_feat_maps, pos_id_maps = sine_pos_encodings(feat_maps, normalize=True)
 
         # Get object features, position features and prior object locations before sampling
         obj_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-        pos_feats = torch.cat([pos_feat_map.flatten(2).permute(0, 2, 1) for pos_feat_map in pos_feat_maps], dim=1)
-        prior_cxcy = torch.cat([pos_id_map.flatten(2).permute(0, 2, 1) for pos_id_map in pos_id_maps], dim=1)
+        pos_feats = torch.cat([pos_feat_map.flatten(1).t() for pos_feat_map in pos_feat_maps], dim=0)
+        prior_cxcy = torch.cat([pos_id_map.flatten(1).t() for pos_id_map in pos_id_maps], dim=0)
 
         # Get prior object sizes before sampling
-        prior_w = [(1/feat_mask[:, 0, :].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
-        prior_h = [(1/feat_mask[:, :, 0].sum(dim=1)).repeat(*feat_mask.shape[1:], 1) for feat_mask in feat_masks]
-        prior_wh = [torch.stack([prior_w[i], prior_h[i]], dim=3) for i in range(num_maps)]
-        prior_wh = torch.cat([prior_wh[i].flatten(0, 1).permute(1, 0, 2) for i in range(num_maps)], dim=1)
+        map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(prior_cxcy.device)
+        prior_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(prior_cxcy)
+        prior_wh = torch.repeat_interleave(prior_wh, map_numel, dim=0)
 
         # Get prior boxes before sampling
-        prior_boxes = torch.cat([prior_cxcy, prior_wh], dim=2)
+        prior_boxes = torch.cat([prior_cxcy, prior_wh], dim=1)
 
         # Apply policy to get object features with corresponding information
         if tgt_dict is not None:
             sample_masks, action_losses = self.policy(feat_maps, mode='training')
             obj_feats = [obj_feats[i][sample_masks[i]] for i in range(batch_size)]
-            pos_feats = [pos_feats[i][sample_masks[i]] for i in range(batch_size)]
-            prior_boxes = [prior_boxes[i][sample_masks[i]] for i in range(batch_size)]
+            pos_feats = [pos_feats[sample_masks[i]] for i in range(batch_size)]
+            prior_boxes = [prior_boxes[sample_masks[i]] for i in range(batch_size)]
 
         else:
             sample_ids = self.policy(feat_maps, mode='inference')
             obj_feats = [obj_feats[i][sample_ids[i]] for i in range(batch_size)]
-            pos_feats = [pos_feats[i][sample_ids[i]] for i in range(batch_size)]
-            prior_boxes = [prior_boxes[i][sample_ids[i]] for i in range(batch_size)]
+            pos_feats = [pos_feats[sample_ids[i]] for i in range(batch_size)]
+            prior_boxes = [prior_boxes[sample_ids[i]] for i in range(batch_size)]
 
         # Process object features with decoder
         decoder_output = self.decoder(obj_feats, return_intermediate=self.inter_loss, pos_feat_list=pos_feats)

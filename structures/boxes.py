@@ -5,6 +5,7 @@ import math
 
 import torch
 
+from models.functional.position import sine_pos_encodings
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
@@ -830,6 +831,33 @@ def get_edge_dists(pts, boxes, scales=None):
     edge_dists = torch.cat([left_top_dists, right_bottom_dists], dim=1)
 
     return edge_dists
+
+
+def get_feat_boxes(feat_maps):
+    """
+    Function computing feature boxes based on map sizes of given feature maps.
+
+    Args:
+        feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+
+    Returns:
+        feat_boxes (Boxes): Axis-aligned bounding boxes related to features of given feature maps of size [num_feats].
+    """
+
+    # Get feature centers
+    _, feat_cts_maps = sine_pos_encodings(feat_maps, normalize=True)
+    feat_cts = torch.cat([feat_cts_map.flatten(1).t() for feat_cts_map in feat_cts_maps], dim=0)
+
+    # Get feature widths and heights
+    map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(feat_cts.device)
+    feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_cts)
+    feat_wh = torch.repeat_interleave(feat_wh, map_numel, dim=0)
+
+    # Concatenate feature centers, widths and heights to get feature boxes
+    feat_boxes = torch.cat([feat_cts, feat_wh], dim=1)
+    feat_boxes = Boxes(feat_boxes, format='cxcywh', normalized='img_with_padding')
+
+    return feat_boxes
 
 
 def pts_inside_boxes(pts, boxes):

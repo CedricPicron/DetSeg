@@ -1,5 +1,5 @@
 """
-DETR modules and build function.
+Detection Transformer (DETR) architecture.
 """
 from collections import OrderedDict
 
@@ -8,12 +8,8 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from .backbone import build_backbone
-from .criterion import build_criterion
-from .decoder import build_decoder, GlobalDecoder
-from .encoder import build_encoder
-from .position import build_position_encoder
-from .utils import MLP
+from models.modules.detr.decoder import GlobalDecoder
+from models.modules.detr.mlp import MLP
 from structures.boxes import Boxes
 
 
@@ -46,7 +42,7 @@ class DETR(nn.Module):
             criterion (nn.Module): Module comparing predictions with targets.
             num_classes (int): Number of object classes (without background class).
             train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
-            metadata (detectron2.data.Metadata, optional): Metadata instance containing additional dataset information.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         super().__init__()
@@ -242,7 +238,7 @@ class DETR(nn.Module):
 
         return pred_dict
 
-    def forward(self, images, tgt_dict=None, optimizer=None, **kwargs):
+    def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
         """
         Forward method of the DETR module.
 
@@ -254,10 +250,10 @@ class DETR(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
-            optimizer (torch.optim.Optimizer): Optional optimizer updating the DETR model parameters during training.
-
-            kwargs (Dict): Dictionary of keyword arguments, potentially containing following keys:
-                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
+            optimizer (torch.optim.Optimizer): Optimizer updating the DETR parameters during training (default=None).
+            max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
+            visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
+            kwargs (Dict): Dictionary of keyword arguments not used by the DETR architecture.
 
         Returns:
             * If tgt_dict is not None and optimizer is not None (i.e. during training):
@@ -265,7 +261,7 @@ class DETR(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is not None and optimizer is None (i.e. during validation):
-                pred_dict (Dict): Prediction dictionary from the last decoder layer containing following keys:
+                pred_dicts (List): List with prediction dictionary from last decoder layer containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_slots_total];
                     - boxes (Boxes): axis-aligned bounding boxes of size [num_slots_total];
                     - scores (FloatTensor): normalized prediction scores of shape [num_slots_total];
@@ -275,11 +271,19 @@ class DETR(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If tgt_dict is None (i.e. during testing):
-                pred_dict (Dict): Prediction dictionary from the last decoder layer (see above for more information).
+                pred_dicts (List): List with prediction dictionary from last decoder layer.
+                analysis_dict (Dict): Empty dictionary.
+
+        Raises:
+            ValueError: Error when visualizations are requested.
         """
 
+        # Check whether 'visualize' is False
+        if visualize:
+            raise ValueError("The DETR architecture does not provide visualizations.")
+
         # Get projected backbone features and position encodings
-        conv_features, feature_masks = self.backbone(images)
+        conv_features, feature_masks = self.backbone(images, return_masks=True)
         conv_features, feature_masks = (conv_features[-1], feature_masks[-1])
         proj_features = self.projector(conv_features)
         pos_encodings = self.position_encoder(proj_features, feature_masks)
@@ -322,17 +326,18 @@ class DETR(nn.Module):
             tgt_dict['boxes'] = tgt_dict['boxes'].normalize(images, with_padding=False)
             loss_dict, analysis_dict = self.criterion(out_list, tgt_dict)
 
-        # Get prediction dictionary (validation/testing only)
+        # Get list with prediction dictionary (validation/testing only)
         if optimizer is None:
-            pred_dict = self.make_predictions(out_list[0])
+            pred_dicts = [self.make_predictions(out_list[0])]
 
-        # Return prediction dictionary
+        # Return prediction dictionaries and empty analysis dictionary (testing only)
         if tgt_dict is None:
-            return pred_dict
+            analysis_dict = {}
+            return pred_dicts, analysis_dict
 
         # Return prediction, loss and analysis dictionaries (validation only)
         if optimizer is None:
-            return pred_dict, loss_dict, analysis_dict
+            return pred_dicts, loss_dict, analysis_dict
 
         # Reset gradients of model parameters (training only)
         optimizer.zero_grad()
@@ -341,40 +346,8 @@ class DETR(nn.Module):
         loss = sum(loss_dict.values())
         loss.backward()
 
-        # Clip gradient when positive maximum norm is provided (training only)
-        if 'max_grad_norm' in kwargs:
-            if kwargs['max_grad_norm'] > 0:
-                clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
-
         # Update model parameters (training only)
+        clip_grad_norm_(self.parameters(), max_grad_norm) if max_grad_norm > 0 else None
         optimizer.step()
 
         return loss_dict, analysis_dict
-
-
-def build_detr(args):
-    """
-    Build DETR module from command-line arguments.
-
-    Args:
-        args (argparse.Namespace): Command-line arguments.
-
-    Returns:
-        detr (DETR): The specified DETR module.
-    """
-
-    backbone = build_backbone(args)
-    position_encoder = build_position_encoder(args)
-    encoder = build_encoder(args)
-    decoder = build_decoder(args)
-    criterion = build_criterion(args)
-
-    train_projector = args.lr_projector > 0
-    train_class_head = args.lr_class_head > 0
-    train_bbox_head = args.lr_bbox_head > 0
-
-    train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
-    metadata = args.val_metadata if args.dataset == 'coco' else None
-    detr = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
-
-    return detr

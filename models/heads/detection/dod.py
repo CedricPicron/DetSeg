@@ -11,8 +11,7 @@ from torch import nn
 
 from models.modules.convolution import BottleneckConv, ProjConv
 from models.modules.loss import SigmoidHillLoss
-from models.utils import get_feat_boxes
-from structures.boxes import Boxes, box_iou
+from structures.boxes import Boxes, box_iou, get_feat_boxes
 
 
 class DOD(nn.Module):
@@ -145,49 +144,6 @@ class DOD(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def forward_init(self, images, feat_maps, tgt_dict=None):
-        """
-        Forward initialization method of the DOD module.
-
-        Args:
-            images (Images): Images structure containing the batched images.
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-
-            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
-                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
-
-        Returns:
-            * If tgt_dict is not None (i.e. during training and validation):
-                tgt_dict (Dict): Updated target dictionary with following updated keys:
-                    - labels (List): list of size [batch_size] with class indices of shape [num_targets];
-                    - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
-
-                attr_dict (Dict): Empty dictionary.
-                buffer_dict (Dict): Empty dictionary.
-
-            * If tgt_dict is None (i.e. during testing):
-                tgt_dict (None): Contains the None value.
-                attr_dict (Dict): Empty dictionary.
-                buffer_dict (Dict): Empty dictionary.
-        """
-
-        # Return when no target dictionary is provided (testing only)
-        if tgt_dict is None:
-            return None, {}, {}
-
-        # Get normalized bounding boxes
-        norm_boxes = tgt_dict['boxes'].normalize(images, with_padding=True)
-
-        # Update target dictionary
-        sizes = tgt_dict['sizes']
-        tgt_dict['labels'] = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
-        tgt_dict['boxes'] = [norm_boxes[i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
-
-        return tgt_dict, {}, {}
-
-    @torch.no_grad()
     def get_target_masks(self, feat_maps, tgt_boxes, neg_preds, mode='self', pos_preds=None, tgt_found=None):
         """
         Get positive and negative target masks.
@@ -305,17 +261,19 @@ class DOD(nn.Module):
         else:
             return pos_tgts, neg_tgts
 
-    def forward(self, feat_maps, tgt_dict=None, mode='self', train_dict=None, **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, images=None, mode='self', train_dict=None, **kwargs):
         """
         Forward method of the DOD module.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
-            tgt_dict (Dict): Updated target dictionary with following updated keys:
-                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
-                - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
+            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            images (Images): Images structure containing the batched images (default=None).
             mode (str): Mode of forward DOD method chosen from {'pred', 'self', 'train'}.
 
             train_dict (Dict): Dictionary needed during 'train' mode requiring following keys:
@@ -325,8 +283,7 @@ class DOD(nn.Module):
                 - pos_useful (BoolTensor): mask with useful positives predictions of shape [batch_size, num_feats];
                 - tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets].
 
-            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
-                - visualize (bool): boolean indicating whether in visualization mode or not.
+            kwargs (Dict): Dictionary of keyword arguments not used by this head module.
 
         Returns:
             * If mode is 'pred':
@@ -335,14 +292,19 @@ class DOD(nn.Module):
                 neg_preds (BoolTensor): Mask with negative predictions of shape [batch_size, num_feats].
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
-            * If mode is 'self' or 'train':
+            * If mode is 'self' or 'train' and tgt_dict is not None:
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
+
+            * If mode is 'self' and tgt_dict is None:
+                pred_dicts (List): Empty list.
+                analysis_dict (Dict):  Dictionary of different analyses used for logging purposes only.
 
         Raises:
             ValueError: Error when unknown forward DOD mode is provided.
             RuntimeError: Error when logits have size different than 1 or 2.
             ValueError: Error when in 'train' mode, but no target dictionary was provided.
+            ValueError: Error when a target dictionary is provided without a corresponding Images structure.
             ValueError: Error when in 'train' mode, but no training dictionary was provided.
             ValueError: Error when one of the required keys of the training dictionary is missing.
             ValueError: Error when unknown loss type is present in 'loss_type' attribute.
@@ -381,7 +343,6 @@ class DOD(nn.Module):
         # Return if in 'pred' mode
         if mode == 'pred':
             analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
-
             return logits, pos_preds, neg_preds, analysis_dict
 
         # Handle case where no target dictionary is provided
@@ -390,7 +351,17 @@ class DOD(nn.Module):
                 error_msg = "A target dictionary must be provided when in 'train' mode."
                 raise ValueError(error_msg)
             else:
-                return {}
+                pred_dicts = []
+                return pred_dicts, analysis_dict
+
+        # Get target boxes in desired format
+        if images is not None:
+            sizes = tgt_dict['sizes']
+            tgt_boxes = tgt_dict['boxes'].normalize(images, with_padding=True)
+            tgt_boxes = [tgt_boxes[i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
+        else:
+            error_msg = "A corresponding Images structure must be provided along with the target dictionary."
+            raise ValueError(error_msg)
 
         # Check whether correct training dictionary was given when in 'train' mode
         if mode == 'train':
@@ -411,14 +382,14 @@ class DOD(nn.Module):
 
         # Get useful positives, found targets and positive and negative target masks
         if mode == 'self':
-            args = (feat_maps, tgt_dict['boxes'], neg_preds)
-            kwargs = {'mode': mode, 'pos_preds': pos_preds}
-            pos_useful, tgt_found, pos_tgts, neg_tgts = self.get_target_masks(*args, **kwargs)
+            tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
+            tgt_mask_kwargs = {'mode': mode, 'pos_preds': pos_preds}
+            pos_useful, tgt_found, pos_tgts, neg_tgts = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
 
         else:
-            args = (feat_maps, tgt_dict['boxes'], neg_preds)
-            kwargs = {'mode': mode, 'tgt_found': tgt_found}
-            pos_tgts, neg_tgts = self.get_target_masks(*args, **kwargs)
+            tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
+            tgt_mask_kwargs = {'mode': mode, 'tgt_found': tgt_found}
+            pos_tgts, neg_tgts = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
 
         analysis_dict['pos_useful'] = torch.sum(pos_useful)[None] / batch_size
         analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None] / batch_size

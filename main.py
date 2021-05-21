@@ -3,7 +3,6 @@ Main program script.
 """
 import argparse
 import datetime
-import json
 from pathlib import Path
 import time
 
@@ -11,9 +10,8 @@ import torch
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
 from datasets.build import build_dataset
-from engine import evaluate, save_checkpoint, save_log, train, visualize
-from models.bivinet import build_bivinet
-from models.detr import build_detr
+from engine import evaluate, save_checkpoint, save_log, train
+from models.archs.build import build_arch
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
 from utils.flops import compute_flops
@@ -53,46 +51,30 @@ def get_parser():
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
     parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
 
-    # Meta-architecture
-    parser.add_argument('--meta_arch', default='BiViNet', choices=['BiViNet', 'DETR'], help='meta-architecture type')
+    # Architecture
+    parser.add_argument('--arch_type', default='bch', type=str, help='type of architecture module')
 
-    # * Backbone
-    parser.add_argument('--backbone', default='resnet50', type=str, help='name of the convolutional backbone to use')
-    parser.add_argument('--dilation', action='store_true', help='replace stride with dilation in the last conv. block')
-
-    # BiViNet
-    parser.add_argument('--bvn_min_downsampling', default=3, type=int, help='minumum downsampling exponent')
-    parser.add_argument('--bvn_max_downsampling', default=6, type=int, help='maximum downsampling exponent')
-    parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BiViNet step mode')
+    # * BVN (Bidirectional Vision Network)
+    parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BVN step mode')
     parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
 
-    # * Core
-    parser.add_argument('--core_type', default='GC', choices=['BLA', 'FPN', 'GC'], help='type of core module')
+    # Backbone
+    parser.add_argument('--backbone_type', default='resnet', type=str, help='type of backbone module')
 
-    # ** BLA (Bidirectional Local Attention)
-    parser.add_argument('--bla_version', default='main', choices=['main', 'v1', 'v2', 'v3'], help='BLA version string')
-    parser.add_argument('--bla_num_layers', default=4, type=int, help='number of consecutive BLA core layers')
+    # * ResNet
+    parser.add_argument('--resnet_name', default='resnet50', type=str, help='full name of the desired ResNet model')
+    parser.add_argument('--resnet_dilation', action='store_true', help='use dilation for ResNet layer block')
 
-    parser.add_argument('--bla_base_feat_size', default=8, type=int, help='feature size of highest resolution map')
-    parser.add_argument('--bla_base_num_heads', default=1, type=int, help='number of heads of highest resolution map')
-    parser.add_argument('--bla_max_feat_size', default=1024, type=int, help='largest allowed feature size per map')
-    parser.add_argument('--bla_max_num_heads', default=8, type=int, help='maximum number of attention heads per map')
+    # Core
+    parser.add_argument('--core_type', default='fpn', choices=['fpn', 'gc'], help='type of core module')
+    parser.add_argument('--core_min_map_id', default=3, type=int, help='minimum map id of core feature maps')
+    parser.add_argument('--core_max_map_id', default=7, type=int, help='maximum map id of core feature maps')
 
-    parser.add_argument('--bla_disable_self', action='store_true', help='disables BLA self-attention mechanism')
-    parser.add_argument('--bla_disable_td', action='store_true', help='disables BLA top-down attention mechanism')
-    parser.add_argument('--bla_disable_bu', action='store_true', help='disables BLA bottom-up attention mechanism')
-    parser.add_argument('--bla_disable_pos', action='store_true', help='disables BLA position dependent attention')
-    parser.add_argument('--bla_attn_dropout', default=0.1, type=float, help='dropout value used with BLA attention')
-
-    parser.add_argument('--bla_disable_ffn', action='store_true', help='disables BLA FFN layers')
-    parser.add_argument('--bla_ffn_size_multiplier', default=8, type=int, help='size multiplier used during BLA FFN')
-    parser.add_argument('--bla_ffn_dropout', default=0.1, type=float, help='dropout value used during BLA FFN')
-
-    # ** FPN (Feature Pyramid Network)
+    # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
     parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')
 
-    # ** GC (Generalized Core)
+    # * GC (Generalized Core)
     parser.add_argument('--gc_yaml', default='', type=str, help='path to yaml-file with GC specification')
 
     # * Heads
@@ -314,7 +296,7 @@ def get_parser():
     # * Learning rates (General)
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
-    # * Learning rates (BiViNet)
+    # * Learning rates (BCH and BVN)
     parser.add_argument('--lr_core', default=1e-4, type=float, help='BiVeNet core learning rate')
     parser.add_argument('--lr_heads', default=1e-4, type=float, help='BiViNet heads learning rate')
 
@@ -364,7 +346,7 @@ def main(args):
 
     # Build model and place it on correct device
     device = torch.device(args.device)
-    model = build_bivinet(args) if args.meta_arch == 'BiViNet' else build_detr(args)
+    model = build_arch(args)
     model = model.to(device)
 
     # Load untrained model parts from original DETR if required
@@ -397,23 +379,17 @@ def main(args):
 
     # If requested, evaluate model from checkpoint and return
     if args.eval:
-        val_stats, evaluators = evaluate(model, val_dataloader, evaluator=evaluator)
 
-        if not checkpoint_path and not args.output_dir:
-            return
+        # Get output directory
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+        elif checkpoint_path:
+            output_dir = Path(checkpoint_path).parent
+        else:
+            output_dir = None
 
-        if distributed.is_main_process():
-            output_dir = Path(args.output_dir) if args.output_dir else Path(checkpoint_path).parent
-
-            with (output_dir / 'eval.txt').open('w') as eval_file:
-                eval_file.write(json.dumps(val_stats) + "\n")
-
-            if evaluators is not None:
-                for i, evaluator in enumerate(evaluators, 1):
-                    for metric in evaluator.metrics:
-                        evaluations = evaluator.sub_evaluators[metric].eval
-                        torch.save(evaluations, output_dir / f'eval_{i}_{metric}.pth')
-
+        # Evaluate model and return
+        evaluate(model, val_dataloader, evaluator=evaluator, output_dir=output_dir, visualize=args.visualize)
         return
 
     # If requested, compute average number of FLOPS of model and return
@@ -424,8 +400,14 @@ def main(args):
 
     # If requested, visualize model from checkpoint and return
     if args.visualize:
-        if not checkpoint_path and not args.output_dir:
-            print("No output directory was given or could be derived from checkpoint. Returning now.")
+
+        # Get output directory
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+        elif checkpoint_path:
+            output_dir = Path(checkpoint_path).parent
+        else:
+            print("No output directory was given or can be derived from checkpoint for visualization. Returning now.")
             return
 
         if args.distributed:
@@ -435,15 +417,12 @@ def main(args):
         if args.batch_size > 1:
             print("It's recommended to use 'batch_size=1' so that printed loss and analysis dicts are image-specific.")
 
-        output_dir = Path(args.output_dir) if args.output_dir else Path(checkpoint_path).parent / 'visualization'
-        output_dir.mkdir(exist_ok=True)
-
         # Get visualization dataloader
         subset_sampler = SubsetSampler(val_dataset, args.num_images, args.image_offset, args.random_offset)
         dataloader = DataLoader(val_dataset, args.batch_size, sampler=subset_sampler, **dataloader_kwargs)
 
-        # Compute and save annotated images and return
-        visualize(model, dataloader, output_dir)
+        # Get visualizations and return
+        evaluate(model, dataloader, output_dir=output_dir, print_freq=1, save_stats=False, visualize=True)
         return
 
     # Get default optimizer and scheduler
@@ -478,13 +457,13 @@ def main(args):
     # Main training loop
     for epoch in range(start_epoch, args.epochs+1):
         train_sampler.set_epoch(epoch) if args.distributed else None
-        train_stats = train(model, train_dataloader, optimizer, args.max_grad_norm, epoch)
+        train_stats = train(model, train_dataloader, optimizer, epoch, max_grad_norm=args.max_grad_norm)
         scheduler.step()
 
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        val_stats, _ = evaluate(model, val_dataloader, evaluator=evaluator, epoch=epoch)
+        val_stats = evaluate(model, val_dataloader, evaluator=evaluator, epoch=epoch)
         save_log(args.output_dir, epoch, train_stats, val_stats)
 
     # End training timer and report total training time

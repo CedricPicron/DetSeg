@@ -104,25 +104,3 @@ class GC(nn.Module):
         out_feat_maps = [feat_maps[map_id] for map_id in self.out_map_ids]
 
         return out_feat_maps
-
-
-def build_gc(args):
-    """
-    Build GC module from command-line arguments.
-
-    Args:
-        args (argparse.Namespace): Command-line arguments.
-
-    Returns:
-        gc (nn.Module): The specified GC module.
-
-    Raises:
-        ValueError: Error when no GC yaml-file was provided by the command-line arguments.
-    """
-
-    if args.gc_yaml:
-        gc = GC(args.gc_yaml)
-    else:
-        raise ValueError("No yaml-file was provided for GC construction.")
-
-    return gc

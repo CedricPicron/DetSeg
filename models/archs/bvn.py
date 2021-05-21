@@ -1,5 +1,5 @@
 """
-BiViNet module and build function.
+Bidirectional Vision Network (BVN) architecture.
 """
 from copy import deepcopy
 
@@ -7,41 +7,37 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 
-from .backbone import build_backbone
-from .cores.build import build_core
-from .heads.detection.build import build_det_heads
-from .heads.segmentation.build import build_seg_heads
-from .utils import downsample_masks
+from models.functional.downsample import downsample_masks
 
 
-class BiViNet(nn.Module):
+class BVN(nn.Module):
     """
-    Class implementing the BiViNet module.
+    Class implementing the BVN module.
 
     Attributes:
-        backbone (nn.Module): Module implementing the BiViNet backbone.
-        core (nn.Module): Module implementing the BiViNet core.
-        step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
+        backbone (nn.Module): Module implementing the backbone.
+        core (nn.Module): Module implementing the core.
+        step_mode (str): String chosen from {multi, single} containing the BVN step mode.
         num_core_layers (int): Integer containing the number of consecutive core layers.
 
         If step mode is 'multi':
-            heads (nn.ModuleList): List of size [num_head_copies] containing copied lists of BiViNet head modules.
+            heads (nn.ModuleList): List of size [num_head_copies] containing copied dictionaries of head modules.
 
         If step mode is 'single':
-            heads (nn.ModuleList): List of size [num_heads] with BiViNet head modules.
+            heads (nn.ModuleDict): Dictionary of size [num_heads] with head modules.
 
         sync_heads: Boolean indicating whether to synchronize heads copies in multi-step mode.
     """
 
     def __init__(self, backbone, core, step_mode, heads, sync_heads):
         """
-        Initializes the BiViNet module.
+        Initializes the BVN module.
 
         Args:
-            backbone (nn.Module): Module implementing the BiViNet backbone.
-            core (nn.Module): Module implementing the BiViNet core.
-            step_mode (str): String chosen from {multi, single} containing the BiViNet step mode.
-            heads (List): List of size [num_heads] with BiViNet head modules.
+            backbone (nn.Module): Module implementing the backbone.
+            core (nn.Module): Module implementing the core.
+            step_mode (str): String chosen from {multi, single} containing the BVN step mode.
+            heads (Dict): Dictionary of size [num_heads] with head modules.
             sync_heads: Boolean indicating whether to synchronize heads copies in multi-step mode.
         """
 
@@ -59,10 +55,10 @@ class BiViNet(nn.Module):
         # Set heads attribute
         if step_mode == 'multi':
             num_head_copies = self.num_core_layers + 1
-            self.heads = nn.ModuleList([deepcopy(nn.ModuleList(heads)) for _ in range(num_head_copies)])
+            self.heads = nn.ModuleList([deepcopy(nn.ModuleDict(heads)) for _ in range(num_head_copies)])
 
         elif step_mode == 'single':
-            self.heads = nn.ModuleList(heads)
+            self.heads = nn.ModuleDict(heads)
 
         # Set synchronize heads attribute
         self.sync_heads = sync_heads
@@ -70,10 +66,10 @@ class BiViNet(nn.Module):
     @staticmethod
     def get_param_families():
         """
-        Method returning the BiViNet parameter families.
+        Method returning the BVN parameter families.
 
         Returns:
-            List of strings containing the BiViNet parameter families.
+            List of strings containing the BVN parameter families.
         """
 
         return ['backbone', 'core', 'heads']
@@ -108,11 +104,11 @@ class BiViNet(nn.Module):
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, fH, fW, feat_size].
             feat_masks (List): List of size [num_maps] with masks of active features of shape [batch_size, fH, fW].
             tgt_dict (Dict): Target dictionary with ground-truth information used for loss computation and evaluation.
-            optimizer (torch.optim.Optimizer): Optimizer updating the BiViNet parameters during training.
+            optimizer (torch.optim.Optimizer): Optimizer updating the BVN parameters during training.
             step_id (int): Optional integer indicating the core step in multi-step mode (default=0).
 
-            kwargs(Dict): Dictionary of keyword arguments, potentially containing following key:
-                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger).
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
+                - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
         Returns:
             loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
@@ -127,7 +123,7 @@ class BiViNet(nn.Module):
         heads = self.heads[step_id] if self.step_mode == 'multi' else self.heads
 
         # Populate loss and analysis dictionaries from head outputs
-        for head in heads:
+        for head in heads.values():
             head_loss_dict, head_analysis_dict = head(feat_maps, feat_masks=feat_masks, tgt_dict=tgt_dict, **kwargs)
 
             if self.step_mode == 'multi':
@@ -153,18 +149,19 @@ class BiViNet(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def forward(self, images, tgt_dict=None, optimizer=None, **kwargs):
+    def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
         """
-        Forward method of the BiViNet module.
+        Forward method of the BVN module.
 
         Args:
             images (Images): Images structure containing the batched images.
-            tgt_dict (Dict): Optional dictionary with ground-truth information used during training and validation.
-            optimizer (torch.optim.Optimizer): Optional optimizer updating the BiViNet parameters during training.
+            tgt_dict (Dict): Target dictionary with ground-truth information used during trainval (default=None).
+            optimizer (torch.optim.Optimizer): Optimizer updating the BVN parameters during training (default=None).
+            max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
+            visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
 
-            kwargs (Dict): Dictionary of keyword arguments, potentially containing following keys:
-                - max_grad_norm (float): maximum norm of optimizer update during training (clipped if larger);
-                - visualize (bool): boolean indicating whether in visualization mode or not.
+            kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
+                - extended_analysis (bool): boolean indicating whether to perform extended analyses or not.
 
        Returns:
             * If tgt_dict is not None and optimizer is not None (i.e. during training):
@@ -176,13 +173,15 @@ class BiViNet(nn.Module):
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
-            * If in validation mode (see above) with the keyword argument 'visualize=True' (i.e. during visualization):
-                images_dict (Dict): Dictionary of different annotated images based on predictions and targets.
-                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
-                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
+                * If additionally the keyword argument 'visualize' is True:
+                    images_dict (Dict): Dictionary of different annotated images based on predictions and targets.
 
             * If tgt_dict is None (i.e. during testing):
                 pred_dicts (List): List of dictionaries with predictions (from last step if in multi-step mode).
+                analysis_dict (Dict): Empty dictionary.
+
+        Raises:
+            RuntimeError: Error when visualization is requested for BVN model with more than one head.
         """
 
         # Reset gradients of model parameters (training only)
@@ -190,7 +189,7 @@ class BiViNet(nn.Module):
             optimizer.zero_grad(set_to_none=True)
 
         # Get backbone feature maps
-        feat_maps, _ = self.backbone(images)
+        feat_maps = self.backbone(images)
 
         # 1) Multi-step mode
         if self.step_mode == 'multi':
@@ -199,14 +198,15 @@ class BiViNet(nn.Module):
             feat_maps = self.core(feat_maps, step_id=0)
 
             # Prepare heads and target dictionary for current forward pass
-            for head_copies in zip(*self.heads):
+            for head_key in self.heads[0]:
+                head_copies = [heads_copies[head_key] for heads_copies in self.heads]
                 tgt_dict, attr_dict, buffer_dict = head_copies[0].forward_init(feat_maps, tgt_dict)
                 [setattr(head, k, v) for head in head_copies for k, v in attr_dict.items()]
                 [getattr(head, k).copy_(v) for head in head_copies for k, v in buffer_dict.items()]
 
             # Train/evaluate initial core feature maps (trainval only)
             if tgt_dict is not None:
-                feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
+                feat_masks = BVN.get_feat_masks(images.masks, feat_maps)
                 train_eval_args = (feat_masks, tgt_dict, optimizer)
                 loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, step_id=0, **kwargs)
 
@@ -233,43 +233,45 @@ class BiViNet(nn.Module):
             feat_maps = self.core(feat_maps)
 
             # Prepare heads and target dictionary for current forward pass
-            for head in self.heads:
+            for head in self.heads.values():
                 tgt_dict, attr_dict, buffer_dict = head.forward_init(images, feat_maps, tgt_dict)
                 [setattr(head, k, v) for k, v in attr_dict.items()]
                 [getattr(head, k).copy_(v) for k, v in buffer_dict.items()]
 
             # Train/evaluate core feature maps (trainval only)
             if tgt_dict is not None:
-                feat_masks = BiViNet.get_feat_masks(images.masks, feat_maps)
+                feat_masks = BVN.get_feat_masks(images.masks, feat_maps)
                 train_eval_args = (feat_masks, tgt_dict, optimizer)
                 loss_dict, analysis_dict = self.train_evaluate(feat_maps, *train_eval_args, **kwargs)
 
         # Get prediction dictionaries (validation/testing only)
         if optimizer is None:
             pred_heads = self.heads[-1] if self.step_mode == 'multi' else self.heads
-            pred_dicts = [pred_dict for head in pred_heads for pred_dict in head(feat_maps, **kwargs)]
+            pred_dicts = [pred_dict for head in pred_heads.values() for pred_dict in head(feat_maps, **kwargs)]
 
-        # Return prediction dictionaries (testing only)
+        # Return prediction dictionaries and empty analysis dictionary (testing only)
         if tgt_dict is None:
-            return pred_dicts
+            analysis_dict = {}
+            return pred_dicts, analysis_dict
 
         # Return desired dictionaries (validation/visualization only)
         if optimizer is None:
 
             # Return prediction, loss and analysis dictionaries (validation only)
-            if not kwargs.setdefault('visualize', False):
+            if not visualize:
                 return pred_dicts, loss_dict, analysis_dict
 
             # Get and return annotated images, loss and analysis dictionaries (visualization only)
-            images_dict = head.visualize(images, pred_dicts, tgt_dict)
+            if len(pred_heads) == 1:
+                images_dict = head.visualize(images, pred_dicts, tgt_dict)
+            else:
+                error_msg = f"BVN only supports visualization for models with a single head (got {len(pred_heads)})."
+                raise RuntimeError(error_msg)
 
-            return images_dict, loss_dict, analysis_dict
-
-        # Clip gradient when positive maximum norm is provided (training only)
-        if kwargs.setdefault('max_grad_norm', -1.0) > 0.0:
-            clip_grad_norm_(self.parameters(), kwargs['max_grad_norm'])
+            return pred_dicts, loss_dict, analysis_dict, images_dict
 
         # Update model parameters (training only)
+        clip_grad_norm_(self.parameters(), max_grad_norm) if max_grad_norm > 0 else None
         optimizer.step()
 
         # If requested, synchronize head copies in multi-step mode (training only)
@@ -283,34 +285,3 @@ class BiViNet(nn.Module):
             [heads.load_state_dict(avg_heads_state_dict) for heads in self.heads]
 
         return loss_dict, analysis_dict
-
-
-def build_bivinet(args):
-    """
-    Build BiViNet module from command-line arguments.
-
-    Args:
-        args (argparse.Namespace): Command-line arguments.
-
-    Returns:
-        bivinet (BiViNet): The specified BiViNet module.
-    """
-
-    # Check command-line arguments
-    min_id, max_id = (args.bvn_min_downsampling, args.bvn_max_downsampling)
-    assert_msg = f"'--bvn_max_downsampling' ({max_id}) should be larger than '--bvn_min_downsampling' ({min_id})"
-    assert max_id > min_id, assert_msg
-
-    # Build backbone module
-    backbone = build_backbone(args)
-
-    # Build core module
-    core = build_core(args)
-
-    # Build detection and segmentation head modules
-    heads = [*build_det_heads(args), *build_seg_heads(args)]
-
-    # Build BiViNet module
-    bivinet = BiViNet(backbone, core, args.bvn_step_mode, heads, args.bvn_sync_heads)
-
-    return bivinet

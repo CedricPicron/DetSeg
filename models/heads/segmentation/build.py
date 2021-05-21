@@ -14,26 +14,26 @@ def build_seg_heads(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        seg_heads (List): List of specified segmentation head modules.
+        seg_heads (Dict): Dictionary with specified segmentation head modules.
 
     Raises:
         ValueError: Error when unknown segmentation head type was provided.
     """
 
-    # Initialize empty list of segmentation head modules
-    seg_heads = []
+    # Initialize empty dictionary of segmentation head modules
+    seg_heads = {}
 
-    # Build desired segmentation head modules
+    # Build segmentation head modules
     for seg_head_type in args.seg_heads:
-        if seg_head_type == 'binary':
+        if seg_head_type == 'bin':
             head_args = [args.disputed_loss, args.disputed_beta, args.bin_seg_weight]
-            binary_seg_head = BinarySegHead(args.core_feat_sizes, *head_args)
-            seg_heads.append(binary_seg_head)
+            bin_head = BinarySegHead(args.core_feat_sizes, *head_args)
+            seg_heads[seg_head_type] = bin_head
 
-        elif seg_head_type == 'semantic':
+        elif seg_head_type == 'sem':
             head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, args.val_metadata]
-            semantic_seg_head = SemanticSegHead(args.core_feat_sizes, *head_args)
-            seg_heads.append(semantic_seg_head)
+            sem_head = SemanticSegHead(args.core_feat_sizes, *head_args)
+            seg_heads[seg_head_type] = sem_head
 
         else:
             raise ValueError(f"Unknown segmentation head type '{seg_head_type}' was provided.")

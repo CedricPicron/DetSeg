@@ -7,8 +7,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.projector import Projector
-from models.utils import downsample_index_maps
+from models.functional.downsample import downsample_index_maps
+from models.modules.projector import Projector
 
 
 class SemanticSegHead(nn.Module):

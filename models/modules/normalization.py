@@ -6,6 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+from torchvision.ops.misc import FrozenBatchNorm2d
 
 
 class FeatureNorm(nn.Module):
@@ -95,3 +96,18 @@ class FeatureNorm(nn.Module):
         out_feat_map = feat_map.permute(*permute_vector)
 
         return out_feat_map
+
+
+class FrozenBatchNorm2d (FrozenBatchNorm2d):
+    """
+    Two-dimensional batch normalization layer with frozen statistics.
+
+    Copy from torchvision, but with default eps of 1e-5.
+
+    Attributes:
+        num_features (int): Expected number of 2D input feature maps.
+        eps (float): Value added to the denominator for numerical stability (defaults to 1e-5).
+    """
+
+    def __init__(self, num_features, eps=1e-5):
+        super().__init__(num_features, eps=eps)

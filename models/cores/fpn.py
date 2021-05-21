@@ -5,7 +5,7 @@ FPN module and build function.
 from torch import nn
 import torch.nn.functional as F
 
-from models.projector import Projector
+from models.modules.projector import Projector
 
 
 class FPN(nn.Module):
@@ -129,27 +129,3 @@ class FPN(nn.Module):
                 out_feat_maps.append(bottom_up_feat_map)
 
         return out_feat_maps
-
-
-def build_fpn(args):
-    """
-    Build FPN module from command-line arguments.
-
-    Args:
-        args (argparse.Namespace): Command-line arguments.
-
-    Returns:
-        fpn (nn.Module): The specified FPN module.
-    """
-
-    # Get input arguments
-    in_feat_sizes = args.backbone_feat_sizes
-    out_feat_sizes = [args.fpn_feat_size] * len(in_feat_sizes)
-
-    num_bottom_up_layers = args.bvn_max_downsampling - args.bvn_min_downsampling - len(in_feat_sizes) + 1
-    bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * num_bottom_up_layers}
-
-    # Build BLA module
-    fpn = FPN(in_feat_sizes, out_feat_sizes, args.fpn_fuse_type, bottom_up_dict)
-
-    return fpn

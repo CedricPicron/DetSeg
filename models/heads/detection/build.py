@@ -16,17 +16,17 @@ def build_det_heads(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        det_heads (List): List of specified detection head modules.
+        det_heads (Dict): Dictionary with specified detection head modules.
 
     Raises:
         ValueError: Error when unknown detection head type was provided.
     """
 
-    # Initialize empty list of detection head modules and get metadata
-    det_heads = []
+    # Initialize empty dictionary of detection head modules and get metadata
+    det_heads = {}
     metadata = args.val_metadata
 
-    # Build desired detection head modules
+    # Build detection head modules
     for det_head_type in args.det_heads:
         if det_head_type == 'brd':
             feat_size = args.brd_feat_size
@@ -40,7 +40,7 @@ def build_det_heads(args):
             decoder_dict = {**decoder_dict, 'num_layers': args.brd_dec_layers}
 
             head_dict = {'num_classes': args.num_classes, 'hidden_size': args.brd_head_hidden_size}
-            head_dict = {**head_dict, 'num_hidden_layers': args.brd_head_layers}
+            head_dict = {**head_dict, 'layers': args.brd_head_layers}
             head_dict = {**head_dict, 'prior_cls_prob': args.brd_head_prior_cls_prob}
 
             loss_dict = {'inter_loss': args.brd_inter_loss, 'rel_preds': args.brd_rel_preds}
@@ -61,7 +61,7 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}
 
             brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata)
-            det_heads.append(brd_head)
+            det_heads[det_head_type] = brd_head
 
         elif det_head_type == 'dfd':
             in_feat_size = args.core_feat_sizes[0]
@@ -103,7 +103,7 @@ def build_det_heads(args):
             inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
 
             dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata)
-            det_heads.append(dfd_head)
+            det_heads[det_head_type] = dfd_head
 
         elif det_head_type == 'dod':
             in_feat_size = args.core_feat_sizes[0]
@@ -125,13 +125,13 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight, 'hill_weight': args.dod_hill_weight}
 
             dod_head = DOD(in_feat_size, net_dict, pred_dict, tgt_dict, loss_dict, metadata)
-            det_heads.append(dod_head)
+            det_heads[det_head_type] = dod_head
 
-        elif det_head_type == 'retina':
+        elif det_head_type == 'ret':
             num_classes = args.num_classes
             in_feat_sizes = args.core_feat_sizes
 
-            map_ids = list(range(args.bvn_min_downsampling, args.bvn_min_downsampling+len(in_feat_sizes)))
+            map_ids = list(range(args.core_min_map_id, args.core_min_map_id+len(in_feat_sizes)))
             in_proj = any(feat_size != in_feat_sizes[0] for feat_size in in_feat_sizes)
 
             pred_head_dict = {'in_proj': in_proj, 'feat_size': args.ret_feat_size, 'num_convs': args.ret_num_convs}
@@ -147,7 +147,7 @@ def build_det_heads(args):
             test_dict = {**test_dict, 'max_detections': args.ret_max_detections}
 
             ret_head = RetinaHead(num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
-            det_heads.append(ret_head)
+            det_heads[det_head_type] = ret_head
 
         else:
             raise ValueError(f"Unknown detection head type '{det_head_type}' was provided.")

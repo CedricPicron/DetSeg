@@ -14,17 +14,17 @@ from utils.logging import MetricLogger
 import utils.distributed as distributed
 
 
-def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
+def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
     """
-    Trains model for one epoch.
+    Trains model for one epoch on data from the given dataloader.
 
     Args:
         model (nn.Module): Module computing predictions from images.
         dataloader (torch.utils.data.Dataloader): Training dataloader.
         optimizer (torch.optim.Optimizer): Optimizer updating the model parameters during training.
-        max_grad_norm (float): Maximum norm of optimizer update (clipped if larger).
-        epoch (int): Current training epoch.
-        print_freq (int): Logger print frequency (default=10).
+        epoch (int): Integer containing the current training epoch.
+        max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
+        print_freq (int): Integer containing the logger print frequency (default=10).
 
     Returns:
         train_stats (Dict): Dictionary containing the epoch training statistics.
@@ -75,36 +75,41 @@ def train(model, dataloader, optimizer, max_grad_norm, epoch, print_freq=10):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
+def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, print_freq=10, save_stats=True,
+             visualize=False):
     """
-    Evaluates model.
+    Evaluates model on data from given dataloader. It additionally computes visualizations if 'visualize' is set.
 
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
         dataloader (torch.utils.data.Dataloader): Validation dataloader.
         evaluator (object): Object computing evaluations from predictions and storing them (default=None).
-        epoch (int): Training epochs completed (default=None).
-        print_freq (int): Logger print frequency (default=10).
+        epoch (int): Integer containing the number of training epochs completed (default=None).
+        output_dir (Path): Path to directory to save evaluations and potentially visualizations (default=None).
+        print_freq (int): Integer containing the logger print frequency (default=10).
+        save_stats (bool): Boolean indicating whether to save validation statistics (default=True).
+        visualize (bool): Boolean indicating whether visualizations should be computed (default=False).
 
     Returns:
         val_stats (Dict): Dictionary containing the validation statistics.
-        evaluators (List): List of updated evaluator objects containing the evaluations (or None).
     """
 
-    # Get device and set model in evaluation mode
+    # Get device, set model in evaluation mode and initialize evaluators
     device = next(model.parameters()).device
     model.eval()
+    evaluators = None
 
-    # Initialize evaluators
+    # Get one evaluator per prediction dictionary
     if evaluator is not None:
         evaluator.reset()
-
         sample_images, _ = next(iter(dataloader))
-        num_pred_dicts = len(model(sample_images.to(device)))
+        num_pred_dicts = len(model(sample_images.to(device))[0])
         evaluators = [deepcopy(evaluator) for _ in range(num_pred_dicts)]
 
-    else:
-        evaluators = None
+    # Make visualization directory within output directory if needed
+    if visualize and output_dir is not None:
+        vis_dir = output_dir / 'visualization'
+        vis_dir.mkdir(exist_ok=True)
 
     # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ")
@@ -118,19 +123,13 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        val_kwargs = {'extended_analysis': True}
-        pred_dicts, loss_dict, analysis_dict = model(images, tgt_dict, **val_kwargs)
+        output_dicts = model(images, tgt_dict, extended_analysis=True)
+        pred_dicts, loss_dict, analysis_dict = output_dicts[:3]
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
         loss_dict = distributed.reduce_dict(loss_dict)
         loss = sum(loss_dict.values()).item()
-
-        # Check whether loss is finite
-        if not math.isfinite(loss):
-            print(f"Loss dictionary: {loss_dict}")
-            print(f"Loss is {loss}, stopping training.")
-            sys.exit(1)
 
         # Update logger
         metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
@@ -139,6 +138,17 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
         if evaluators is not None:
             for evaluator, pred_dict in zip(evaluators, pred_dicts):
                 evaluator.update(images, pred_dict)
+
+        # Save visualizations to visualization directory
+        if visualize and output_dir is not None:
+            images_dict = output_dicts[3]
+
+            for key, image in images_dict.items():
+                key_parts = key.split('_')
+                image_id = images.image_ids[int(key_parts[-1])]
+
+                filename = ('_').join([str(image_id), *key_parts[:-1]])
+                Image.fromarray(image).save(f'{vis_dir / filename}.png')
 
     # Accumulate predictions from all images and summarize
     if evaluators is not None:
@@ -156,48 +166,19 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, print_freq=10):
             for metric in evaluator.metrics:
                 val_stats[f'eval_{i}_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
 
-    return val_stats, evaluators
+    # Save evaluations to output directory
+    if distributed.is_main_process() and output_dir is not None:
+        if save_stats:
+            with (output_dir / 'eval.txt').open('w') as eval_file:
+                eval_file.write(json.dumps(val_stats) + "\n")
 
+        if evaluators is not None:
+            for i, evaluator in enumerate(evaluators, 1):
+                for metric in evaluator.metrics:
+                    evaluations = evaluator.sub_evaluators[metric].eval
+                    torch.save(evaluations, output_dir / f'eval_{i}_{metric}.pth')
 
-@torch.no_grad()
-def visualize(model, dataloader, output_dir):
-    """
-    Visualizes model predictions and corresponding ground-truth.
-
-    Args:
-        model (nn.Module): Module to be visualized computing predictions from images.
-        dataloader (torch.utils.data.Dataloader): Visualization dataloader.
-        output_dir (Path): Path object containing the path to the output directory used for saving.
-    """
-
-    # Get device and set model in evaluation mode
-    device = next(model.parameters()).device
-    model.eval()
-
-    # Initialize metric logger
-    metric_logger = MetricLogger(delimiter="  ", window_size=1)
-    logger_log_every_kwargs = {'print_freq': 1, 'header': 'Visualization:'}
-
-    # Iterate over images to be visualized
-    for images, tgt_dict in metric_logger.log_every(dataloader, **logger_log_every_kwargs):
-
-        # Place images and target dictionary on correct device
-        images = images.to(device)
-        tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
-
-        # Get images, loss and analysis dictionary
-        images_dict, loss_dict, analysis_dict = model(images, tgt_dict, visualize=True)
-
-        # Save images
-        for key, image in images_dict.items():
-            key_parts = key.split('_')
-            image_id = images.image_ids[int(key_parts[-1])]
-
-            filename = ('_').join([str(image_id), *key_parts[:-1]])
-            Image.fromarray(image).save(f'{output_dir / filename}.png')
-
-        # Update logger
-        metric_logger.update(**analysis_dict, **loss_dict, loss=sum(loss_dict.values()).item())
+    return val_stats
 
 
 def save_checkpoint(args, epoch, model, optimizer, scheduler):

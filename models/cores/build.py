@@ -2,9 +2,8 @@
 General build function for core modules.
 """
 
-from .bla import build_bla
-from .fpn import build_fpn
-from .gc import build_gc
+from models.cores.fpn import FPN
+from models.cores.gc import GC
 
 
 def build_core(args):
@@ -22,12 +21,17 @@ def build_core(args):
     """
 
     # Build core module
-    if args.core_type == 'BLA':
-        core = build_bla(args)
-    elif args.core_type == 'FPN':
-        core = build_fpn(args)
-    elif args.core_type == 'GC':
-        core = build_gc(args)
+    if args.core_type == 'fpn':
+        in_feat_sizes = args.backbone_feat_sizes
+        out_feat_sizes = [args.fpn_feat_size] * len(in_feat_sizes)
+
+        num_bottom_up_layers = args.core_max_map_id - args.core_min_map_id - len(in_feat_sizes) + 1
+        bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * num_bottom_up_layers}
+        core = FPN(in_feat_sizes, out_feat_sizes, args.fpn_fuse_type, bottom_up_dict)
+
+    elif args.core_type == 'gc':
+        core = GC(args.gc_yaml)
+
     else:
         raise ValueError(f"Unknown core type {args.core_type} was provided.")
 

@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.projector import Projector
+from models.modules.projector import Projector
 from structures.boxes import Boxes, apply_box_deltas, box_iou, get_box_deltas
 from utils.distributed import is_dist_avail_and_initialized, get_world_size
 

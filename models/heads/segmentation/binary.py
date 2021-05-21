@@ -7,8 +7,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.projector import Projector
-from models.utils import downsample_masks
+from models.functional.downsample import downsample_masks
+from models.modules.projector import Projector
 
 
 class BinarySegHead(nn.Module):
