@@ -292,13 +292,16 @@ class DOD(nn.Module):
                 neg_preds (BoolTensor): Mask with negative predictions of shape [batch_size, num_feats].
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
-            * If mode is 'self' or 'train' and tgt_dict is not None:
-                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
-                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
-
             * If mode is 'self' and tgt_dict is None:
                 pred_dicts (List): Empty list.
                 analysis_dict (Dict):  Dictionary of different analyses used for logging purposes only.
+
+            * If mode is 'self' or 'train' and tgt_dict is not None:
+                * If mode is 'self' and module in evaluation mode:
+                     pred_dicts (List): Empty list.
+
+                loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
+                analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
         Raises:
             ValueError: Error when unknown forward DOD mode is provided.
@@ -433,8 +436,12 @@ class DOD(nn.Module):
         loss_dict['neg_loss'] = self.neg_weight * losses[targets == 0].sum(dim=0, keepdim=True)
         loss_dict['hill_loss'] = self.hill_weight * self.hill_loss(logits, reduction='sum')
 
-        # Return loss and analysis dictionaries with 'dod' tags
+        # Return dictionaries
         loss_dict = {f'dod_{k}': v for k, v in loss_dict.items()}
         analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
 
-        return loss_dict, analysis_dict
+        if mode == 'self' and not self.training:
+            pred_dicts = []
+            return pred_dicts, loss_dict, analysis_dict
+        else:
+            return loss_dict, analysis_dict

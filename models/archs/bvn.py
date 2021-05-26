@@ -247,7 +247,8 @@ class BVN(nn.Module):
         # Get prediction dictionaries (validation/testing only)
         if optimizer is None:
             pred_heads = self.heads[-1] if self.step_mode == 'multi' else self.heads
-            pred_dicts = [pred_dict for head in pred_heads.values() for pred_dict in head(feat_maps, **kwargs)]
+            pred_kwargs = {'visualize': visualize, **kwargs}
+            pred_dicts = [pred_dict for head in pred_heads.values() for pred_dict in head(feat_maps, **pred_kwargs)]
 
         # Return prediction dictionaries and empty analysis dictionary (testing only)
         if tgt_dict is None:

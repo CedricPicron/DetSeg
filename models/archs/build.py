@@ -56,10 +56,9 @@ def build_arch(args):
         decoder = build_decoder(args)
         criterion = build_criterion(args)
 
-        train_projector = args.lr_projector > 0
-        train_class_head = args.lr_class_head > 0
-        train_bbox_head = args.lr_bbox_head > 0
-        train_dict = {'projector': train_projector, 'class_head': train_class_head, 'bbox_head': train_bbox_head}
+        train_dict = {'backbone': args.lr_backbone > 0, 'projector': args.lr_projector > 0}
+        train_dict = {**train_dict, 'encoder': args.lr_encoder > 0, 'decoder': args.lr_decoder > 0}
+        train_dict = {**train_dict, 'class_head': args.lr_class_head > 0, 'bbox_head': args.lr_bbox_head > 0}
 
         metadata = args.val_metadata
         arch = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)

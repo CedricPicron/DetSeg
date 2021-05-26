@@ -200,7 +200,7 @@ def get_parser():
     parser.add_argument('--dod_focal_gamma', default=2.0, type=float, help='DOD focal gamma value')
     parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive targets')
     parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative targets')
-    parser.add_argument('--dod_hill_weight', default=1.0, type=float, help='loss term weight for sigmoid hill losses')
+    parser.add_argument('--dod_hill_weight', default=0.0, type=float, help='loss term weight for sigmoid hill losses')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
@@ -255,7 +255,7 @@ def get_parser():
     parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
 
     # ** Decoder
-    parser.add_argument('--decoder_type', default='sample', choices=['global', 'sample'], help='decoder type')
+    parser.add_argument('--decoder_type', default='global', choices=['global', 'sample'], help='decoder type')
     parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
 
     # *** Global decoder
@@ -290,7 +290,7 @@ def get_parser():
     parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
 
     # Optimizer
-    parser.add_argument('--max_grad_norm', default=0.1, type=float, help='maximum gradient norm during training')
+    parser.add_argument('--max_grad_norm', default=-1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
 
     # * Learning rates (General)
@@ -350,7 +350,7 @@ def main(args):
     model = model.to(device)
 
     # Load untrained model parts from original DETR if required
-    if args.load_orig_detr and args.meta_arch == 'DETR':
+    if args.load_orig_detr and args.arch_type == 'detr':
         model.load_from_original_detr()
 
     # Try loading checkpoint

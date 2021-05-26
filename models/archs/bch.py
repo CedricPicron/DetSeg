@@ -66,7 +66,15 @@ class BCH(nn.Module):
                 - loss_dict (Dict): dictionary of different loss terms used for backpropagation during training;
                 - analysis_dict (Dict): dictionary of different analyses used for logging purposes only;
                 - images_dict (Dict): dictionary of different annotated images based on predictions and targets.
+
+        Raises:
+            TypeError: Error when an optimizer is provided, but no target dictionary.
         """
+
+        # Check inputs
+        if tgt_dict is None and optimizer is not None:
+            error_msg = "A target dictionary must be provided together with the provided optimizer."
+            raise TypeError(error_msg)
 
         # Apply backbone
         backbone_feat_maps = self.backbone(images)

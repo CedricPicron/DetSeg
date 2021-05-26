@@ -19,14 +19,14 @@ class DETR(nn.Module):
 
     Attributes:
         backbone (nn.Module): Module implementing the DETR backbone.
-        position_encoder (nn.Module): Module implementing the position encoder.
         projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
+        position_encoder (nn.Module): Module implementing the position encoder.
         encoder (nn.Module): Module implementing the DETR encoder.
         decoder (nn.Module): Module implementing the DETR decoder.
         criterion (nn.Module): Module comparing predictions with targets.
         class_head (nn.Linear): Module projecting decoder features to class logits.
         bbox_head (MLP): Module projecting decoder features to bounding box logits (i.e. values before sigmoid).
-        train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
+        train_dict (Dict): Dictionary of booleans indicating whether sub-modules should be trained or not.
     """
 
     def __init__(self, backbone, position_encoder, encoder, decoder, criterion, num_classes, train_dict, metadata):
@@ -36,22 +36,21 @@ class DETR(nn.Module):
         Args:
             backbone (nn.Module): Module implementing the DETR backbone.
             position_encoder (nn.Module): Module implementing the position encoder.
-            projector (nn.Conv2d): Module projecting conv. features to initial encoder features.
             encoder (nn.Module): Module implementing the DETR encoder.
             decoder (nn.Module): Module implementing the DETR decoder.
             criterion (nn.Module): Module comparing predictions with targets.
             num_classes (int): Number of object classes (without background class).
-            train_dict (Dict): Dictionary of booleans indicating whether projector and heads should be trained or not.
+            train_dict (Dict): Dictionary of booleans indicating whether sub-modules should be trained or not.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         super().__init__()
         self.backbone = backbone
-        self.position_encoder = position_encoder
 
         self.projector = nn.Conv2d(backbone.feat_sizes[-1], encoder.feat_dim, kernel_size=1)
         self.projector.requires_grad_(train_dict['projector'])
 
+        self.position_encoder = position_encoder
         self.encoder = encoder
         self.decoder = decoder
         self.criterion = criterion
@@ -98,12 +97,12 @@ class DETR(nn.Module):
 
         original_detr_url = 'https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth'
         state_dict = torch.hub.load_state_dict_from_url(original_detr_url)['model']
-        is_global_decoder = isinstance(self.decoder, GlobalDecoder)
+        global_decoder = isinstance(self.decoder, GlobalDecoder)
 
-        self.backbone.load_from_original_detr(state_dict) if not self.backbone.trained else None
+        self.backbone.load_from_original_detr(state_dict) if not self.train_dict['backbone'] else None
         self.load_projector_from_original_detr(state_dict) if not self.train_dict['projector'] else None
-        self.encoder.load_from_original_detr(state_dict) if not self.encoder.trained else None
-        self.decoder.load_from_original_detr(state_dict) if not self.decoder.trained and is_global_decoder else None
+        self.encoder.load_from_original_detr(state_dict) if not self.train_dict['encoder'] else None
+        self.decoder.load_from_original_detr(state_dict) if not self.train_dict['decoder'] and global_decoder else None
         self.load_class_head_from_original_detr(state_dict) if not self.train_dict['class_head'] else None
         self.load_bbox_head_from_original_detr(state_dict) if not self.train_dict['bbox_head'] else None
 

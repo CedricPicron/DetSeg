@@ -30,11 +30,10 @@ sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_
 
 # Argument parsing
 parser = argparse.ArgumentParser()
-parser.add_argument('--forward', action='store_true', help='whether to profile forward pass only')
-parser.add_argument('--inference', action='store_true', help='whether to profile model in inference mode')
 parser.add_argument('--main_args', nargs='*', help='comma-separted string of main arguments')
 parser.add_argument('--memory', action='store_true', help='whether to report memory usage')
-parser.add_argument('--model', default='sample_decoder', choices=model_choices, help='model type to be profiled')
+parser.add_argument('--mode', default='train', choices=['train', 'val', 'test'], help='mode of model to be profiled')
+parser.add_argument('--model', choices=model_choices, help='type of model to be profiled')
 parser.add_argument('--sort_by', default='cuda_time', choices=sort_choices, help='metric to sort profiler table')
 profiling_args = parser.parse_args()
 profiling_args.main_args = profiling_args.main_args[0].split(',')[1:] if profiling_args.main_args is not None else []
@@ -56,9 +55,10 @@ if profiling_args.model == 'bch_dod':
     tgt_dict = {'boxes': boxes, 'sizes': sizes}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
-    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    forward_stmt = "model(*[images, tgt_dict.copy()])"
-    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bin':
     main_args.seg_heads = ['bin']
@@ -130,9 +130,10 @@ elif profiling_args.model == 'bvn_bin':
     tgt_dict = {'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
-    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    forward_stmt = "model(*[images, tgt_dict.copy()])"
-    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bvn_ret':
     main_args.num_classes = 80
@@ -155,9 +156,10 @@ elif profiling_args.model == 'bvn_ret':
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
-    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    forward_stmt = "model(*[images, tgt_dict.copy()])"
-    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bvn_sem':
     main_args.num_classes = 80
@@ -178,9 +180,10 @@ elif profiling_args.model == 'bvn_sem':
     tgt_dict = {'labels': labels, 'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
-    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    forward_stmt = "model(*[images, tgt_dict.copy()])"
-    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'criterion':
     main_args.num_classes = 80
@@ -204,9 +207,10 @@ elif profiling_args.model == 'criterion':
     sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    globals_dict = {'model': model, 'generate_out_list': generate_out_list, 'tgt_dict': tgt_dict}
-    forward_stmt = "model(generate_out_list(), tgt_dict)"
-    backward_stmt = "torch.stack([v for v in model(generate_out_list(), tgt_dict)[0].values()]).sum().backward()"
+    inputs = {'tgt_dict': tgt_dict}
+    globals_dict = {'model': model, 'generate_out_list': generate_out_list, 'inputs': inputs}
+    forward_stmt = "model(generate_out_list(), **inputs)"
+    backward_stmt = "torch.stack([v for v in model(generate_out_list(), **inputs)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'detr':
     main_args.arch_type = 'detr'
@@ -227,10 +231,11 @@ elif profiling_args.model == 'detr':
     sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    optimizer = torch.optim.AdamW(model.parameters())
-    globals_dict = {'model': model, 'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    forward_stmt = "model(*[images])"
-    backward_stmt = "model(*[images, tgt_dict.copy(), optimizer])"
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'dfd':
     main_args.num_classes = 80
@@ -355,11 +360,10 @@ elif profiling_args.model == 'encoder':
     feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
     pos_encodings = torch.randn(1024, 2, 256).to('cuda')
 
-    inputs = [features, feature_masks, pos_encodings]
+    inputs = {'features': features, 'feature_masks': feature_masks, 'pos_encodings': pos_encodings}
     globals_dict = {'model': model, 'inputs': inputs}
-
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs).sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs).sum().backward()"
 
 elif profiling_args.model == 'fpn':
     main_args.backbone_feat_sizes = [512, 1024, 2048]
@@ -372,11 +376,11 @@ elif profiling_args.model == 'fpn':
     feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
     feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5]
-    inputs = [feat_maps]
 
+    inputs = {'in_feat_maps': feat_maps}
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'gc':
     main_args.backbone_feat_sizes = [512, 1024, 2048]
@@ -392,9 +396,10 @@ elif profiling_args.model == 'gc':
     feat_maps = [feat_map3, feat_map4, feat_map5]
     inputs = [feat_maps]
 
+    inputs = {'in_feat_maps': feat_maps}
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "torch.cat([map.sum()[None] for map in model(*inputs)]).sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'global_decoder':
     main_args.decoder_type = 'global'
@@ -406,11 +411,10 @@ elif profiling_args.model == 'global_decoder':
     feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
     pos_encodings = torch.randn(1024, 2, 256).to('cuda')
 
-    inputs = [features, feature_masks, pos_encodings]
+    inputs = {'features': features, 'feature_masks': feature_masks, 'pos_encodings': pos_encodings}
     globals_dict = {'model': model, 'inputs': inputs}
-
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs)['slots'].sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)['slots'].sum().backward()"
 
 elif profiling_args.model == 'resnet':
     main_args.backbone_map_ids = list(range(3, 8))
@@ -420,10 +424,10 @@ elif profiling_args.model == 'resnet':
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 
-    inputs = [images]
+    inputs = {'images': images}
     globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs)[0][-1].sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'ret':
     main_args.num_classes = 80
@@ -466,11 +470,10 @@ elif profiling_args.model == 'sample_decoder':
     feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
     pos_encodings = torch.randn(1024, 2, 256).to('cuda')
 
-    inputs = [features, feature_masks, pos_encodings]
+    inputs = {'features': features, 'feature_masks': feature_masks, 'pos': pos_encodings}
     globals_dict = {'model': model, 'inputs': inputs}
-
-    forward_stmt = "model(*inputs)"
-    backward_stmt = "model(*inputs)['slots'].sum().backward()"
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)['slots'].sum().backward()"
 
 elif profiling_args.model == 'sem':
     main_args.num_classes = 80
@@ -499,18 +502,19 @@ elif profiling_args.model == 'sem':
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)[0]['sem_seg_loss'].backward()"
 
-# Select forward or backward statement
-stmt = forward_stmt if profiling_args.forward or profiling_args.inference else backward_stmt
+# Select forward or backward statement depending on mode
+stmt = backward_stmt if profiling_args.mode == 'train' else forward_stmt
 
-# Check whether computation graph needs to be built
-if profiling_args.forward or profiling_args.inference:
+# Some additional preparation for the validation and testing modes
+if profiling_args.mode in ('val', 'test'):
     for parameter in model.parameters():
         parameter.requires_grad = False
 
-# Put model in inference mode if desired
-if profiling_args.inference:
     model.eval()
-    globals_dict['inputs'].pop('tgt_dict', None)
+    globals_dict['inputs'].pop('optimizer', None)
+
+    if profiling_args.mode == 'test':
+        globals_dict['inputs'].pop('tgt_dict', None)
 
 # Warm-up and timing with torch.utils.benchmark.Timer
 timer = Timer(stmt=stmt, globals=globals_dict)
@@ -523,8 +527,8 @@ with profiler.profile(use_cuda=True, profile_memory=profiling_args.memory) as pr
 # Print profiling table
 print(prof.table(sort_by=profiling_args.sort_by, row_limit=100))
 
-# Print number of parameters if desired
-if not profiling_args.forward and not profiling_args.inference:
+# Print number of parameters if in training mode
+if profiling_args.mode == 'train':
     num_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Number of parameters: {num_parameters/10**6: .1f} M")
 

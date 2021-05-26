@@ -123,7 +123,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        output_dicts = model(images, tgt_dict, extended_analysis=True)
+        output_dicts = model(images, tgt_dict, extended_analysis=True, visualize=visualize)
         pred_dicts, loss_dict, analysis_dict = output_dicts[:3]
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes

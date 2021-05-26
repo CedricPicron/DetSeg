@@ -427,7 +427,7 @@ def build_coco(args):
     train_transforms, val_transforms = get_coco_transforms()
     train_metadata, val_metadata = (args.train_metadata, args.val_metadata)
 
-    requires_masks = True if args.meta_arch in ['BiViNet'] else False
+    requires_masks = bool(args.seg_heads)
     kwargs = {'requires_masks': requires_masks}
 
     train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, train_metadata, **kwargs)
