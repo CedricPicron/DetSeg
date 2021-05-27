@@ -268,7 +268,7 @@ class DOD(nn.Module):
     @torch.no_grad()
     def get_ap(obj_probs, pos_masks):
         """
-        Get average precision (AP) of DOD predictions.
+        Get average precision (AP) based on DOD object probabilities and positive target masks.
 
         Args:
             obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
@@ -294,8 +294,8 @@ class DOD(nn.Module):
                 continue
 
             # Get sorted positive target mask based on object probabilities
-            sort_ids = torch.argsort(obj_probs[i], dim=0, descending=True)
-            pos_mask = pos_masks[i][sort_ids, :]
+            sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)
+            pos_mask = pos_masks[i][sorted_ids, :]
 
             # Get precisions
             positives = pos_mask.sum(dim=1) > 0
@@ -320,6 +320,73 @@ class DOD(nn.Module):
             ap += 100 * areas.sum() / batch_size
 
         return ap
+
+    @staticmethod
+    @torch.no_grad()
+    def make_predictions(obj_probs, pos_masks, tgt_dict):
+        """
+        Makes predictions based on DOD object probabilities, positive target masks and corresponding targets.
+
+        Args:
+            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
+            pos_masks (List): List [batch_size] of static positive target masks of shape [num_feats, num_targets].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
+                - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
+
+        Returns:
+            pred_dicts (List): List of size [1] with the DOD prediction dictionary containing following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+        """
+
+        # Get batch size
+        batch_size = obj_probs.shape[0]
+
+        # Get device, default label and default bounding box
+        device = obj_probs.device
+        def_label = torch.tensor([0], dtype=torch.int64, device=device)
+        def_box_kwargs = {'format': 'cxcywh', 'normalized': 'img_with_padding'}
+        def_box = Boxes(torch.tensor([[0.01, 0.01, 0.01, 0.01]], device=device), **def_box_kwargs)
+
+        # Initialize prediction dictionary
+        pred_dict = {}
+        pred_dict['labels'] = []
+        pred_dict['boxes'] = []
+        pred_dict['scores'] = []
+        pred_dict['batch_ids'] = []
+
+        # Get predictions for every batch entry
+        for i in range(batch_size):
+
+            # Get target labels and boxes with default detection appended
+            tgt_labels = torch.cat([tgt_dict['labels'][i], def_label], dim=0)
+            tgt_boxes = Boxes.cat([tgt_dict['boxes'][i].to_format('cxcywh'), def_box], same_image=True)
+
+            # Get sorted positive target mask based on object probabilities
+            sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)[:100]
+            pos_mask = pos_masks[i][sorted_ids, :]
+
+            # Get target ids
+            def_values = torch.full((100, 1), 0.5, device=device)
+            pos_matrix = torch.cat([pos_mask.to(def_values.dtype), def_values], dim=1)
+            tgt_ids = torch.argmax(pos_matrix, dim=1)
+
+            # Add predictions to prediction dictionary
+            pred_dict['labels'].append(tgt_labels[tgt_ids])
+            pred_dict['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dict['scores'].append(obj_probs[i, sorted_ids])
+            pred_dict['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
+
+        # Concatenate predictions of different batch entries
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
+        pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
+        pred_dicts = [pred_dict]
+
+        return pred_dicts
 
     def forward(self, feat_maps, tgt_dict=None, images=None, mode='self', train_dict=None, **kwargs):
         """
@@ -353,12 +420,12 @@ class DOD(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If mode is 'self' and tgt_dict is None:
-                pred_dicts (List): Empty list.
+                pred_dicts (List): List with empty dictionary.
                 analysis_dict (Dict):  Dictionary of different analyses used for logging purposes only.
 
             * If mode is 'self' or 'train' and tgt_dict is not None:
                 * If mode is 'self' and module in evaluation mode:
-                     pred_dicts (List): Empty list.
+                     pred_dicts (List): List of size [1] with DOD prediction dictionary.
 
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -414,7 +481,7 @@ class DOD(nn.Module):
                 error_msg = "A target dictionary must be provided when in 'train' mode."
                 raise ValueError(error_msg)
             else:
-                pred_dicts = []
+                pred_dicts = [{}]
                 return pred_dicts, analysis_dict
 
         # Get target boxes in desired format
@@ -506,7 +573,11 @@ class DOD(nn.Module):
         analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
 
         if mode == 'self' and not self.training:
-            pred_dicts = []
+            local_tgt_dict = {}
+            local_tgt_dict['labels'] = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
+            local_tgt_dict['boxes'] = tgt_boxes
+
+            pred_dicts = DOD.make_predictions(obj_probs, pos_masks, local_tgt_dict)
             return pred_dicts, loss_dict, analysis_dict
         else:
             return loss_dict, analysis_dict

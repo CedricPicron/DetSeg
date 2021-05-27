@@ -2,6 +2,7 @@
 Backbone-Core-Heads (BCH) architecture.
 """
 from collections import ChainMap
+from itertools import chain
 
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
@@ -82,10 +83,17 @@ class BCH(nn.Module):
         # Apply core
         core_feat_maps = self.core(backbone_feat_maps)
 
-        # Apply heads and merge dictionaries originating from different heads
+        # Apply heads and merge non-prediction dictionaries originating from different heads
         head_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'visualize': visualize, **kwargs}
         head_dicts = [head(core_feat_maps, **head_kwargs) for head in self.heads.values()]
-        output_dicts = [dict(ChainMap(*dicts)) for dicts in zip(*head_dicts)]
+
+        if self.training:
+            output_dicts = [dict(ChainMap(*dicts)) for dicts in zip(*head_dicts)]
+        else:
+            zipped_dicts = list(zip(*head_dicts))
+            pred_dicts = list(chain.from_iterable(zipped_dicts[0]))
+            non_pred_dicts = [dict(ChainMap(*dicts)) for dicts in zipped_dicts[1:]]
+            output_dicts = [pred_dicts, *non_pred_dicts]
 
         # Update model parameters and return loss and analysis dictionaries during training
         if optimizer is not None:

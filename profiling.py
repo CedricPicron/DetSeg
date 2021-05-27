@@ -41,6 +41,7 @@ main_args = get_parser().parse_args(args=[*profiling_args.main_args])
 
 # Building the model to be profiled
 if profiling_args.model == 'bch_dod':
+    main_args.num_classes = 80
     main_args.arch_type = 'bch'
     main_args.det_heads = ['dod']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
@@ -49,10 +50,11 @@ if profiling_args.model == 'bch_dod':
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 
     num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    tgt_dict = {'boxes': boxes, 'sizes': sizes}
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
     inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
@@ -265,7 +267,6 @@ elif profiling_args.model == 'dfd':
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'dod_pred':
-    main_args.num_classes = 80
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
     main_args.dod_rel_preds = False
@@ -285,6 +286,7 @@ elif profiling_args.model == 'dod_pred':
     backward_stmt = "model(**inputs)[0].sum().backward()"
 
 elif profiling_args.model == 'dod_self':
+    main_args.num_classes = 80
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
     main_args.dod_rel_preds = False
@@ -301,10 +303,11 @@ elif profiling_args.model == 'dod_self':
     feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
 
     num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    tgt_dict = {'boxes': boxes, 'sizes': sizes}
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 
@@ -314,7 +317,6 @@ elif profiling_args.model == 'dod_self':
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'dod_train':
-    main_args.num_classes = 80
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
     main_args.dod_tgt_decision = 'rel'
