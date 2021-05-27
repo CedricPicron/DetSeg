@@ -158,10 +158,11 @@ class DOD(nn.Module):
 
         Returns:
             * If mode is 'self':
+                pos_masks (List): List [batch_size] of static positive target masks of shape [num_feats, num_targets].
                 pos_useful (BoolTensor): Mask with useful positives predictions of shape [batch_size, num_feats].
                 tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
-                pos_tgts (BoolTensor): Mask with positive targets of shape [batch_size, num_feats].
-                neg_tgts (BoolTensor): Mask with negative targets of shape [batch_size, num_feats].
+                pos_tgts (BoolTensor): Mask with static or dynamic positive targets of shape [batch_size, num_feats].
+                neg_tgts (BoolTensor): Mask with static or dynamic negative targets of shape [batch_size, num_feats].
 
             * If mode is 'train':
                 pos_tgts (BoolTensor): Mask with positive targets of shape [batch_size, num_feats].
@@ -203,10 +204,12 @@ class DOD(nn.Module):
             if mode == 'train':
                 return pos_tgts, neg_tgts
 
+            num_feats = neg_preds.shape[1]
+            pos_masks = [torch.zeros(num_feats, 0).to(neg_preds) for _ in range(batch_size)]
             pos_useful = torch.zeros_like(neg_preds)
             tgt_found = [torch.zeros(0).to(neg_preds) for _ in range(batch_size)]
 
-            return pos_useful, tgt_found, pos_tgts, neg_tgts
+            return pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts
 
         # Get feature-target similarity matrices
         if self.tgt_metric == 'iou':
@@ -251,15 +254,72 @@ class DOD(nn.Module):
 
         # Get dynamic positive and negative target masks if desired
         if not self.static_tgt:
-            pos_masks = [pos_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
-            pos_tgts = torch.stack([torch.sum(pos_mask, dim=1) > 0 for pos_mask in pos_masks], dim=0)
+            dyn_pos_masks = [pos_masks[i][:, ~tgt_found[i]] for i in range(batch_size)]
+            pos_tgts = torch.stack([torch.sum(dyn_pos_mask, dim=1) > 0 for dyn_pos_mask in dyn_pos_masks], dim=0)
             neg_tgts = ~neg_preds & neg_tgts
 
         # Return desired items depending on mode
         if mode == 'self':
-            return pos_useful, tgt_found, pos_tgts, neg_tgts
+            return pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts
         else:
             return pos_tgts, neg_tgts
+
+    @staticmethod
+    @torch.no_grad()
+    def get_ap(obj_probs, pos_masks):
+        """
+        Get average precision (AP) of DOD predictions.
+
+        Args:
+            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
+            pos_masks (List): List [batch_size] of static positive target masks of shape [num_feats, num_targets].
+
+        Returns:
+            ap (FloatTensor): Tensor containing the average precision (AP) of shape [1].
+        """
+
+        # Get batch size, number of features and initialize average precision tensor
+        batch_size, num_feats = obj_probs.shape
+        ap = torch.zeros(1).to(obj_probs)
+
+        # Get average precision for every batch entry
+        for i in range(batch_size):
+
+            # Get number of targets
+            num_tgts = pos_masks[i].shape[1]
+
+            # Handle case where there are no targets
+            if num_tgts == 0:
+                ap += 100/batch_size
+                continue
+
+            # Get sorted positive target mask based on object probabilities
+            sort_ids = torch.argsort(obj_probs[i], dim=0, descending=True)
+            pos_mask = pos_masks[i][sort_ids, :]
+
+            # Get precisions
+            positives = pos_mask.sum(dim=1) > 0
+            precisions = positives.cumsum(dim=0) / torch.arange(1, num_feats+1).to(positives.device)
+            precisions = precisions.flip([0]).cummax(dim=0)[0].flip([0])
+
+            # Get recalls
+            recalls = pos_mask.cummax(dim=0)[0].sum(dim=1) / num_tgts
+
+            # Get average precision
+            recalls, counts = torch.unique_consecutive(recalls, return_counts=True)
+            cum_counts = torch.tensor([0, *counts.cumsum(dim=0).tolist()]).to(counts)
+            precisions = [precisions[i0:i1].max()[None] for i0, i1 in zip(cum_counts[:-1], cum_counts[1:])]
+            precisions = torch.cat(precisions, dim=0)
+
+            if recalls[0] == 0:
+                precisions = precisions[1:]
+            else:
+                recalls = torch.tensor([0, *recalls.tolist()]).to(recalls)
+
+            areas = precisions * (recalls[1:] - recalls[:-1])
+            ap += 100 * areas.sum() / batch_size
+
+        return ap
 
     def forward(self, feat_maps, tgt_dict=None, images=None, mode='self', train_dict=None, **kwargs):
         """
@@ -387,7 +447,8 @@ class DOD(nn.Module):
         if mode == 'self':
             tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
             tgt_mask_kwargs = {'mode': mode, 'pos_preds': pos_preds}
-            pos_useful, tgt_found, pos_tgts, neg_tgts = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
+            tgt_mask_outputs = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
+            pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts = tgt_mask_outputs
 
         else:
             tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
@@ -405,6 +466,10 @@ class DOD(nn.Module):
             analysis_dict['tgt_found'] = 100 * torch.sum(tgt_found)[None] / num_tgts
         else:
             analysis_dict['tgt_found'] = 100 * torch.ones(1).to(tgt_found)
+
+        # Get average precision if in 'self' mode
+        if mode == 'self':
+            analysis_dict['ap'] = DOD.get_ap(obj_probs, pos_masks)
 
         # Get weighted positive, negative and hill losses
         targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)
