@@ -278,8 +278,8 @@ class DOD(nn.Module):
             ap (FloatTensor): Tensor containing the average precision (AP) of shape [1].
         """
 
-        # Get batch size, number of features and initialize average precision tensor
-        batch_size, num_feats = obj_probs.shape
+        # Get batch size and initialize average precision tensor
+        batch_size = len(obj_probs)
         ap = torch.zeros(1).to(obj_probs)
 
         # Get average precision for every batch entry
@@ -294,12 +294,12 @@ class DOD(nn.Module):
                 continue
 
             # Get sorted positive target mask based on object probabilities
-            sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)
+            sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)[:100]
             pos_mask = pos_masks[i][sorted_ids, :]
 
             # Get precisions
             positives = pos_mask.sum(dim=1) > 0
-            precisions = positives.cumsum(dim=0) / torch.arange(1, num_feats+1).to(positives.device)
+            precisions = positives.cumsum(dim=0) / torch.arange(1, 101).to(positives.device)
             precisions = precisions.flip([0]).cummax(dim=0)[0].flip([0])
 
             # Get recalls
@@ -336,7 +336,7 @@ class DOD(nn.Module):
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
 
         Returns:
-            pred_dicts (List): List of size [1] with the DOD prediction dictionary containing following keys:
+            pred_dicts (List): List of size [3] with the DOD prediction dictionaries containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds_total];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
@@ -344,7 +344,7 @@ class DOD(nn.Module):
         """
 
         # Get batch size
-        batch_size = obj_probs.shape[0]
+        batch_size = len(obj_probs)
 
         # Get device, default label and default bounding box
         device = obj_probs.device
@@ -352,12 +352,10 @@ class DOD(nn.Module):
         def_box_kwargs = {'format': 'cxcywh', 'normalized': 'img_with_padding'}
         def_box = Boxes(torch.tensor([[0.01, 0.01, 0.01, 0.01]], device=device), **def_box_kwargs)
 
-        # Initialize prediction dictionary
-        pred_dict = {}
-        pred_dict['labels'] = []
-        pred_dict['boxes'] = []
-        pred_dict['scores'] = []
-        pred_dict['batch_ids'] = []
+        # Initialize prediction dictionaries
+        pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
+        pred_dict = {pred_key: [] for pred_key in pred_keys}
+        pred_dicts = [deepcopy(pred_dict) for _ in range(3)]
 
         # Get predictions for every batch entry
         for i in range(batch_size):
@@ -375,16 +373,40 @@ class DOD(nn.Module):
             pos_matrix = torch.cat([pos_mask.to(def_values.dtype), def_values], dim=1)
             tgt_ids = torch.argmax(pos_matrix, dim=1)
 
-            # Add predictions to prediction dictionary
-            pred_dict['labels'].append(tgt_labels[tgt_ids])
-            pred_dict['boxes'].append(tgt_boxes[tgt_ids])
-            pred_dict['scores'].append(obj_probs[i, sorted_ids])
-            pred_dict['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
+            # Get scores for different prediction dictionaries
+            scores0 = obj_probs[i, sorted_ids]
+            scores1 = torch.rand(100)
+
+            duplicate_mask = torch.zeros(100, dtype=torch.bool, device=device)
+            num_tgts = len(tgt_labels) - 1
+
+            for tgt_id in range(num_tgts):
+                duplicate_ids = torch.arange(100, device=device)[tgt_ids == tgt_id][1:]
+                duplicate_mask[duplicate_ids] = True
+
+            scores2 = torch.clone(scores0)
+            scores2[duplicate_mask] = scores2[duplicate_mask] * scores2[-1]
+
+            # Add predictions to prediction dictionaries
+            pred_dicts[0]['labels'].append(tgt_labels[tgt_ids])
+            pred_dicts[0]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[0]['scores'].append(scores0)
+            pred_dicts[0]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
+
+            pred_dicts[1]['labels'].append(tgt_labels[tgt_ids])
+            pred_dicts[1]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[1]['scores'].append(scores1)
+            pred_dicts[1]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
+
+            pred_dicts[2]['labels'].append(tgt_labels[tgt_ids])
+            pred_dicts[2]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[2]['scores'].append(scores2)
+            pred_dicts[2]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
 
         # Concatenate predictions of different batch entries
-        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
-        pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
-        pred_dicts = [pred_dict]
+        for pred_dict in pred_dicts:
+            pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
+            pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
 
         return pred_dicts
 
@@ -420,12 +442,12 @@ class DOD(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If mode is 'self' and tgt_dict is None:
-                pred_dicts (List): List with empty dictionary.
+                pred_dicts (List): List of size [3] with empty dictionaries.
                 analysis_dict (Dict):  Dictionary of different analyses used for logging purposes only.
 
             * If mode is 'self' or 'train' and tgt_dict is not None:
                 * If mode is 'self' and module in evaluation mode:
-                     pred_dicts (List): List of size [1] with DOD prediction dictionary.
+                     pred_dicts (List): List of size [3] with DOD prediction dictionaries.
 
                 loss_dict (Dict): Dictionary of different weighted loss terms used for backpropagation during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -481,7 +503,7 @@ class DOD(nn.Module):
                 error_msg = "A target dictionary must be provided when in 'train' mode."
                 raise ValueError(error_msg)
             else:
-                pred_dicts = [{}]
+                pred_dicts = [{}, {}, {}]
                 return pred_dicts, analysis_dict
 
         # Get target boxes in desired format
