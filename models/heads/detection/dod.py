@@ -47,7 +47,7 @@ class DOD(nn.Module):
         """
         Initializes the DOD module.
 
-        Arguments:
+        Args:
             in_feat_size (int): Integer containing the feature size of the input feature pyramid.
 
             net_dict (Dict): Network dictionary containing following keys:
@@ -159,12 +159,12 @@ class DOD(nn.Module):
         Returns:
             * If mode is 'self':
                 pos_masks (List): List [batch_size] of static positive target masks of shape [num_feats, num_targets].
-                pos_useful (BoolTensor): Mask with useful positives predictions of shape [batch_size, num_feats].
                 tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
                 pos_tgts (BoolTensor): Mask with static or dynamic positive targets of shape [batch_size, num_feats].
                 neg_tgts (BoolTensor): Mask with static or dynamic negative targets of shape [batch_size, num_feats].
 
             * If mode is 'train':
+                pos_masks (List): List [batch_size] of static positive target masks of shape [num_feats, num_targets].
                 pos_tgts (BoolTensor): Mask with positive targets of shape [batch_size, num_feats].
                 neg_tgts (BoolTensor): Mask with negative targets of shape [batch_size, num_feats].
 
@@ -198,18 +198,17 @@ class DOD(nn.Module):
 
         # Return if there are no target boxes
         if len(tgt_boxes) == 0:
+            num_feats = neg_preds.shape[1]
+            pos_masks = [torch.zeros(num_feats, 0).to(neg_preds) for _ in range(batch_size)]
+            tgt_found = [torch.zeros(0).to(neg_preds) for _ in range(batch_size)] if mode == 'self' else tgt_found
+
             pos_tgts = torch.zeros_like(neg_preds)
             neg_tgts = ~neg_preds
 
-            if mode == 'train':
-                return pos_tgts, neg_tgts
-
-            num_feats = neg_preds.shape[1]
-            pos_masks = [torch.zeros(num_feats, 0).to(neg_preds) for _ in range(batch_size)]
-            pos_useful = torch.zeros_like(neg_preds)
-            tgt_found = [torch.zeros(0).to(neg_preds) for _ in range(batch_size)]
-
-            return pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts
+            if mode == 'self':
+                return pos_masks, tgt_found, pos_tgts, neg_tgts
+            else:
+                return pos_masks, pos_tgts, neg_tgts
 
         # Get feature-target similarity matrices
         if self.tgt_metric == 'iou':
@@ -247,9 +246,8 @@ class DOD(nn.Module):
         non_neg_masks = torch.split(non_neg_mask, tgts_per_img, dim=1)
         neg_tgts = torch.stack([torch.sum(non_neg_mask, dim=1) == 0 for non_neg_mask in non_neg_masks], dim=0)
 
-        # Get useful positives and found targets if in 'self' mode
+        # Get found targets if in 'self' mode
         if mode == 'self':
-            pos_useful = pos_preds & pos_tgts
             tgt_found = [(pos_masks[i] & pos_preds[i, :, None]).sum(dim=0) > 0 for i in range(batch_size)]
 
         # Get dynamic positive and negative target masks if desired
@@ -260,9 +258,9 @@ class DOD(nn.Module):
 
         # Return desired items depending on mode
         if mode == 'self':
-            return pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts
+            return pos_masks, tgt_found, pos_tgts, neg_tgts
         else:
-            return pos_tgts, neg_tgts
+            return pos_masks, pos_tgts, neg_tgts
 
     @staticmethod
     @torch.no_grad()
@@ -410,7 +408,7 @@ class DOD(nn.Module):
 
         return pred_dicts
 
-    def forward(self, feat_maps, tgt_dict=None, images=None, mode='self', train_dict=None, **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, images=None, mode='self', train_dict=None, visualize=False, **kwargs):
         """
         Forward method of the DOD module.
 
@@ -425,20 +423,18 @@ class DOD(nn.Module):
             images (Images): Images structure containing the batched images (default=None).
             mode (str): Mode of forward DOD method chosen from {'pred', 'self', 'train'}.
 
-            train_dict (Dict): Dictionary needed during 'train' mode requiring following keys:
+            train_dict (Dict): Optional dictionary needed during 'train' mode requiring following keys:
                 - logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}];
-                - pos_preds (BoolTensor): mask with positive predictions of shape [batch_size, num_feats];
-                - neg_preds (BoolTensor): mask with negative predictions of shape [batch_size, num_feats];
-                - pos_useful (BoolTensor): mask with useful positives predictions of shape [batch_size, num_feats];
+                - obj_probs (FloatTensor): tensor containing object probabilities of shape [batch_size, num_feats];
                 - tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets].
 
+            visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this head module.
 
         Returns:
             * If mode is 'pred':
-                logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}].
-                pos_preds (BoolTensor): Mask with positive predictions of shape [batch_size, num_feats].
-                neg_preds (BoolTensor): Mask with negative predictions of shape [batch_size, num_feats].
+                logits (FloatTensor): Tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}].
+                obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If mode is 'self' and tgt_dict is None:
@@ -462,14 +458,18 @@ class DOD(nn.Module):
             ValueError: Error when unknown loss type is present in 'loss_type' attribute.
         """
 
-        # Get batch size and initialize empty analysis dictionary
-        batch_size = len(feat_maps[0])
-        analysis_dict = {}
-
         # Check provided mode
         if mode not in ('pred', 'self', 'train'):
             error_msg = f"Mode should be chosen from {{'pred', 'self', 'train'}} , but got '{mode}'."
             raise ValueError(error_msg)
+
+        # Check whether visualizations are requested
+        if visualize:
+            raise NotImplementedError
+
+        # Get batch size and initialize empty analysis dictionary
+        batch_size = len(feat_maps[0])
+        analysis_dict = {}
 
         # Make predictions
         if mode in ('pred', 'self'):
@@ -495,7 +495,7 @@ class DOD(nn.Module):
         # Return if in 'pred' mode
         if mode == 'pred':
             analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
-            return logits, pos_preds, neg_preds, analysis_dict
+            return logits, obj_probs, analysis_dict
 
         # Handle case where no target dictionary is provided
         if tgt_dict is None:
@@ -521,30 +521,28 @@ class DOD(nn.Module):
                 error_msg = "A training dictionary must be provided when in 'train' mode."
                 raise ValueError(error_msg)
 
-            for required_key in ('logits', 'pos_preds', 'neg_preds', 'pos_useful', 'tgt_found'):
+            for required_key in ('logits', 'obj_probs', 'tgt_found'):
                 if required_key not in train_dict:
                     error_msg = f"The key '{required_key}' is missing from the training dictionary."
                     raise ValueError(error_msg)
 
             logits = train_dict['logits']
-            pos_preds = train_dict['pos_preds']
-            neg_preds = train_dict['neg_preds']
-            pos_useful = train_dict['pos_useful']
+            obj_probs = train_dict['obj_probs']
+            neg_preds = obj_probs < self.neg_pred
             tgt_found = train_dict['tgt_found']
 
-        # Get useful positives, found targets and positive and negative target masks
+        # Get positive and negative target masks
         if mode == 'self':
             tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
             tgt_mask_kwargs = {'mode': mode, 'pos_preds': pos_preds}
             tgt_mask_outputs = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
-            pos_masks, pos_useful, tgt_found, pos_tgts, neg_tgts = tgt_mask_outputs
+            pos_masks, tgt_found, pos_tgts, neg_tgts = tgt_mask_outputs
 
         else:
             tgt_mask_args = (feat_maps, tgt_boxes, neg_preds)
             tgt_mask_kwargs = {'mode': mode, 'tgt_found': tgt_found}
-            pos_tgts, neg_tgts = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
+            pos_masks, pos_tgts, neg_tgts = self.get_target_masks(*tgt_mask_args, **tgt_mask_kwargs)
 
-        analysis_dict['pos_useful'] = torch.sum(pos_useful)[None] / batch_size
         analysis_dict['pos_tgts'] = torch.sum(pos_tgts)[None] / batch_size
         analysis_dict['neg_tgts'] = torch.sum(neg_tgts)[None] / batch_size
 
@@ -556,9 +554,8 @@ class DOD(nn.Module):
         else:
             analysis_dict['tgt_found'] = 100 * torch.ones(1).to(tgt_found)
 
-        # Get average precision if in 'self' mode
-        if mode == 'self':
-            analysis_dict['ap'] = DOD.get_ap(obj_probs, pos_masks)
+        # Get average precision
+        analysis_dict['ap'] = DOD.get_ap(obj_probs, pos_masks)
 
         # Get weighted positive, negative and hill losses
         targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)

@@ -1,11 +1,13 @@
 """
 General build function for detection heads.
 """
+from copy import deepcopy
 
 from .brd import BRD
 from .dfd import DFD
 from .dod import DOD
 from .retina import RetinaHead
+from .sbd import SBD
 
 
 def build_det_heads(args):
@@ -148,6 +150,25 @@ def build_det_heads(args):
 
             ret_head = RetinaHead(num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
             det_heads[det_head_type] = ret_head
+
+        elif det_head_type == 'sbd':
+            in_feat_size = args.core_feat_sizes[0]
+            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+
+            args_copy = deepcopy(args)
+            args_copy.det_heads = ['dod']
+            dod = build_det_heads(args_copy)['dod']
+
+            sel_dict = {'dod': dod, 'mode': args.sbd_sel_mode, 'abs_thr': args.sbd_sel_abs_thr}
+            sel_dict = {**sel_dict, 'rel_thr': args.sbd_sel_rel_thr}
+
+            hsi_dict = {'type': args.sbd_hsi_type, 'layers': args.sbd_hsi_layers, 'in_size': in_feat_size}
+            hsi_dict = {**hsi_dict, 'hidden_size': args.sbd_hsi_hidden_size, 'out_size': args.sbd_hsi_out_size}
+            hsi_dict = {**hsi_dict, 'norm': args.sbd_hsi_norm, 'act_fn': args.sbd_hsi_act_fn}
+            hsi_dict = {**hsi_dict, 'skip': args.sbd_hsi_skip}
+
+            sbd_head = SBD(sel_dict, hsi_dict)
+            det_heads[det_head_type] = sbd_head
 
         else:
             raise ValueError(f"Unknown detection head type '{det_head_type}' was provided.")

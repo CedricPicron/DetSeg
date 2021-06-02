@@ -222,6 +222,19 @@ def get_parser():
     parser.add_argument('--ret_nms_threshold', default=0.5, type=float, help='retina head NMS threshold')
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
+    # ** State-Based Detector (SBD) head
+    parser.add_argument('--sbd_sel_mode', default='rel', type=str, help='SBD feature selection mode')
+    parser.add_argument('--sbd_sel_abs_thr', default=0.5, type=float, help='SBD absolute feature threshold')
+    parser.add_argument('--sbd_sel_rel_thr', default=100, type=int, help='SBD relative feature threshold')
+
+    parser.add_argument('--sbd_hsi_type', default='one_step_mlp', type=str, help='HSI network type')
+    parser.add_argument('--sbd_hsi_layers', default=1, type=int, help='number of layers of HSI network')
+    parser.add_argument('--sbd_hsi_hidden_size', default=1024, type=int, help='hidden feature size of HSI network')
+    parser.add_argument('--sbd_hsi_out_size', default=256, type=int, help='hidden state feature size')
+    parser.add_argument('--sbd_hsi_norm', default='layer', type=str, help='normalization type of HSI network')
+    parser.add_argument('--sbd_hsi_act_fn', default='relu', type=str, help='activation function of HSI network')
+    parser.add_argument('--sbd_hsi_skip', action='store_true', help='whether to use skip connection in HSI network')
+
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
 

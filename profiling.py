@@ -25,7 +25,7 @@ from structures.images import Images
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr', 'dfd', 'dod_pred']
 model_choices = [*model_choices, 'dod_self', 'dod_train', 'encoder', 'fpn', 'gc', 'global_decoder', 'resnet', 'ret']
-model_choices = [*model_choices, 'sample_decoder', 'sem']
+model_choices = [*model_choices, 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -343,9 +343,7 @@ elif profiling_args.model == 'dod_train':
 
     train_dict = {}
     train_dict['logits'] = torch.randn(2, num_feats, 1, device='cuda', requires_grad=True)
-    train_dict['pos_preds'] = torch.randint(2, size=(2, num_feats), **tensor_kwargs)
-    train_dict['neg_preds'] = torch.randint(2, size=(2, num_feats), **tensor_kwargs)
-    train_dict['pos_useful'] = torch.randint(2, size=(2, num_feats), **tensor_kwargs)
+    train_dict['obj_probs'] = torch.rand(2, num_feats, device='cuda')
     train_dict['tgt_found'] = [torch.randint(2, size=(num_targets_total//2,), **tensor_kwargs) for _ in range(2)]
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': imgs, 'mode': 'train', 'train_dict': train_dict}
@@ -476,6 +474,36 @@ elif profiling_args.model == 'sample_decoder':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)['slots'].sum().backward()"
+
+elif profiling_args.model == 'sbd':
+    main_args.num_classes = 80
+    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.det_heads = ['sbd']
+    main_args.sbd_sel_mode = 'rel'
+    main_args.sbd_hsi_type = 'one_step_mlp'
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
+    model = build_det_heads(main_args)['sbd'].to('cuda')
+
+    feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 256, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
+    feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'sem':
     main_args.num_classes = 80
