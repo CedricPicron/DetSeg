@@ -181,11 +181,12 @@ def get_parser():
     parser.add_argument('--dod_kernel_size', default=3, type=int, help='DOD hidden layer kernel size')
     parser.add_argument('--dod_bottle_size', default=64, type=int, help='DOD bottleneck feature size')
     parser.add_argument('--dod_hidden_layers', default=1, type=int, help='number of DOD hidden layers')
-    parser.add_argument('--dod_rel_preds', action='store_true', help='make relative predictions')
+    parser.add_argument('--dod_rel_preds', action='store_true', help='make relative DOD predictions')
     parser.add_argument('--dod_prior_prob', default=0.01, type=float, help='prior object probability of DOD network')
 
-    parser.add_argument('--dod_pos_pred', default=0.6, type=float, help='DOD positive prediction threshold')
-    parser.add_argument('--dod_neg_pred', default=0.4, type=float, help='DOD negative prediction threshold')
+    parser.add_argument('--dod_sel_mode', default='rel', type=str, help='DOD feature selection mode')
+    parser.add_argument('--dod_sel_abs_thr', default=0.5, type=float, help='DOD absolute feature threshold')
+    parser.add_argument('--dod_sel_rel_thr', default=100, type=int, help='DOD relative feature threshold')
 
     parser.add_argument('--dod_tgt_metric', default='iou', type=str, help='DOD feature-target matching metric')
     parser.add_argument('--dod_tgt_decision', default='rel', type=str, help='DOD target decision maker type')
@@ -193,14 +194,16 @@ def get_parser():
     parser.add_argument('--dod_abs_neg_tgt', default=0.3, type=float, help='DOD absolute negative target threshold')
     parser.add_argument('--dod_rel_pos_tgt', default=5, type=int, help='DOD relative positive target threshold')
     parser.add_argument('--dod_rel_neg_tgt', default=10, type=int, help='DOD relative negative target threshold')
-    parser.add_argument('--dod_static_tgt', action='store_true', help='static DOD targets independent of predictions')
+    parser.add_argument('--dod_tgt_mode', default='static', type=str, help='DOD target mode')
 
     parser.add_argument('--dod_loss_type', default='sigmoid_focal', type=str, help='type of loss used by DOD head')
     parser.add_argument('--dod_focal_alpha', default=0.25, type=float, help='DOD focal alpha value')
     parser.add_argument('--dod_focal_gamma', default=2.0, type=float, help='DOD focal gamma value')
-    parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive targets')
-    parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative targets')
-    parser.add_argument('--dod_hill_weight', default=0.0, type=float, help='loss term weight for sigmoid hill losses')
+    parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive DOD targets')
+    parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative DOD targets')
+
+    parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive features per DOD target')
+    parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
@@ -223,17 +226,30 @@ def get_parser():
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
     # ** State-Based Detector (SBD) head
-    parser.add_argument('--sbd_sel_mode', default='rel', type=str, help='SBD feature selection mode')
-    parser.add_argument('--sbd_sel_abs_thr', default=0.5, type=float, help='SBD absolute feature threshold')
-    parser.add_argument('--sbd_sel_rel_thr', default=100, type=int, help='SBD relative feature threshold')
+    parser.add_argument('--sbd_osi_type', default='one_step_mlp', type=str, help='OSI network type')
+    parser.add_argument('--sbd_osi_layers', default=1, type=int, help='number of layers of OSI network')
+    parser.add_argument('--sbd_osi_hidden_size', default=1024, type=int, help='hidden feature size of OSI network')
+    parser.add_argument('--sbd_osi_out_size', default=256, type=int, help='size of object state')
+    parser.add_argument('--sbd_osi_norm', default='layer', type=str, help='normalization type of OSI network')
+    parser.add_argument('--sbd_osi_act_fn', default='relu', type=str, help='activation function of OSI network')
+    parser.add_argument('--sbd_osi_skip', action='store_true', help='whether to use skip connection in OSI network')
 
-    parser.add_argument('--sbd_hsi_type', default='one_step_mlp', type=str, help='HSI network type')
-    parser.add_argument('--sbd_hsi_layers', default=1, type=int, help='number of layers of HSI network')
-    parser.add_argument('--sbd_hsi_hidden_size', default=1024, type=int, help='hidden feature size of HSI network')
-    parser.add_argument('--sbd_hsi_out_size', default=256, type=int, help='hidden state feature size')
-    parser.add_argument('--sbd_hsi_norm', default='layer', type=str, help='normalization type of HSI network')
-    parser.add_argument('--sbd_hsi_act_fn', default='relu', type=str, help='activation function of HSI network')
-    parser.add_argument('--sbd_hsi_skip', action='store_true', help='whether to use skip connection in HSI network')
+    parser.add_argument('--sbd_hcls_type', default='one_step_mlp', type=str, help='HCLS network type')
+    parser.add_argument('--sbd_hcls_layers', default=1, type=int, help='number of layers of HCLS network')
+    parser.add_argument('--sbd_hcls_hidden_size', default=1024, type=int, help='hidden feature size of HCLS network')
+    parser.add_argument('--sbd_hcls_out_size', default=256, type=int, help='output feature size of HCLS network')
+    parser.add_argument('--sbd_hcls_norm', default='layer', type=str, help='normalization type of HCLS network')
+    parser.add_argument('--sbd_hcls_act_fn', default='relu', type=str, help='activation function of HCLS network')
+    parser.add_argument('--sbd_hcls_skip', action='store_true', help='whether to use skip connection in HCLS network')
+
+    parser.add_argument('--sbd_hbox_type', default='one_step_mlp', type=str, help='HBOX network type')
+    parser.add_argument('--sbd_hbox_layers', default=1, type=int, help='number of layers of HBOX network')
+    parser.add_argument('--sbd_hbox_hidden_size', default=1024, type=int, help='hidden feature size of HBOX network')
+    parser.add_argument('--sbd_hbox_out_size', default=256, type=int, help='output feature size of HBOX network')
+    parser.add_argument('--sbd_hbox_norm', default='layer', type=str, help='normalization type of HBOX network')
+    parser.add_argument('--sbd_hbox_act_fn', default='relu', type=str, help='activation function of HBOX network')
+    parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
+    parser.add_argument('--sbd_box_sigmoid', action='store_true', help='whether to use sigmoid at end of BOX network')
 
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')

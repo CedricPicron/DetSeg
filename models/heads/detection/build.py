@@ -115,18 +115,20 @@ def build_det_heads(args):
             net_dict = {**net_dict, 'bottle_size': args.dod_bottle_size, 'hidden_layers': args.dod_hidden_layers}
             net_dict = {**net_dict, 'rel_preds': args.dod_rel_preds, 'prior_prob': args.dod_prior_prob}
 
-            pred_dict = {'pos_pred': args.dod_pos_pred, 'neg_pred': args.dod_neg_pred}
+            sel_dict = {'mode': args.dod_sel_mode, 'abs_thr': args.dod_sel_abs_thr, 'rel_thr': args.dod_sel_rel_thr}
 
             tgt_dict = {'metric': args.dod_tgt_metric, 'decision': args.dod_tgt_decision}
             tgt_dict = {**tgt_dict, 'abs_pos_tgt': args.dod_abs_pos_tgt, 'abs_neg_tgt': args.dod_abs_neg_tgt}
             tgt_dict = {**tgt_dict, 'rel_pos_tgt': args.dod_rel_pos_tgt, 'rel_neg_tgt': args.dod_rel_neg_tgt}
-            tgt_dict = {**tgt_dict, 'static_tgt': args.dod_static_tgt}
+            tgt_dict = {**tgt_dict, 'mode': args.dod_tgt_mode}
 
             loss_dict = {'type': args.dod_loss_type, 'focal_alpha': args.dod_focal_alpha}
             loss_dict = {**loss_dict, 'focal_gamma': args.dod_focal_gamma, 'pos_weight': args.dod_pos_weight}
-            loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight, 'hill_weight': args.dod_hill_weight}
+            loss_dict = {**loss_dict, 'neg_weight': args.dod_neg_weight}
 
-            dod_head = DOD(in_feat_size, net_dict, pred_dict, tgt_dict, loss_dict, metadata)
+            pred_dict = {'num_pos': args.dod_pred_num_pos, 'max_dets': args.dod_pred_max_dets}
+
+            dod_head = DOD(in_feat_size, net_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata)
             det_heads[det_head_type] = dod_head
 
         elif det_head_type == 'ret':
@@ -159,15 +161,22 @@ def build_det_heads(args):
             args_copy.det_heads = ['dod']
             dod = build_det_heads(args_copy)['dod']
 
-            sel_dict = {'dod': dod, 'mode': args.sbd_sel_mode, 'abs_thr': args.sbd_sel_abs_thr}
-            sel_dict = {**sel_dict, 'rel_thr': args.sbd_sel_rel_thr}
+            osi_dict = {'type': args.sbd_osi_type, 'layers': args.sbd_osi_layers, 'in_size': in_feat_size}
+            osi_dict = {**osi_dict, 'hidden_size': args.sbd_osi_hidden_size, 'out_size': args.sbd_osi_out_size}
+            osi_dict = {**osi_dict, 'norm': args.sbd_osi_norm, 'act_fn': args.sbd_osi_act_fn}
+            osi_dict = {**osi_dict, 'skip': args.sbd_osi_skip}
 
-            hsi_dict = {'type': args.sbd_hsi_type, 'layers': args.sbd_hsi_layers, 'in_size': in_feat_size}
-            hsi_dict = {**hsi_dict, 'hidden_size': args.sbd_hsi_hidden_size, 'out_size': args.sbd_hsi_out_size}
-            hsi_dict = {**hsi_dict, 'norm': args.sbd_hsi_norm, 'act_fn': args.sbd_hsi_act_fn}
-            hsi_dict = {**hsi_dict, 'skip': args.sbd_hsi_skip}
+            cls_dict = {'type': args.sbd_hcls_type, 'layers': args.sbd_hcls_layers, 'in_size': args.sbd_osi_out_size}
+            cls_dict = {**cls_dict, 'hidden_size': args.sbd_hcls_hidden_size, 'out_size': args.sbd_hcls_out_size}
+            cls_dict = {**cls_dict, 'norm': args.sbd_hcls_norm, 'act_fn': args.sbd_hcls_act_fn}
+            cls_dict = {**cls_dict, 'skip': args.sbd_hcls_skip, 'num_classes': args.num_classes}
 
-            sbd_head = SBD(sel_dict, hsi_dict)
+            box_dict = {'type': args.sbd_hbox_type, 'layers': args.sbd_hbox_layers, 'in_size': args.sbd_osi_out_size}
+            box_dict = {**box_dict, 'hidden_size': args.sbd_hbox_hidden_size, 'out_size': args.sbd_hbox_out_size}
+            box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
+            box_dict = {**box_dict, 'skip': args.sbd_hbox_skip, 'sigmoid': args.sbd_box_sigmoid}
+
+            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict)
             det_heads[det_head_type] = sbd_head
 
         else:
