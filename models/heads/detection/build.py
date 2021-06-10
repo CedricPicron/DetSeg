@@ -176,7 +176,9 @@ def build_det_heads(args):
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
             box_dict = {**box_dict, 'skip': args.sbd_hbox_skip, 'sigmoid': args.sbd_box_sigmoid}
 
-            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict)
+            match_dict = {'mode': args.sbd_match_mode}
+
+            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict, match_dict)
             det_heads[det_head_type] = sbd_head
 
         else:

@@ -20,9 +20,11 @@ class SBD(nn.Module):
         osi (nn.Sequential): Object state initialization (OSI) module computing the initial object states.
         cls (nn.Sequential): Classification (CLS) module computing classification predictions from object states.
         box (nn.Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
+
+        match_mode (str): String containing the prediction-target matching mode.
     """
 
-    def __init__(self, dod, osi_dict, cls_dict, box_dict):
+    def __init__(self, dod, osi_dict, cls_dict, box_dict, match_dict):
         """
         Initializes the SBD module.
 
@@ -60,6 +62,9 @@ class SBD(nn.Module):
                 - act_fn (str): string containing the type of activation function of the HBOX network;
                 - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections;
                 - sigmoid (bool): boolean indicating whether to use sigmoid function at the end of the BOX network.
+
+            match_dict (Dict): Matching dictionary containing following keys:
+                - mode (str): string containing the prediction-target matching mode.
         """
 
         # Initialization of default nn.Module
@@ -86,6 +91,9 @@ class SBD(nn.Module):
             self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox), ('sigmoid', nn.Sigmoid())]))
         else:
             self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
+
+        # Set matching attributes
+        self.match_mode = match_dict['mode']
 
     @staticmethod
     def get_net(net_dict):
@@ -164,6 +172,58 @@ class SBD(nn.Module):
 
         return feat_xyz
 
+    def get_loss(self, cls_preds, box_preds, pred_xyz, feat_wh, pred_feat_ids=None, pos_masks=None):
+        """
+        Compute classification and bounding box losses from predictions.
+
+        Args:
+            cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_classes+1].
+            box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
+            pred_xyz (List): List [batch_size] of prediction coordinates of shape [num_preds, 3].
+            feat_wh (FloatTensor): Tensor containing the feature widths and heights of shape [num_maps, 2].
+            pred_feat_ids (List): List [batch_size] with feature indices of shape [num_preds] (default=None).
+            pos_masks (List): List [batch_size] of positive DOD masks of shape [num_feats, num_targets] (default=None).
+
+        Returns:
+            loss_dict (Dict): Loss dictionary containing following keys:
+                - cls_loss (FloatTensor): tensor containing the weighted classification loss of shape [1];
+                - box_loss (FloatTensor): tensor containing the weighted bounding box loss of shape [1].
+
+            pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
+            tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
+
+        Raises:
+            ValueError: Error when invalid prediction-target matching mode is provided.
+        """
+
+        # Get batch size
+        batch_size = len(cls_preds)
+
+        # Perform prediction-target matching
+        pred_ids = []
+        tgt_ids = []
+        pos_pred_ids = []
+        tgt_found = []
+
+        if self.match_mode == 'dod_based':
+            for i in range(batch_size):
+                pred_pos_mask = pos_masks[i][pred_feat_ids[i]]
+                pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
+                pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
+
+                num_tgts = pred_pos_mask.shape[1]
+                tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
+                tgt_found_i[tgt_ids_i] = True
+
+                pred_ids.append(pred_ids_i)
+                tgt_ids.append(tgt_ids_i)
+                pos_pred_ids.append(pos_pred_ids_i)
+                tgt_found.append(tgt_found_i)
+
+        else:
+            error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
+            raise ValueError(error_msg)
+
     def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
         """
         Forward method of the SBD head.
@@ -188,9 +248,8 @@ class SBD(nn.Module):
         if visualize:
             raise NotImplementedError
 
-        # Get batch size and device
+        # Get batch size
         batch_size = len(feat_maps[0])
-        device = feat_maps[0].device
 
         # Sort feature maps from high to low resolution
         map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps])
@@ -202,30 +261,52 @@ class SBD(nn.Module):
         feat_xyz = SBD.get_xyz(feat_maps)
 
         # Apply DOD module and extract output
-        dod_output = self.dod(feat_maps, tgt_dict=tgt_dict, images=images, stand_alone=False, **kwargs)
+        dod_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'stand_alone': False}
+        dod_output = self.dod(feat_maps, **dod_kwargs, **kwargs)
 
         if tgt_dict is None:
             sel_ids, analysis_dict = dod_output
         elif self.dod.tgt_mode == 'ext_dynamic':
-            logits, obj_probs, sel_ids, pos_masks, neg_masks, tgt_sorted_ids = dod_output
+            logits, obj_probs, sel_ids, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict = dod_output
         else:
-            sel_ids, pos_masks, loss_dict, analysis_dict = dod_output
+            sel_ids, pos_masks, dod_loss_dict, analysis_dict = dod_output
 
-        # Get selected features with corresponding images indices and coordinates
-        num_sel = torch.tensor([len(sel_ids_i) for sel_ids_i in sel_ids], device=device)
-        img_ids = torch.arange(batch_size, device=device).repeat_interleave(num_sel)
-        sel_feats = feats[img_ids, torch.cat(sel_ids, dim=0), :]
-        obj_xyz = torch.cat([feat_xyz[sel_ids_i, :] for sel_ids_i in sel_ids], dim=0)
+        # Get selected features and corresponding (x, y, z) coordinates
+        sel_feats = [feats[i, sel_ids[i], :] for i in range(batch_size)]
+        obj_xyz = [feat_xyz[sel_ids_i, :] for sel_ids_i in sel_ids]
 
         # Get initial object states
-        obj_states = self.osi(sel_feats)
-        num_states = len(obj_states)
+        obj_states = [self.osi(sel_feats_i) for sel_feats_i in sel_feats]
+        num_states = sum(len(obj_states_i) for obj_states_i in obj_states)
         analysis_dict['num_states_0'] = num_states / batch_size
 
         # Get initial predictions
-        cls_preds = self.cls(obj_states)
-        box_preds = self.box(obj_states)
+        cls_preds = [self.cls(obj_states_i) for obj_states_i in obj_states]
+        box_preds = [self.box(obj_states_i) for obj_states_i in obj_states]
 
         # Get initial loss
         if tgt_dict is not None:
+
+            # Get feature widths and heights
             feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_xyz)
+
+            # Get initial classification and bounding box losses
+            loss_kwargs = {'pred_feat_ids': sel_ids, 'pos_masks': pos_masks} if self.match_mode == 'dod_based' else {}
+            loss_dict, pred_feat_ids, tgt_found = self.get_loss(cls_preds, box_preds, obj_xyz, feat_wh, **loss_kwargs)
+            loss_dict = {f'{k}_0': v for k, v in loss_dict.items()}
+
+            # Get DOD losses if in DOD external dynamic target mode
+            if self.dod.tgt_mode == 'ext_dynamic':
+
+                # Get external dictionary
+                pos_feat_ids = [sel_ids[i][pred_feat_ids[i]] for i in range(batch_size)]
+                ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_feat_ids': pos_feat_ids}
+                ext_dict = {**ext_dict, 'tgt_found': tgt_found, 'pos_masks': pos_masks, 'neg_masks': neg_masks}
+                ext_dict = {**ext_dict, 'tgt_sorted_ids': tgt_sorted_ids}
+
+                # Get DOD loss and analysis dictionary
+                dod_loss_dict, dod_analysis_dict = self.dod(feat_maps, ext_dict=ext_dict, **dod_kwargs, **kwargs)
+                analysis_dict.update(dod_analysis_dict)
+
+            # Add DOD losses to main loss dictionary
+            loss_dict.update(dod_loss_dict)

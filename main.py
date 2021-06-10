@@ -251,6 +251,8 @@ def get_parser():
     parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
     parser.add_argument('--sbd_box_sigmoid', action='store_true', help='whether to use sigmoid at end of BOX network')
 
+    parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD state-target matching mode')
+
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
 

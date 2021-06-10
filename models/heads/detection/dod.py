@@ -425,6 +425,7 @@ class DOD(nn.Module):
                     pos_masks (List): List [batch_size] of positive target masks of shape [num_feats, num_targets].
                     neg_masks (List): List [batch_size] of negative target masks of shape [num_feats, num_targets].
                     tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_feats, num_targets].
+                    analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
                 * If in remaining cases:
                     * If DOD module is stand-alone and not in training mode:
@@ -518,7 +519,8 @@ class DOD(nn.Module):
             # Return if in external dynamic target mode
             if self.tgt_mode == 'ext_dynamic':
                 if not stand_alone:
-                    return logits, obj_probs, sel_ids, pos_masks, neg_masks, tgt_sorted_ids
+                    analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
+                    return logits, obj_probs, sel_ids, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict
                 else:
                     error_msg = "Stand-alone DOD modules do not support the 'ext_dynamic' target mode."
                     raise RuntimeError(error_msg)
@@ -596,8 +598,8 @@ class DOD(nn.Module):
 
         # Get weighted positive and negative losses
         targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)
-        targets[pos_tgts] = 1
         targets[neg_tgts] = 0
+        targets[pos_tgts] = 1
 
         loss_feats = targets != -1
         logits = logits[loss_feats]
