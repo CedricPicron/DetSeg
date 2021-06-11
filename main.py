@@ -251,7 +251,22 @@ def get_parser():
     parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
     parser.add_argument('--sbd_box_sigmoid', action='store_true', help='whether to use sigmoid at end of BOX network')
 
-    parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD state-target matching mode')
+    parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD prediction-target matching mode')
+
+    parser.add_argument('--sbd_loss_with_bg', action='store_true', help='adds background label to SBD classification')
+    parser.add_argument('--sbd_loss_bg_weight', default=0.1, type=float, help='SBD classification background weight')
+    parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')
+    parser.add_argument('--sbd_loss_cls_alpha', default=0.25, type=float, help='SBD classification focal alpha value')
+    parser.add_argument('--sbd_loss_cls_gamma', default=2.0, type=float, help='SBD classification focal gamma value')
+    parser.add_argument('--sbd_loss_cls_weight', default=1.0, type=float, help='SBD classification loss weight')
+    parser.add_argument('--sbd_loss_box_types', nargs='*', default='smooth_l1', help='SBD bounding box loss types')
+    parser.add_argument('--sbd_loss_box_beta', default=0.0, type=float, help='SBD bounding box smooth L1 beta value')
+    parser.add_argument('--sbd_loss_box_weights', nargs='*', default=1.0, type=float, help='SBD box loss weights')
+
+    parser.add_argument('--sbd_pred_dup_removal', default='nms', type=str, help='SBD prediction duplicate removal')
+    parser.add_argument('--sbd_pred_nms_candidates', default=1000, type=int, help='SBD NMS candidates')
+    parser.add_argument('--sbd_pred_nms_thr', default=0.5, type=float, help='SBD NMS IoU threshold')
+    parser.add_argument('--sbd_pred_max_dets', default=100, type=int, help='maximum number of SBD detections')
 
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')

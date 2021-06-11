@@ -178,7 +178,16 @@ def build_det_heads(args):
 
             match_dict = {'mode': args.sbd_match_mode}
 
-            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict, match_dict)
+            loss_dict = {'with_bg': args.sbd_loss_with_bg, 'bg_weight': args.sbd_loss_bg_weight}
+            loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}
+            loss_dict = {**loss_dict, 'cls_gamma': args.sbd_loss_cls_gamma, 'cls_weight': args.sbd_loss_cls_weight}
+            loss_dict = {**loss_dict, 'box_types': args.sbd_loss_box_types, 'box_beta': args.sbd_loss_box_beta}
+            loss_dict = {**loss_dict, 'box_weights': args.sbd_loss_box_weights}
+
+            pred_dict = {'dup_removal': args.sbd_pred_dup_removal, 'nms_candidates': args.sbd_pred_nms_candidates}
+            pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}
+
+            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict, metadata)
             det_heads[det_head_type] = sbd_head
 
         else:
