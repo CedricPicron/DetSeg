@@ -597,7 +597,7 @@ def apply_box_deltas(box_deltas, in_boxes, scale_clamp=math.log(1000.0/16)):
 
     # Get transformed bounding boxes
     out_boxes = in_boxes.clone().to_format('cxcywh')
-    out_boxes.boxes[:, :2] += box_deltas[:, :2] * out_boxes.boxes[:, 2:]
+    out_boxes.boxes[:, :2] += box_deltas[:, :2] * in_boxes.boxes[:, 2:]
     out_boxes.boxes[:, 2:] *= torch.exp(box_deltas[:, 2:].clamp(max=scale_clamp))
 
     return out_boxes

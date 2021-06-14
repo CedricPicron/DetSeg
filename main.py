@@ -249,7 +249,6 @@ def get_parser():
     parser.add_argument('--sbd_hbox_norm', default='layer', type=str, help='normalization type of HBOX network')
     parser.add_argument('--sbd_hbox_act_fn', default='relu', type=str, help='activation function of HBOX network')
     parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
-    parser.add_argument('--sbd_box_sigmoid', action='store_true', help='whether to use sigmoid at end of BOX network')
 
     parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD prediction-target matching mode')
 

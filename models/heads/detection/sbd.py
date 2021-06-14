@@ -81,8 +81,7 @@ class SBD(nn.Module):
                 - out_size (int): output feature size of the HBOX network;
                 - norm (str): string containing the type of normalization of the HBOX network;
                 - act_fn (str): string containing the type of activation function of the HBOX network;
-                - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections;
-                - sigmoid (bool): boolean indicating whether to use sigmoid function at the end of the BOX network.
+                - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections.
 
             match_dict (Dict): Matching dictionary containing following keys:
                 - mode (str): string containing the prediction-target matching mode.
@@ -125,14 +124,9 @@ class SBD(nn.Module):
         self.cls = nn.Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
 
         # Initialization of bounding box prediction (BOX) network
-        sigmoid = box_dict.pop('sigmoid')
         hbox = SBD.get_net(box_dict)
         obox = nn.Linear(cls_dict['out_size'], 4)
-
-        if sigmoid:
-            self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox), ('sigmoid', nn.Sigmoid())]))
-        else:
-            self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
+        self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
 
         # Set matching attributes
         self.match_mode = match_dict['mode']
@@ -362,12 +356,14 @@ class SBD(nn.Module):
             if len(tgt_boxes_i) == 0:
                 loss_dict['box_loss'] += 0.0 * box_preds[i].sum()
                 analysis_dict['box_acc'] += 100 / batch_size
+                continue
 
             # Get anchor boxes
             float_ids = (num_maps-1) * pred_xyz_i[:, 2]
-            floor_ids = torch.floor(float_ids)
-            ceil_weights = float_ids - floor_ids
-            pred_wh_i = (1-ceil_weights)*feat_wh[floor_ids] + ceil_weights*feat_wh[floor_ids+1]
+            floor_ids = torch.floor(float_ids).to(torch.int64)
+            ceil_ids = (floor_ids+1).clamp(max=num_maps-1)
+            ceil_weights = (float_ids - floor_ids)[:, None]
+            pred_wh_i = (1-ceil_weights)*feat_wh[floor_ids] + ceil_weights*feat_wh[ceil_ids]
 
             anchors_i = torch.cat([pred_xyz_i[:, :2], pred_wh_i], dim=1)
             anchors_i = Boxes(anchors_i, 'cxcywh', normalized='img_with_padding')
@@ -429,7 +425,7 @@ class SBD(nn.Module):
         """
 
         # Get batch size and number of maps
-        batch_size = len(cls_preds[0])
+        batch_size = len(cls_preds)
         num_maps = len(feat_wh)
 
         # Initialize prediction dictionary
@@ -440,13 +436,15 @@ class SBD(nn.Module):
         for i in range(batch_size):
 
             # Get prediction labels and scores
-            scores_i, labels_i = cls_preds[i].sigmoid().max(dim=1)
+            cls_preds_i = cls_preds[i][:, :-1] if self.with_bg else cls_preds[i]
+            scores_i, labels_i = cls_preds_i.sigmoid().max(dim=1)
 
             # Get prediction boxes
             float_ids = (num_maps-1) * pred_xyz[i][:, 2]
-            floor_ids = torch.floor(float_ids)
-            ceil_weights = float_ids - floor_ids
-            pred_wh_i = (1-ceil_weights)*feat_wh[floor_ids] + ceil_weights*feat_wh[floor_ids+1]
+            floor_ids = torch.floor(float_ids).to(torch.int64)
+            ceil_ids = (floor_ids+1).clamp(max=num_maps-1)
+            ceil_weights = (float_ids - floor_ids)[:, None]
+            pred_wh_i = (1-ceil_weights)*feat_wh[floor_ids] + ceil_weights*feat_wh[ceil_ids]
 
             anchors_i = torch.cat([pred_xyz[i][:, :2], pred_wh_i], dim=1)
             anchors_i = Boxes(anchors_i, 'cxcywh', normalized='img_with_padding')
@@ -539,6 +537,9 @@ class SBD(nn.Module):
         feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
         feat_xyz = SBD.get_xyz(feat_maps)
 
+        # Get feature widths and heights
+        feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_xyz)
+
         # Apply DOD module and extract output
         dod_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'stand_alone': False}
         dod_output = self.dod(feat_maps, **dod_kwargs, **kwargs)
@@ -565,9 +566,6 @@ class SBD(nn.Module):
 
         # Get initial loss
         if tgt_dict is not None:
-
-            # Get feature widths and heights
-            feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_xyz)
 
             # Get target boxes in desired format
             if images is not None:
@@ -609,7 +607,7 @@ class SBD(nn.Module):
             loss_dict.update(dod_loss_dict)
 
         # Get initial prediction dictionary
-        if tgt_dict is None:
+        if not self.training:
             pred_dict = self.make_predictions(cls_preds, box_preds, obj_xyz, feat_wh)
             pred_dicts = [pred_dict]
 

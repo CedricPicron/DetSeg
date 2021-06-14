@@ -426,8 +426,12 @@ elif profiling_args.model == 'sbd':
     main_args.num_classes = 80
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['sbd']
-    main_args.sbd_sel_mode = 'rel'
-    main_args.sbd_hsi_type = 'one_step_mlp'
+    main_args.sbd_osi_type = 'one_step_mlp'
+    main_args.sbd_match_mode = 'dod_based'
+    main_args.sbd_loss_with_bg = False
+    main_args.sbd_loss_box_types = 'smooth_l1'
+    main_args.sbd_loss_box_weights = 1.0
+    main_args.sbd_pred_dup_removal = 'nms'
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)['sbd'].to('cuda')
 

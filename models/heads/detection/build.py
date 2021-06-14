@@ -157,6 +157,12 @@ def build_det_heads(args):
             in_feat_size = args.core_feat_sizes[0]
             assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
 
+            if not isinstance(args.sbd_loss_box_types, list):
+                args.sbd_loss_box_types = [args.sbd_loss_box_types]
+
+            if not isinstance(args.sbd_loss_box_weights, list):
+                args.sbd_loss_box_weights = [args.sbd_loss_box_weights]
+
             args_copy = deepcopy(args)
             args_copy.det_heads = ['dod']
             dod = build_det_heads(args_copy)['dod']
@@ -174,7 +180,7 @@ def build_det_heads(args):
             box_dict = {'type': args.sbd_hbox_type, 'layers': args.sbd_hbox_layers, 'in_size': args.sbd_osi_out_size}
             box_dict = {**box_dict, 'hidden_size': args.sbd_hbox_hidden_size, 'out_size': args.sbd_hbox_out_size}
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
-            box_dict = {**box_dict, 'skip': args.sbd_hbox_skip, 'sigmoid': args.sbd_box_sigmoid}
+            box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
 
             match_dict = {'mode': args.sbd_match_mode}
 
