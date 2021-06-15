@@ -384,11 +384,11 @@ class SBD(nn.Module):
                     loss_dict['box_loss'] += box_weight * box_loss
 
                 elif box_type == 'iou':
-                    box_loss = box_iou(pred_boxes_i, tgt_boxes_i).diag().sum()
+                    box_loss = len(pred_boxes_i) - box_iou(pred_boxes_i, tgt_boxes_i).diag().sum()
                     loss_dict['box_loss'] += box_weight * box_loss
 
                 elif box_type == 'giou':
-                    box_loss = box_giou(pred_boxes_i, tgt_boxes_i).diag().sum()
+                    box_loss = len(pred_boxes_i) - box_giou(pred_boxes_i, tgt_boxes_i).diag().sum()
                     loss_dict['box_loss'] += box_weight * box_loss
 
                 else:

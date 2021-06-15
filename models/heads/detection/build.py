@@ -184,7 +184,7 @@ def build_det_heads(args):
 
             match_dict = {'mode': args.sbd_match_mode}
 
-            loss_dict = {'with_bg': args.sbd_loss_with_bg, 'bg_weight': args.sbd_loss_bg_weight}
+            loss_dict = {'with_bg': not args.sbd_loss_no_bg, 'bg_weight': args.sbd_loss_bg_weight}
             loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}
             loss_dict = {**loss_dict, 'cls_gamma': args.sbd_loss_cls_gamma, 'cls_weight': args.sbd_loss_cls_weight}
             loss_dict = {**loss_dict, 'box_types': args.sbd_loss_box_types, 'box_beta': args.sbd_loss_box_beta}

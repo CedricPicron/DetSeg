@@ -428,7 +428,7 @@ elif profiling_args.model == 'sbd':
     main_args.det_heads = ['sbd']
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_match_mode = 'dod_based'
-    main_args.sbd_loss_with_bg = False
+    main_args.sbd_loss_no_bg = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
     main_args.sbd_pred_dup_removal = 'nms'

@@ -252,7 +252,7 @@ def get_parser():
 
     parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD prediction-target matching mode')
 
-    parser.add_argument('--sbd_loss_with_bg', action='store_true', help='adds background label to SBD classification')
+    parser.add_argument('--sbd_loss_no_bg', action='store_true', help='SBD classification without background label')
     parser.add_argument('--sbd_loss_bg_weight', default=0.1, type=float, help='SBD classification background weight')
     parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')
     parser.add_argument('--sbd_loss_cls_alpha', default=0.25, type=float, help='SBD classification focal alpha value')
