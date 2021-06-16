@@ -596,7 +596,8 @@ def apply_box_deltas(box_deltas, in_boxes, scale_clamp=math.log(1000.0/16)):
     assert in_boxes.well_defined().all(), "in_boxes input contains degenerate boxes"
 
     # Get transformed bounding boxes
-    out_boxes = in_boxes.clone().to_format('cxcywh')
+    in_boxes = in_boxes.to_format('cxcywh')
+    out_boxes = in_boxes.clone()
     out_boxes.boxes[:, :2] += box_deltas[:, :2] * in_boxes.boxes[:, 2:]
     out_boxes.boxes[:, 2:] *= torch.exp(box_deltas[:, 2:].clamp(max=scale_clamp))
 
