@@ -271,6 +271,8 @@ elif profiling_args.model == 'dod':
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['dod']
     main_args.dod_rel_preds = False
+    main_args.dod_anchor_num_sizes = 3
+    main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
     main_args.dod_sel_mode = 'rel'
     main_args.dod_tgt_decision = 'rel'
     main_args.dod_tgt_mode = 'static'
@@ -291,9 +293,7 @@ elif profiling_args.model == 'dod':
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
-
-    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"

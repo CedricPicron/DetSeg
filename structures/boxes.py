@@ -3,9 +3,9 @@ Boxes structure and bounding box utilities.
 """
 import math
 
+from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 import torch
 
-from models.functional.position import sine_pos_encodings
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
@@ -756,6 +756,35 @@ def box_iou(boxes1, boxes2, return_inters=False, return_unions=False):
         return ious, inters, unions
 
 
+@torch.no_grad()
+def get_anchors(feat_maps, map_ids, num_sizes=1, scale_factor=4.0, aspect_ratios=[1.0]):
+    """
+    Function computing anchors corresponding to the given feature maps.
+
+    Args:
+        feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+        map_ids (List): List of size [num_maps] containing the map ids (i.e. downsampling exponents) of each map.
+        num_sizes (int): Integer containing the number of different anchor sizes per aspect ratio (default=1).
+        scale_factor (float): Factor scaling the anchors w.r.t. non-overlapping tiling anchors (default=4.0).
+        aspect_ratios (List): List [num_aspect_ratios] containing the different anchor aspect ratios (default=[1.0]).
+
+    Returns:
+        anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_feats * num_cell_anchors].
+    """
+
+    # Get anchor generator
+    sizes = [[scale_factor * 2**(i+j/num_sizes) for j in range(num_sizes)] for i in map_ids]
+    strides = [2**i for i in map_ids]
+    anchor_generator = DefaultAnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios, strides=strides)
+
+    # Get anchors by applying anchor generator on given feature maps
+    anchors = anchor_generator(feat_maps)
+    anchors = [Boxes(map_anchors.tensor, format='xyxy') for map_anchors in anchors]
+    anchors = Boxes.cat(anchors, same_image=True).to(feat_maps[0].device)
+
+    return anchors
+
+
 def get_box_deltas(boxes1, boxes2):
     """
     Function computing box deltas encoding the transformation from one Boxes structure to a second one.
@@ -832,33 +861,6 @@ def get_edge_dists(pts, boxes, scales=None):
     edge_dists = torch.cat([left_top_dists, right_bottom_dists], dim=1)
 
     return edge_dists
-
-
-def get_feat_boxes(feat_maps):
-    """
-    Function computing feature boxes based on map sizes of given feature maps.
-
-    Args:
-        feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-
-    Returns:
-        feat_boxes (Boxes): Axis-aligned bounding boxes related to features of given feature maps of size [num_feats].
-    """
-
-    # Get feature centers
-    _, feat_cts_maps = sine_pos_encodings(feat_maps, normalize=True)
-    feat_cts = torch.cat([feat_cts_map.flatten(1).t() for feat_cts_map in feat_cts_maps], dim=0)
-
-    # Get feature widths and heights
-    map_numel = torch.tensor([feat_map.flatten(2).shape[-1] for feat_map in feat_maps]).to(feat_cts.device)
-    feat_wh = torch.tensor([[1/s for s in feat_map.shape[:1:-1]] for feat_map in feat_maps]).to(feat_cts)
-    feat_wh = torch.repeat_interleave(feat_wh, map_numel, dim=0)
-
-    # Concatenate feature centers, widths and heights to get feature boxes
-    feat_boxes = torch.cat([feat_cts, feat_wh], dim=1)
-    feat_boxes = Boxes(feat_boxes, format='cxcywh', normalized='img_with_padding')
-
-    return feat_boxes
 
 
 def pts_inside_boxes(pts, boxes):

@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 from models.modules.convolution import BottleneckConv, ProjConv
-from structures.boxes import Boxes, box_iou, get_feat_boxes
+from structures.boxes import Boxes, box_iou, get_anchors
 
 
 class DOD(nn.Module):
@@ -20,11 +20,17 @@ class DOD(nn.Module):
     Attributes:
         net (nn.Sequential): DOD network computing the logits.
 
-        sel_mode (str): String containing the feature selection mode.
-        sel_abs_thr (float): Absolute threshold determining the selected features.
-        sel_rel_thr (int): Relative threshold determining the selected features.
+        anchor_dict (Dict): Dictionary with items used for anchor generation containing following keys:
+            - map_ids (List): list [num_maps] containing the map ids (i.e. downsampling exponents) of each map;
+            - num_sizes (int): integer containing the number of different anchor sizes per aspect ratio;
+            - scale_factor (float): factor scaling the anchors w.r.t. non-overlapping tiling anchors;
+            - aspect_ratios (List): list [num_aspect_ratios] containing the different anchor aspect ratios.
 
-        tgt_metric (str): String containing the feature-target matching metric.
+        sel_mode (str): String containing the anchor selection mode.
+        sel_abs_thr (float): Absolute threshold determining the selected anchors.
+        sel_rel_thr (int): Relative threshold determining the selected anchors.
+
+        tgt_metric (str): String containing the anchor-target matching metric.
         tgt_decision (str): String containing the target decision maker type.
         abs_pos_tgt (float): Absolute threshold used during positive target decision making.
         abs_neg_tgt (float): Absolute threshold used during negative target decision making.
@@ -38,13 +44,13 @@ class DOD(nn.Module):
         pos_weight (float): Factor weighting the loss terms with positive targets.
         neg_weight (float): Factor weighting the loss terms with negative targets.
 
-        pred_num_pos (int): Integer containing the number of positive features per target during prediction.
+        pred_num_pos (int): Integer containing the number of positive anchors per target during prediction.
         pred_max_dets (int): Integer containing the maximum number of detections during prediction.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, in_feat_size, net_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata):
+    def __init__(self, in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata):
         """
         Initializes the DOD module.
 
@@ -60,14 +66,20 @@ class DOD(nn.Module):
                 - rel_preds (bool): whether or not DOD network should make relative predictions;
                 - prior_prob (float): prior object probability determining the initial output layer bias value(s).
 
-            sel_dict (Dict): Feature selection dictionary containing following keys:
-                - mode (str): string containing the feature selection mode;
-                - abs_thr (float): absolute threshold determining the selected features;
-                - rel_thr (int): relative threshold determining the selected features;
-                - eval (str): string containing the selected features evalution mode.
+            anchor_dict (Dict): Dictionary with items used for anchor generation containing following keys:
+                - map_ids (List): list [num_maps] containing the map ids (i.e. downsampling exponents) of each map;
+                - num_sizes (int): integer containing the number of different anchor sizes per aspect ratio;
+                - scale_factor (float): factor scaling the anchors w.r.t. non-overlapping tiling anchors;
+                - aspect_ratios (List): list [num_aspect_ratios] containing the different anchor aspect ratios.
+
+            sel_dict (Dict): Anchor selection dictionary containing following keys:
+                - mode (str): string containing the anchor selection mode;
+                - abs_thr (float): absolute threshold determining the selected anchors;
+                - rel_thr (int): relative threshold determining the selected anchors;
+                - eval (str): string containing the selected anchors evalution mode.
 
             tgt_dict (Dict): Dictionary with items used during target computation containing following keys:
-                - metric (str): string containing the feature-target matching metric;
+                - metric (str): string containing the anchor-target matching metric;
                 - decision (str): string containing the target decision maker type;
                 - abs_pos_tgt (float): absolute threshold used during positive target decision making;
                 - abs_neg_tgt (float): absolute threshold used during negative target decision making;
@@ -83,7 +95,7 @@ class DOD(nn.Module):
                 - neg_weight (float): factor weighting the loss terms with negative targets.
 
             pred_dict (Dict): Dictionary with items used during prediction containing following keys:
-                - num_pos (int): integer containing the number of positive features per target during prediction;
+                - num_pos (int): integer containing the number of positive anchors per target during prediction;
                 - max_dets (int): integer containing the maximum number of detections during prediction.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -107,20 +119,27 @@ class DOD(nn.Module):
         num_hidden_layers = net_dict['hidden_layers']
         hidden_layers = nn.Sequential(*[deepcopy(hidden_layer) for _ in range(num_hidden_layers)])
 
-        out_feat_size = 2 if net_dict['rel_preds'] else 1
+        num_cell_anchors = anchor_dict['num_sizes'] * len(anchor_dict['aspect_ratios'])
+        out_feat_size = 2*num_cell_anchors if net_dict['rel_preds'] else num_cell_anchors
         out_layer = ProjConv(feat_size, out_feat_size, norm=norm, skip=False)
 
         obj_prior_prob = net_dict['prior_prob']
-        obj_bias_value = -(math.log((1 - obj_prior_prob) / obj_prior_prob))
-        torch.nn.init.constant_(out_layer.conv.bias[0], obj_bias_value)
+        out_bias_value = -(math.log((1 - obj_prior_prob) / obj_prior_prob))
 
-        if out_feat_size == 2:
-            torch.nn.init.constant_(out_layer.conv.bias[1], -obj_bias_value)
+        if net_dict['rel_preds']:
+            with torch.no_grad():
+                out_bias = torch.tensor([out_bias_value, -out_bias_value]).repeat(num_cell_anchors)
+                out_layer.conv.bias.copy_(out_bias)
+        else:
+            torch.nn.init.constant_(out_layer.conv.bias, out_bias_value)
 
         net_dict = OrderedDict([('in', in_layer), ('hidden', hidden_layers), ('out', out_layer)])
         self.net = nn.Sequential(net_dict)
 
-        # Set feature selection attributes
+        # Set anchor-related attributes
+        self.anchor_dict = anchor_dict
+
+        # Set anchor selection attributes
         self.sel_mode = sel_dict['mode']
         self.sel_abs_thr = sel_dict['abs_thr']
         self.sel_rel_thr = sel_dict['rel_thr']
@@ -151,50 +170,54 @@ class DOD(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def get_static_tgt_masks(self, feat_maps, tgt_boxes, return_ids=True):
+    def get_static_tgt_masks(self, feat_maps, anchors, tgt_boxes, return_ids=True):
         """
         Get positive and negative static target masks.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-            tgt_boxes (List): List of size [batch_size] with normalized Boxes structure of size [num_targets].
-            return_ids (bool): Boolean indicating whether sorted feature indices should be returned (default=True).
+            anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
+            tgt_boxes (Boxes): Structure containing axis-aligned target boxes of size [num_targets_total].
+            return_ids (bool): Boolean indicating whether sorted anchor indices should be returned (default=True).
 
         Returns:
-            pos_masks (List): List [batch_size] of positive static target masks of shape [num_feats, num_targets].
-            neg_masks (List): List [batch_size] of negative static target masks of shape [num_feats, num_targets].
+            pos_masks (List): List [batch_size] of positive static target masks of shape [num_anchors, num_targets].
+            neg_masks (List): List [batch_size] of negative static target masks of shape [num_anchors, num_targets].
 
             If 'return_ids' is True:
-                tgt_sorted_ids (List): List [batch_size] of sorted feature indices of shape [num_feats, num_targets].
+                tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
 
         Raises:
-            ValueError: Error when unknown feature-target metric is present in 'tgt_metric' attribute.
+            ValueError: Error when unknown anchor-target metric is present in 'tgt_metric' attribute.
             ValueError: Error when unknown target decision maker type is present in 'tgt_decision' attribute.
         """
 
-        # Get batch size and feature boxes
-        batch_size = len(tgt_boxes)
-        feat_boxes = get_feat_boxes(feat_maps)
-
-        # Concatenate target boxes and get number of targets
-        tgt_boxes = Boxes.cat(tgt_boxes)
+        # Get batch size and number of target boxes
+        batch_size = len(feat_maps[0])
         num_tgts = len(tgt_boxes)
 
         # Return if there are no target boxes
         if num_tgts == 0:
-            num_feats = len(feat_boxes)
-            tensor_kwargs = {'dtype': torch.bool, 'device': feat_maps[0].device}
-            pos_masks = [torch.zeros(num_feats, 0, **tensor_kwargs) for _ in range(batch_size)]
+            num_anchors = len(anchors)
+            device = feat_maps[0].device
 
-            return pos_masks
+            pos_masks = [torch.zeros(num_anchors, 0, dtype=torch.bool, device=device) for _ in range(batch_size)]
+            neg_masks = [torch.ones(num_anchors, 0, dtype=torch.bool, device=device) for _ in range(batch_size)]
 
-        # Get feature-target similarity matrix and target sorted feature indices
+            if not return_ids:
+                return pos_masks, neg_masks
+
+            tgt_sorted_ids = [torch.zeros(num_anchors, 0, dtype=torch.int64, device=device) for _ in range(batch_size)]
+
+            return pos_masks, neg_masks, tgt_sorted_ids
+
+        # Get anchor-target similarity matrix and target sorted anchor indices
         if self.tgt_metric == 'iou':
-            sim_matrix = box_iou(feat_boxes, tgt_boxes)
+            sim_matrix = box_iou(anchors, tgt_boxes)
             tgt_sorted_ids = torch.argsort(sim_matrix, dim=0, descending=True)
 
         else:
-            error_msg = f"Unknown feature-target metric '{self.tgt_metric}'."
+            error_msg = f"Unknown anchor-target metric '{self.tgt_metric}'."
             raise ValueError(error_msg)
 
         # Get positive and negative static target masks
@@ -219,7 +242,7 @@ class DOD(nn.Module):
         pos_masks = torch.split(pos_mask, tgts_per_img, dim=1)
         neg_masks = torch.split(neg_mask, tgts_per_img, dim=1)
 
-        # Return masks with sorted feature indices if requested
+        # Return masks with sorted anchor indices if requested
         if return_ids:
             tgt_sorted_ids = torch.split(tgt_sorted_ids, tgts_per_img, dim=1)
             return pos_masks, neg_masks, tgt_sorted_ids
@@ -229,11 +252,11 @@ class DOD(nn.Module):
     @torch.no_grad()
     def get_ap(self, obj_probs, tgt_sorted_ids):
         """
-        Get average precision (AP) based on DOD object probabilities and sorted feature indices.
+        Get average precision (AP) based on DOD object probabilities and sorted anchor indices.
 
         Args:
-            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
-            tgt_sorted_ids (List): List [batch_size] of sorted feature indices of shape [num_feats, num_targets].
+            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_anchors].
+            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
 
         Returns:
             ap (FloatTensor): Tensor containing the average precision (AP) of shape [1].
@@ -289,15 +312,16 @@ class DOD(nn.Module):
     @torch.no_grad()
     def make_predictions(self, obj_probs, tgt_sorted_ids, tgt_dict):
         """
-        Makes predictions based on DOD object probabilities, sorted feature indices and corresponding targets.
+        Makes predictions based on DOD object probabilities, sorted anchor indices and corresponding targets.
 
         Args:
-            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
-            tgt_sorted_ids (List): List [batch_size] of sorted feature indices of shape [num_feats, num_targets].
+            obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_anchors].
+            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
-                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
-                - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets].
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
         Returns:
             pred_dicts (List): List of size [3] with the DOD prediction dictionaries containing following keys:
@@ -310,11 +334,16 @@ class DOD(nn.Module):
         # Get batch size
         batch_size = len(obj_probs)
 
+        # Group targets per batch entry
+        tgt_sizes = tgt_dict['sizes']
+        tgt_labels = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
+        tgt_boxes = [tgt_dict['boxes'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
+
         # Get device, default label and default bounding box
         device = obj_probs.device
         def_label = torch.tensor([0], dtype=torch.int64, device=device)
-        def_box_kwargs = {'format': 'cxcywh', 'normalized': 'img_with_padding'}
-        def_box = Boxes(torch.tensor([[0.01, 0.01, 0.01, 0.01]], device=device), **def_box_kwargs)
+        def_box_kwargs = {'format': tgt_boxes[0].format, 'normalized': tgt_boxes[0].normalized}
+        def_box = Boxes(torch.tensor([[0.01, 0.01, 0.02, 0.02]], device=device), **def_box_kwargs)
 
         # Initialize prediction dictionaries
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -325,8 +354,8 @@ class DOD(nn.Module):
         for i in range(batch_size):
 
             # Get target labels and boxes with default detection appended
-            tgt_labels = torch.cat([tgt_dict['labels'][i], def_label], dim=0)
-            tgt_boxes = Boxes.cat([tgt_dict['boxes'][i].to_format('cxcywh'), def_box], same_image=True)
+            tgt_labels_i = torch.cat([tgt_labels[i], def_label], dim=0)
+            tgt_boxes_i = Boxes.cat([tgt_boxes[i], def_box], same_image=True)
 
             # Get positives mask sorted according to object probabilities
             num_tgts = tgt_sorted_ids[i].shape[1]
@@ -347,7 +376,7 @@ class DOD(nn.Module):
             scores1 = torch.rand(self.pred_max_dets)
 
             duplicate_mask = torch.zeros(self.pred_max_dets, dtype=torch.bool, device=device)
-            num_tgts = len(tgt_labels) - 1
+            num_tgts = len(tgt_labels_i) - 1
 
             for tgt_id in range(num_tgts):
                 duplicate_ids = torch.arange(self.pred_max_dets, device=device)[tgt_ids == tgt_id][1:]
@@ -357,18 +386,18 @@ class DOD(nn.Module):
             scores2[duplicate_mask] = scores2[duplicate_mask] * scores2[-1]
 
             # Add predictions to prediction dictionaries
-            pred_dicts[0]['labels'].append(tgt_labels[tgt_ids])
-            pred_dicts[0]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[0]['labels'].append(tgt_labels_i[tgt_ids])
+            pred_dicts[0]['boxes'].append(tgt_boxes_i[tgt_ids])
             pred_dicts[0]['scores'].append(scores0)
             pred_dicts[0]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
 
-            pred_dicts[1]['labels'].append(tgt_labels[tgt_ids])
-            pred_dicts[1]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[1]['labels'].append(tgt_labels_i[tgt_ids])
+            pred_dicts[1]['boxes'].append(tgt_boxes_i[tgt_ids])
             pred_dicts[1]['scores'].append(scores1)
             pred_dicts[1]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
 
-            pred_dicts[2]['labels'].append(tgt_labels[tgt_ids])
-            pred_dicts[2]['boxes'].append(tgt_boxes[tgt_ids])
+            pred_dicts[2]['labels'].append(tgt_labels_i[tgt_ids])
+            pred_dicts[2]['boxes'].append(tgt_boxes_i[tgt_ids])
             pred_dicts[2]['scores'].append(scores2)
             pred_dicts[2]['batch_ids'].append(torch.full_like(tgt_ids, i, dtype=torch.int64))
 
@@ -379,8 +408,7 @@ class DOD(nn.Module):
 
         return pred_dicts
 
-    def forward(self, feat_maps, tgt_dict=None, images=None, stand_alone=True, ext_dict=None, visualize=False,
-                **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, stand_alone=True, ext_dict=None, visualize=False, **kwargs):
         """
         Forward method of the DOD module.
 
@@ -392,17 +420,16 @@ class DOD(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
-            images (Images): Images structure containing the batched images (default=None).
             stand_alone (bool): Boolean indicating whether the DOD module operates as stand-alone (default=True).
 
             ext_dict (Dict): Optional dictionary required when in 'ext_dynamic' target mode containing following keys:
-                - logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}];
-                - obj_probs (FloatTensor): tensor containing object probabilities of shape [batch_size, num_feats];
-                - pos_feat_ids (List): list [batch_size] with indices of positive features of shape [num_pos_feats];
+                - logits (FloatTensor): tensor containing DOD logits of shape [batch_size, num_anchors, {1, 2}];
+                - obj_probs (FloatTensor): tensor containing object probabilities of shape [batch_size, num_anchors];
+                - pos_anchor_ids (List): list [batch_size] with indices of positive anchors of shape [num_pos_anchors];
                 - tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets];
-                - pos_masks (List): list [batch_size] of positive target masks of shape [num_feats, num_targets];
-                - neg_masks (List): list [batch_size] of negative target masks of shape [num_feats, num_targets];
-                - tgt_sorted_ids (List): list [batch_size] of sorted feature indices of shape [num_feats, num_targets].
+                - pos_masks (List): list [batch_size] of positive target masks of shape [num_anchors, num_targets];
+                - neg_masks (List): list [batch_size] of negative target masks of shape [num_anchors, num_targets];
+                - tgt_sorted_ids (List): list [batch_size] of sorted anchor indices [num_anchors, num_targets].
 
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this head module.
@@ -410,7 +437,8 @@ class DOD(nn.Module):
         Returns:
             * If tgt_dict is None:
                 * If DOD module is not stand-alone:
-                    sel_ids (List): List [batch_size] with indices of selected features of shape [num_sel_feats].
+                    sel_ids (List): List [batch_size] with indices of selected anchors of shape [num_sel_anchors].
+                    anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
                 * If DOD module is stand-alone:
@@ -419,12 +447,13 @@ class DOD(nn.Module):
 
             * If tgt_dict is not None:
                 * If ext_dict is None and in 'ext_dynamic' target mode:
-                    logits (FloatTensor): Tensor containing DOD logits of shape [batch_size, num_feats, {1, 2}].
-                    obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_feats].
-                    sel_ids (List): List [batch_size] with indices of selected features of shape [num_sel_feats].
-                    pos_masks (List): List [batch_size] of positive target masks of shape [num_feats, num_targets].
-                    neg_masks (List): List [batch_size] of negative target masks of shape [num_feats, num_targets].
-                    tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_feats, num_targets].
+                    logits (FloatTensor): Tensor containing DOD logits of shape [batch_size, num_anchors, {1, 2}].
+                    obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_anchors].
+                    sel_ids (List): List [batch_size] with indices of selected anchors of shape [num_sel_anchors].
+                    anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
+                    pos_masks (List): List [batch_size] of positive target masks of shape [num_anchors, num_targets].
+                    neg_masks (List): List [batch_size] of negative target masks of shape [num_anchors, num_targets].
+                    tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_anchors, num_targets].
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
                 * If in remaining cases:
@@ -432,8 +461,9 @@ class DOD(nn.Module):
                         pred_dicts (List): List of size [3] with DOD prediction dictionaries.
 
                     * If DOD module is not stand-alone and not in 'ext_dynamic' target mode:
-                        sel_ids (List): List [batch_size] with indices of selected features of shape [num_sel_feats].
-                        pos_masks (List): List [batch_size] of positive target masks of shape [num_feats, num_targets].
+                        sel_ids (List): List [batch_size] with indices of selected anchors of shape [num_sel_anchors].
+                        anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
+                        pos_masks (List): List [batch_size] of positive target masks [num_anchors, num_targets].
 
                     loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -441,8 +471,7 @@ class DOD(nn.Module):
         Raises:
             NotImplementedError: Error when visualizations are requested.
             RuntimeError: Error when logits have size different than 1 or 2.
-            ValueError: Error when invalid feature selection mode is provided.
-            ValueError: Error when target dictionary is provided without corresponding Images structure.
+            ValueError: Error when invalid anchor selection mode is provided.
             RuntimeError: Error when stand-alone DOD module has 'ext_dynamic' target mode.
             RuntimeError: Error when external dictionary is provided while not in 'ext_dynamic' target mode.
             RuntimeError: Error when no target dictionary is provided along with the external dictionary.
@@ -462,8 +491,12 @@ class DOD(nn.Module):
         # Skip the following when external dictionary is provided
         if ext_dict is None:
 
+            # Get anchors
+            anchors = get_anchors(feat_maps, **self.anchor_dict)
+
             # Get logits
             logits = torch.cat([logit_map.flatten(2).permute(0, 2, 1) for logit_map in self.net(feat_maps)], dim=1)
+            logits = logits.view(batch_size, len(anchors), -1)
 
             # Get object probabilities
             with torch.no_grad():
@@ -480,7 +513,7 @@ class DOD(nn.Module):
             analysis_dict['pos_preds'] = torch.sum(pos_preds)[None] / batch_size
             analysis_dict['neg_preds'] = torch.sum(~pos_preds)[None] / batch_size
 
-            # Get indices of selected features
+            # Get indices of selected anchors
             if self.sel_mode == 'abs':
                 vals, ids = torch.sort(obj_probs, dim=1, descending=True)
                 sel_ids = [ids_i[vals_i >= self.sel_abs_thr] for vals_i, ids_i in zip(vals, ids)]
@@ -490,7 +523,7 @@ class DOD(nn.Module):
                 sel_ids = [*sel_ids]
 
             else:
-                error_msg = f"Invalid feature selection mode '{self.sel_mode}'."
+                error_msg = f"Invalid anchor selection mode '{self.sel_mode}'."
                 raise ValueError(error_msg)
 
             # Return when no target dictionary is provided
@@ -498,29 +531,20 @@ class DOD(nn.Module):
                 analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
 
                 if not stand_alone:
-                    return sel_ids, analysis_dict
+                    return sel_ids, anchors, analysis_dict
 
                 pred_dicts = [{}, {}, {}]
                 return pred_dicts, analysis_dict
 
-            # Get target boxes in desired format
-            if images is not None:
-                sizes = tgt_dict['sizes']
-                tgt_boxes = tgt_dict['boxes'].normalize(images, with_padding=True)
-                tgt_boxes = [tgt_boxes[i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
-
-            else:
-                error_msg = "A corresponding Images structure must be provided along with the target dictionary."
-                raise ValueError(error_msg)
-
             # Get static target masks
-            pos_masks, neg_masks, tgt_sorted_ids = self.get_static_tgt_masks(feat_maps, tgt_boxes, return_ids=True)
+            tgt_masks_output = self.get_static_tgt_masks(feat_maps, anchors, tgt_dict['boxes'], return_ids=True)
+            pos_masks, neg_masks, tgt_sorted_ids = tgt_masks_output
 
             # Return if in external dynamic target mode
             if self.tgt_mode == 'ext_dynamic':
                 if not stand_alone:
                     analysis_dict = {f'dod_{k}': v for k, v in analysis_dict.items()}
-                    return logits, obj_probs, sel_ids, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict
+                    return logits, obj_probs, sel_ids, anchors, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict
                 else:
                     error_msg = "Stand-alone DOD modules do not support the 'ext_dynamic' target mode."
                     raise RuntimeError(error_msg)
@@ -536,7 +560,7 @@ class DOD(nn.Module):
                 error_msg = "A target dictionary must be provided along with the external dictionary."
                 raise RuntimeError(error_msg)
 
-            required_keys = ('logits', 'obj_probs', 'pos_feat_ids', 'tgt_found', 'pos_masks', 'neg_masks')
+            required_keys = ('logits', 'obj_probs', 'pos_anchor_ids', 'tgt_found', 'pos_masks', 'neg_masks')
             required_keys = (*required_keys, 'tgt_sorted_ids')
 
             for required_key in required_keys:
@@ -546,7 +570,7 @@ class DOD(nn.Module):
 
             logits = ext_dict['logits']
             obj_probs = ext_dict['obj_probs']
-            pos_feat_ids = ext_dict['pos_feat_ids']
+            pos_anchor_ids = ext_dict['pos_anchor_ids']
             tgt_found = ext_dict['tgt_found']
             pos_masks = ext_dict['pos_masks']
             neg_masks = ext_dict['neg_masks']
@@ -558,7 +582,7 @@ class DOD(nn.Module):
             tgt_found = [pos_masks[i][sel_ids[i]].sum(dim=0) > 0 for i in range(batch_size)]
 
         elif self.tgt_mode == 'int_dynamic':
-            num_feats = obj_probs.shape[1]
+            num_anchors = obj_probs.shape[1]
             pos_tgts = torch.zeros_like(obj_probs, dtype=torch.bool)
             tgt_found = []
 
@@ -570,15 +594,15 @@ class DOD(nn.Module):
                 tgt_found.append(tgt_found_i)
 
                 pos_tgts[i] = pos_masks[i][:, ~tgt_found_i].sum(dim=1) > 0
-                pos_feat_ids_i = (num_feats - tgt_sums)[tgt_found_i]
-                pos_tgts[i, pos_feat_ids_i] = True
+                pos_anchor_ids_i = (num_anchors - tgt_sums)[tgt_found_i]
+                pos_tgts[i, pos_anchor_ids_i] = True
 
         elif self.tgt_mode == 'ext_dynamic':
             pos_tgts = torch.zeros_like(obj_probs, dtype=torch.bool)
 
             for i in range(batch_size):
                 pos_tgts[i] = pos_masks[i][:, ~tgt_found[i]].sum(dim=1) > 0
-                pos_tgts[i, pos_feat_ids[i]] = True
+                pos_tgts[i, pos_anchor_ids[i]] = True
 
         else:
             error_msg = f"Invalid target mode '{self.tgt_mode}'."
@@ -634,14 +658,10 @@ class DOD(nn.Module):
 
         # Get prediction dictionaries if desired and return
         if stand_alone and not self.training:
-            local_tgt_dict = {}
-            local_tgt_dict['labels'] = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(sizes[:-1], sizes[1:])]
-            local_tgt_dict['boxes'] = tgt_boxes
-
-            pred_dicts = self.make_predictions(obj_probs, tgt_sorted_ids, local_tgt_dict)
+            pred_dicts = self.make_predictions(obj_probs, tgt_sorted_ids, tgt_dict)
             return pred_dicts, loss_dict, analysis_dict
 
         if not stand_alone and self.tgt_mode != 'ext_dynamic':
-            return sel_ids, pos_masks, loss_dict, analysis_dict
+            return sel_ids, anchors, pos_masks, loss_dict, analysis_dict
 
         return loss_dict, analysis_dict

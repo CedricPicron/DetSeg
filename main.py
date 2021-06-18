@@ -184,11 +184,15 @@ def get_parser():
     parser.add_argument('--dod_rel_preds', action='store_true', help='make relative DOD predictions')
     parser.add_argument('--dod_prior_prob', default=0.01, type=float, help='prior object probability of DOD network')
 
-    parser.add_argument('--dod_sel_mode', default='rel', type=str, help='DOD feature selection mode')
-    parser.add_argument('--dod_sel_abs_thr', default=0.5, type=float, help='DOD absolute feature threshold')
-    parser.add_argument('--dod_sel_rel_thr', default=100, type=int, help='DOD relative feature threshold')
+    parser.add_argument('--dod_anchor_num_sizes', default=1, type=int, help='number of DOD anchor sizes')
+    parser.add_argument('--dod_anchor_scale_factor', default=4.0, type=float, help='DOD anchor scale factor')
+    parser.add_argument('--dod_anchor_asp_ratios', nargs='*', default=1.0, type=float, help='DOD anchor aspect ratios')
 
-    parser.add_argument('--dod_tgt_metric', default='iou', type=str, help='DOD feature-target matching metric')
+    parser.add_argument('--dod_sel_mode', default='rel', type=str, help='DOD anchor selection mode')
+    parser.add_argument('--dod_sel_abs_thr', default=0.5, type=float, help='DOD absolute anchor threshold')
+    parser.add_argument('--dod_sel_rel_thr', default=100, type=int, help='DOD relative anchor threshold')
+
+    parser.add_argument('--dod_tgt_metric', default='iou', type=str, help='DOD anchor-target matching metric')
     parser.add_argument('--dod_tgt_decision', default='rel', type=str, help='DOD target decision maker type')
     parser.add_argument('--dod_abs_pos_tgt', default=0.5, type=float, help='DOD absolute positive target threshold')
     parser.add_argument('--dod_abs_neg_tgt', default=0.3, type=float, help='DOD absolute negative target threshold')
@@ -202,7 +206,7 @@ def get_parser():
     parser.add_argument('--dod_pos_weight', default=1.0, type=float, help='loss term weight for positive DOD targets')
     parser.add_argument('--dod_neg_weight', default=1.0, type=float, help='loss term weight for negative DOD targets')
 
-    parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive features per DOD target')
+    parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive anchors per DOD target')
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
     # *** Retina head

@@ -110,10 +110,18 @@ def build_det_heads(args):
         elif det_head_type == 'dod':
             in_feat_size = args.core_feat_sizes[0]
             assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            map_ids = list(range(args.core_min_map_id, args.core_min_map_id+len(args.core_feat_sizes)))
+
+            if not isinstance(args.dod_anchor_asp_ratios, list):
+                args.dod_anchor_asp_ratios = [args.dod_anchor_asp_ratios]
 
             net_dict = {'feat_size': args.dod_feat_size, 'norm': args.dod_norm, 'kernel_size': args.dod_kernel_size}
             net_dict = {**net_dict, 'bottle_size': args.dod_bottle_size, 'hidden_layers': args.dod_hidden_layers}
             net_dict = {**net_dict, 'rel_preds': args.dod_rel_preds, 'prior_prob': args.dod_prior_prob}
+
+            anchor_dict = {'map_ids': map_ids, 'num_sizes': args.dod_anchor_num_sizes}
+            anchor_dict = {**anchor_dict, 'scale_factor': args.dod_anchor_scale_factor}
+            anchor_dict = {**anchor_dict, 'aspect_ratios': args.dod_anchor_asp_ratios}
 
             sel_dict = {'mode': args.dod_sel_mode, 'abs_thr': args.dod_sel_abs_thr, 'rel_thr': args.dod_sel_rel_thr}
 
@@ -128,7 +136,7 @@ def build_det_heads(args):
 
             pred_dict = {'num_pos': args.dod_pred_num_pos, 'max_dets': args.dod_pred_max_dets}
 
-            dod_head = DOD(in_feat_size, net_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata)
+            dod_head = DOD(in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata)
             det_heads[det_head_type] = dod_head
 
         elif det_head_type == 'ret':
