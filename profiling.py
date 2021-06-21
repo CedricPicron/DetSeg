@@ -426,6 +426,8 @@ elif profiling_args.model == 'sbd':
     main_args.num_classes = 80
     main_args.core_feat_sizes = [256, 256, 256, 256, 256]
     main_args.det_heads = ['sbd']
+    main_args.dod_anchor_num_sizes = 3
+    main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_match_mode = 'dod_based'
     main_args.sbd_loss_no_bg = False
@@ -449,9 +451,7 @@ elif profiling_args.model == 'sbd':
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
-
-    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"

@@ -19,6 +19,7 @@ class DOD(nn.Module):
 
     Attributes:
         net (nn.Sequential): DOD network computing the logits.
+        num_cell_anchors (int): Integer containing the number of cell anchors (i.e. the number of anchors per feature).
 
         anchor_dict (Dict): Dictionary with items used for anchor generation containing following keys:
             - map_ids (List): list [num_maps] containing the map ids (i.e. downsampling exponents) of each map;
@@ -137,6 +138,7 @@ class DOD(nn.Module):
         self.net = nn.Sequential(net_dict)
 
         # Set anchor-related attributes
+        self.num_cell_anchors = num_cell_anchors
         self.anchor_dict = anchor_dict
 
         # Set anchor selection attributes
