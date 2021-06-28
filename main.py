@@ -190,7 +190,7 @@ def get_parser():
 
     parser.add_argument('--dod_sel_mode', default='rel', type=str, help='DOD anchor selection mode')
     parser.add_argument('--dod_sel_abs_thr', default=0.5, type=float, help='DOD absolute anchor threshold')
-    parser.add_argument('--dod_sel_rel_thr', default=100, type=int, help='DOD relative anchor threshold')
+    parser.add_argument('--dod_sel_rel_thr', default=300, type=int, help='DOD relative anchor threshold')
 
     parser.add_argument('--dod_tgt_metric', default='iou', type=str, help='DOD anchor-target matching metric')
     parser.add_argument('--dod_tgt_decision', default='rel', type=str, help='DOD target decision maker type')
@@ -254,10 +254,11 @@ def get_parser():
     parser.add_argument('--sbd_hbox_act_fn', default='relu', type=str, help='activation function of HBOX network')
     parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
 
-    parser.add_argument('--sbd_match_mode', default='dod_based', type=str, help='SBD prediction-target matching mode')
+    parser.add_argument('--sbd_match_mode', default='dod_rel', type=str, help='SBD prediction-target matching mode')
+    parser.add_argument('--sbd_match_rel_thr', default=5, type=int, help='SBD relative matching threshold')
 
     parser.add_argument('--sbd_loss_no_bg', action='store_true', help='SBD classification without background label')
-    parser.add_argument('--sbd_loss_bg_weight', default=0.1, type=float, help='SBD classification background weight')
+    parser.add_argument('--sbd_loss_bg_weight', default=1.0, type=float, help='SBD classification background weight')
     parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')
     parser.add_argument('--sbd_loss_cls_alpha', default=0.25, type=float, help='SBD classification focal alpha value')
     parser.add_argument('--sbd_loss_cls_gamma', default=2.0, type=float, help='SBD classification focal gamma value')

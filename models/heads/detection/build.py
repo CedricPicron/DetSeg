@@ -190,7 +190,7 @@ def build_det_heads(args):
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
             box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
 
-            match_dict = {'mode': args.sbd_match_mode}
+            match_dict = {'mode': args.sbd_match_mode, 'rel_thr': args.sbd_match_rel_thr}
 
             loss_dict = {'with_bg': not args.sbd_loss_no_bg, 'bg_weight': args.sbd_loss_bg_weight}
             loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}

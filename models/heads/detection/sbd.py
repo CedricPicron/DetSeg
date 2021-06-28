@@ -27,6 +27,7 @@ class SBD(nn.Module):
         box (nn.Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
         match_mode (str): String containing the prediction-target matching mode.
+        match_rel_thr (int): Integer containing the relative prediction-target matching threshold.
 
         with_bg (bool): Boolean indicating whether background label is added to the classification labels.
         bg_weight (float): Factor weighting the classification losses with background targets.
@@ -85,7 +86,8 @@ class SBD(nn.Module):
                 - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections.
 
             match_dict (Dict): Matching dictionary containing following keys:
-                - mode (str): string containing the prediction-target matching mode.
+                - mode (str): string containing the prediction-target matching mode;
+                - rel_thr (int): integer containing the relative prediction-target matching threshold.
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - with_bg (bool): boolean indicating whether background label is added to the classification labels;
@@ -134,7 +136,8 @@ class SBD(nn.Module):
         self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
 
         # Set matching attributes
-        self.match_mode = match_dict['mode']
+        for k, v in match_dict.items():
+            setattr(self, f'match_{k}', v)
 
         # Set loss attributes
         for k, v in loss_dict.items():
@@ -195,7 +198,7 @@ class SBD(nn.Module):
 
         return net
 
-    def get_loss(self, cls_preds, box_preds, pred_anchors, tgt_dict, pred_feat_ids=None, pos_masks=None):
+    def get_loss(self, cls_preds, box_preds, pred_anchors, tgt_dict, pred_anchor_ids=None, tgt_sorted_ids=None):
         """
         Compute classification and bounding box losses from predictions.
 
@@ -208,8 +211,8 @@ class SBD(nn.Module):
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
 
-            pred_feat_ids (List): List [batch_size] with feature indices of shape [num_preds] (default=None).
-            pos_masks (List): List [batch_size] of positive DOD masks of shape [num_feats, num_targets] (default=None).
+            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [num_anchors, num_targets] (default=None).
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -241,24 +244,27 @@ class SBD(nn.Module):
         tgt_found = []
 
         # Perform prediction-target matching
-        if self.match_mode == 'dod_based':
-            for i in range(batch_size):
-                pred_pos_mask = pos_masks[i][pred_feat_ids[i]]
-                pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
-                pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
+        with torch.no_grad():
+            if self.match_mode == 'dod_rel':
+                for i in range(batch_size):
+                    pred_pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_thr]
+                    pred_pos_mask = pred_pos_masks.sum(dim=1)
 
-                num_tgts = pred_pos_mask.shape[1]
-                tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
-                tgt_found_i[tgt_ids_i] = True
+                    pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
+                    pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
 
-                pred_ids.append(pred_ids_i)
-                tgt_ids.append(tgt_ids_i)
-                pos_pred_ids.append(pos_pred_ids_i)
-                tgt_found.append(tgt_found_i)
+                    num_tgts = pred_pos_mask.shape[1]
+                    tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
+                    tgt_found_i[tgt_ids_i] = True
 
-        else:
-            error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
-            raise ValueError(error_msg)
+                    pred_ids.append(pred_ids_i)
+                    tgt_ids.append(tgt_ids_i)
+                    pos_pred_ids.append(pos_pred_ids_i)
+                    tgt_found.append(tgt_found_i)
+
+            else:
+                error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
+                raise ValueError(error_msg)
 
         # Initialize loss and analysis dicitonaries
         tensor_kwargs = {'dtype': cls_preds[0].dtype, 'device': cls_preds[0].device}
@@ -487,7 +493,7 @@ class SBD(nn.Module):
         elif self.dod.tgt_mode == 'ext_dynamic':
             logits, obj_probs, sel_ids, anchors, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict = dod_output
         else:
-            sel_ids, anchors, pos_masks, dod_loss_dict, analysis_dict = dod_output
+            sel_ids, anchors, tgt_sorted_ids, dod_loss_dict, analysis_dict = dod_output
 
         # Get selected features
         feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
@@ -522,10 +528,14 @@ class SBD(nn.Module):
             local_tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes}
 
             # Get initial classification and bounding box losses with corresponding analyses
-            loss_kwargs = {'pred_feat_ids': sel_ids, 'pos_masks': pos_masks} if self.match_mode == 'dod_based' else {}
-            loss_output = self.get_loss(cls_preds, box_preds, obj_anchors, local_tgt_dict, **loss_kwargs)
+            loss_kwargs = {}
 
-            loss_dict, local_analysis_dict, pred_feat_ids, tgt_found = loss_output
+            if self.match_mode == 'dod_rel':
+                loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids}
+
+            loss_output = self.get_loss(cls_preds, box_preds, obj_anchors, local_tgt_dict, **loss_kwargs)
+            loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+
             loss_dict = {f'{k}_0': v for k, v in loss_dict.items()}
             analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
 
@@ -533,8 +543,8 @@ class SBD(nn.Module):
             if self.dod.tgt_mode == 'ext_dynamic':
 
                 # Get external dictionary
-                pos_feat_ids = [sel_ids[i][pred_feat_ids[i]] for i in range(batch_size)]
-                ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_feat_ids': pos_feat_ids}
+                pos_anchor_ids = [sel_ids[i][pos_pred_ids[i]] for i in range(batch_size)]
+                ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_anchor_ids': pos_anchor_ids}
                 ext_dict = {**ext_dict, 'tgt_found': tgt_found, 'pos_masks': pos_masks, 'neg_masks': neg_masks}
                 ext_dict = {**ext_dict, 'tgt_sorted_ids': tgt_sorted_ids}
 

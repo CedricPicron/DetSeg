@@ -465,7 +465,7 @@ class DOD(nn.Module):
                     * If DOD module is not stand-alone and not in 'ext_dynamic' target mode:
                         sel_ids (List): List [batch_size] with indices of selected anchors of shape [num_sel_anchors].
                         anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
-                        pos_masks (List): List [batch_size] of positive target masks [num_anchors, num_targets].
+                        tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_anchors, num_targets].
 
                     loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -664,6 +664,6 @@ class DOD(nn.Module):
             return pred_dicts, loss_dict, analysis_dict
 
         if not stand_alone and self.tgt_mode != 'ext_dynamic':
-            return sel_ids, anchors, pos_masks, loss_dict, analysis_dict
+            return sel_ids, anchors, tgt_sorted_ids, loss_dict, analysis_dict
 
         return loss_dict, analysis_dict
