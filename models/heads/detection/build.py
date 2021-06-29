@@ -175,33 +175,43 @@ def build_det_heads(args):
             args_copy.det_heads = ['dod']
             dod = build_det_heads(args_copy)['dod']
 
+            state_dict = {'size': args.sbd_state_size, 'type': args.sbd_state_type}
+
             osi_dict = {'type': args.sbd_osi_type, 'layers': args.sbd_osi_layers, 'in_size': in_feat_size}
-            osi_dict = {**osi_dict, 'hidden_size': args.sbd_osi_hidden_size, 'out_size': args.sbd_osi_out_size}
+            osi_dict = {**osi_dict, 'hidden_size': args.sbd_osi_hidden_size, 'out_size': args.sbd_state_size}
             osi_dict = {**osi_dict, 'norm': args.sbd_osi_norm, 'act_fn': args.sbd_osi_act_fn}
             osi_dict = {**osi_dict, 'skip': args.sbd_osi_skip}
 
-            cls_dict = {'type': args.sbd_hcls_type, 'layers': args.sbd_hcls_layers, 'in_size': args.sbd_osi_out_size}
+            ae_dict = {'type': args.sbd_hae_type, 'layers': args.sbd_hae_layers, 'in_size': args.sbd_state_size}
+            ae_dict = {**ae_dict, 'hidden_size': args.sbd_hae_hidden_size, 'out_size': args.sbd_state_size}
+            ae_dict = {**ae_dict, 'norm': args.sbd_hae_norm, 'act_fn': args.sbd_hae_act_fn}
+            ae_dict = {**ae_dict, 'skip': not args.sbd_hae_no_skip}
+
+            cls_dict = {'type': args.sbd_hcls_type, 'layers': args.sbd_hcls_layers, 'in_size': args.sbd_state_size}
             cls_dict = {**cls_dict, 'hidden_size': args.sbd_hcls_hidden_size, 'out_size': args.sbd_hcls_out_size}
             cls_dict = {**cls_dict, 'norm': args.sbd_hcls_norm, 'act_fn': args.sbd_hcls_act_fn}
             cls_dict = {**cls_dict, 'skip': args.sbd_hcls_skip, 'num_classes': args.num_classes}
 
-            box_dict = {'type': args.sbd_hbox_type, 'layers': args.sbd_hbox_layers, 'in_size': args.sbd_osi_out_size}
+            box_dict = {'type': args.sbd_hbox_type, 'layers': args.sbd_hbox_layers, 'in_size': args.sbd_state_size}
             box_dict = {**box_dict, 'hidden_size': args.sbd_hbox_hidden_size, 'out_size': args.sbd_hbox_out_size}
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
             box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
 
             match_dict = {'mode': args.sbd_match_mode, 'rel_thr': args.sbd_match_rel_thr}
 
-            loss_dict = {'with_bg': not args.sbd_loss_no_bg, 'bg_weight': args.sbd_loss_bg_weight}
-            loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}
-            loss_dict = {**loss_dict, 'cls_gamma': args.sbd_loss_cls_gamma, 'cls_weight': args.sbd_loss_cls_weight}
-            loss_dict = {**loss_dict, 'box_types': args.sbd_loss_box_types, 'box_beta': args.sbd_loss_box_beta}
-            loss_dict = {**loss_dict, 'box_weights': args.sbd_loss_box_weights}
+            loss_dict = {'ae_weight': args.sbd_loss_ae_weight, 'with_bg': not args.sbd_loss_no_bg}
+            loss_dict = {**loss_dict, 'bg_weight': args.sbd_loss_bg_weight, 'cls_type': args.sbd_loss_cls_type}
+            loss_dict = {**loss_dict, 'cls_alpha': args.sbd_loss_cls_alpha, 'cls_gamma': args.sbd_loss_cls_gamma}
+            loss_dict = {**loss_dict, 'cls_weight': args.sbd_loss_cls_weight, 'box_types': args.sbd_loss_box_types}
+            loss_dict = {**loss_dict, 'box_beta': args.sbd_loss_box_beta, 'box_weights': args.sbd_loss_box_weights}
 
             pred_dict = {'dup_removal': args.sbd_pred_dup_removal, 'nms_candidates': args.sbd_pred_nms_candidates}
             pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}
 
-            sbd_head = SBD(dod, osi_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict, metadata)
+            sbd_args = (dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict)
+            sbd_args = (*sbd_args, metadata)
+
+            sbd_head = SBD(*sbd_args)
             det_heads[det_head_type] = sbd_head
 
         else:

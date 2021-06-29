@@ -20,15 +20,19 @@ class SBD(nn.Module):
 
     Attributes:
         dod (DOD): Dense object discovery (DOD) module selecting promising features corresponding to objects.
-        osi (nn.ModuleList): List of object state initialization (OSI) modules computing the initial object states.
-        obj_state_size (int): Integer containing the size of the object states.
 
+        state_size (int): Integer containing the size of object states.
+        state_type (str): String containing the type of object states.
+
+        osi (nn.ModuleList): List of object state initialization (OSI) modules computing the initial object states.
+        ae (nn.Sequential): Anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
         cls (nn.Sequential): Classification (CLS) module computing classification predictions from object states.
         box (nn.Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
         match_mode (str): String containing the prediction-target matching mode.
         match_rel_thr (int): Integer containing the relative prediction-target matching threshold.
 
+        ae_weight (float): Factor weighting the anchor encoding loss.
         with_bg (bool): Boolean indicating whether background label is added to the classification labels.
         bg_weight (float): Factor weighting the classification losses with background targets.
         cls_type (str): String containing the type of classification loss function.
@@ -47,12 +51,17 @@ class SBD(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, dod, osi_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict, metadata):
+    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict,
+                 metadata):
         """
         Initializes the SBD module.
 
         Args:
             dod (DOD): Dense object discovery (DOD) module selecting promising features corresponding to objects.
+
+            state_dict (Dict): State dictionary containing following keys:
+                - size (int): integer containing the size of object states;
+                - type (str): string containing the type of object states.
 
             osi_dict (Dict): Object state initialization (OSI) network dictionary containing following keys:
                 - type (str): string containing the type of OSI network;
@@ -63,6 +72,16 @@ class SBD(nn.Module):
                 - norm (str): string containing the type of normalization of the OSI network;
                 - act_fn (str): string containing the type of activation function of the OSI network;
                 - skip (bool): boolean indicating whether layers of the OSI network contain skip connections.
+
+            ae_dict (Dict): Anchor encoding (AE) network dictionary containing following keys:
+                - type (str): string containing the type of hidden AE (HAE) network;
+                - layers (int): integer containing the number of HAE network layers;
+                - in_size (int): input feature size of the HAE network;
+                - hidden_size (int): hidden feature size of the HAE network;
+                - out_size (int): output feature size of the HAE network;
+                - norm (str): string containing the type of normalization of the HAE network;
+                - act_fn (str): string containing the type of activation function of the HAE network;
+                - skip (bool): boolean indicating whether layers of the HAE network contain skip connections.
 
             cls_dict (Dict): Classification (CLS) network dictionary containing following keys:
                 - type (str): string containing the type of hidden CLS (HCLS) network;
@@ -90,6 +109,7 @@ class SBD(nn.Module):
                 - rel_thr (int): integer containing the relative prediction-target matching threshold.
 
             loss_dict (Dict): Loss dictionary containing following keys:
+                - ae_weight (float): factor weighting the anchor encoding loss;
                 - with_bg (bool): boolean indicating whether background label is added to the classification labels;
                 - bg_weight (float): factor weighting the classification losses with background targets;
                 - cls_type (str): string containing the type of classification loss function;
@@ -115,12 +135,18 @@ class SBD(nn.Module):
         # Set DOD attribute
         self.dod = dod
 
+        # Set state attributes
+        for k, v in state_dict.items():
+            setattr(self, f'state_{k}', v)
+
         # Initialization of object state initialization (OSI) networks
         osi = SBD.get_net(osi_dict)
         self.osi = nn.ModuleList([deepcopy(osi) for _ in range(dod.num_cell_anchors)])
 
-        # Set attribute with size of object states
-        self.obj_state_size = osi_dict['out_size']
+        # Initialization of anchor encoding (AE) network
+        iae = nn.Linear(4, ae_dict['in_size'])
+        hae = SBD.get_net(ae_dict)
+        self.ae = nn.Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
 
         # Initialization of classification prediction (CLS) network
         num_classes = cls_dict.pop('num_classes')
@@ -198,44 +224,24 @@ class SBD(nn.Module):
 
         return net
 
-    def get_loss(self, cls_preds, box_preds, pred_anchors, tgt_dict, pred_anchor_ids=None, tgt_sorted_ids=None):
+    @torch.no_grad()
+    def perform_matching(self, pred_anchor_ids=None, tgt_sorted_ids=None):
         """
-        Compute classification and bounding box losses from predictions.
+        Perform prediction-target matching.
 
         Args:
-            cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
-            box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
-            pred_anchors (List): List [batch_size] of Boxes structures with prediction anchors of size [num_preds].
-
-            tgt_dict (Dict): Target dictionary containing at least following keys:
-                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
-                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
-
             pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
             tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [num_anchors, num_targets] (default=None).
 
         Returns:
-            loss_dict (Dict): Loss dictionary containing following keys:
-                - cls_loss (FloatTensor): tensor containing the weighted classification loss of shape [1];
-                - box_loss (FloatTensor): tensor containing the weighted bounding box loss of shape [1].
-
-            analysis_dict (Dict): Analysis dictionary containing following keys:
-                - cls_acc (FloatTensor): tensor containing the classification accuracy (in percentage) of shape [1];
-                - box_acc (FloatTensor): tensor containing the bounding box accuracy (in percentage) of shape [1].
-
+            pred_ids (List): List [batch_size] with indices of predictions of shape [num_preds].
+            tgt_ids (List): List [batch_size] with indices of targets matching with predictions of shape [num_preds].
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
             tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
 
         Raises:
             ValueError: Error when invalid prediction-target matching mode is provided.
-            ValueError: Error when invalid classfication loss type is provided.
-            ValueError: Error when the number of bounding box loss types and corresponding loss weights is different.
-            ValueError: Error when invalid bounding box loss type is provided.
         """
-
-        # Get batch size and number of classification labels
-        batch_size = len(cls_preds)
-        num_cls_labels = cls_preds[0].shape[1]
 
         # Initialize empty lists for prediction-target matching
         pred_ids = []
@@ -244,41 +250,68 @@ class SBD(nn.Module):
         tgt_found = []
 
         # Perform prediction-target matching
-        with torch.no_grad():
-            if self.match_mode == 'dod_rel':
-                for i in range(batch_size):
-                    pred_pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_thr]
-                    pred_pos_mask = pred_pos_masks.sum(dim=1)
+        if self.match_mode == 'dod_rel':
+            for i in range(len(pred_anchor_ids)):
+                pred_pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_thr]
+                pred_pos_mask = pred_pos_masks.sum(dim=1)
 
-                    pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
-                    pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
+                pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
+                pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
 
-                    num_tgts = pred_pos_mask.shape[1]
-                    tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
-                    tgt_found_i[tgt_ids_i] = True
+                num_tgts = pred_pos_mask.shape[1]
+                tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
+                tgt_found_i[tgt_ids_i] = True
 
-                    pred_ids.append(pred_ids_i)
-                    tgt_ids.append(tgt_ids_i)
-                    pos_pred_ids.append(pos_pred_ids_i)
-                    tgt_found.append(tgt_found_i)
+                pred_ids.append(pred_ids_i)
+                tgt_ids.append(tgt_ids_i)
+                pos_pred_ids.append(pos_pred_ids_i)
+                tgt_found.append(tgt_found_i)
 
-            else:
-                error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
-                raise ValueError(error_msg)
+        else:
+            error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
+            raise ValueError(error_msg)
 
-        # Initialize loss and analysis dicitonaries
+        return pred_ids, tgt_ids, pos_pred_ids, tgt_found
+
+    def get_cls_loss(self, cls_preds, tgt_dict, pred_ids, tgt_ids, pos_pred_ids):
+        """
+        Compute classification loss from predictions.
+
+        Args:
+            cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - labels (List): list of size [batch_size] with class indices of shape [num_targets].
+
+            pred_ids (List): List [batch_size] with indices of predictions of shape [num_preds].
+            tgt_ids (List): List [batch_size] with indices of targets matching with predictions of shape [num_preds].
+            pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
+
+        Returns:
+            cls_loss (FloatTensor): Tensor containing the classification loss of shape [1].
+            cls_acc (FloatTensor): Tensor containing the classification accuracy (in percentage) of shape [1].
+
+        Raises:
+            ValueError: Error when invalid classfication loss type is provided.
+        """
+
+        # Get batch size and number of classification labels
+        batch_size = len(cls_preds)
+        num_cls_labels = cls_preds[0].shape[1]
+
+        # Initialize classification loss and accuracy
         tensor_kwargs = {'dtype': cls_preds[0].dtype, 'device': cls_preds[0].device}
-        loss_dict = {'cls_loss': torch.zeros(1, **tensor_kwargs), 'box_loss': torch.zeros(1, **tensor_kwargs)}
-        analysis_dict = {'cls_acc': torch.zeros(1, **tensor_kwargs), 'box_acc': torch.zeros(1, **tensor_kwargs)}
+        cls_loss = torch.zeros(1, **tensor_kwargs)
+        cls_acc = torch.zeros(1, **tensor_kwargs)
 
-        # Get weighted classification loss and classification accuracy
+        # Iterate over every batch entry
         for i in range(batch_size):
 
-            # Get classification logits and corresponding targets
-            cls_logits_i = cls_preds[i][pred_ids[i]]
+            # Get classification predictions and corresponding targets
+            cls_preds_i = cls_preds[i][pred_ids[i]]
             cls_targets_i = tgt_dict['labels'][i][tgt_ids[i]]
 
-            # Add background targets if requested
+            # Add predictions with background targets if requested
             if self.with_bg:
                 num_preds_i = len(cls_preds[i])
                 bg_pred_mask_i = torch.ones(num_preds_i, dtype=torch.bool, device=tensor_kwargs['device'])
@@ -288,20 +321,20 @@ class SBD(nn.Module):
                 bg_logits_i = cls_preds[i][bg_pred_ids_i]
                 bg_targets_i = torch.full_like(bg_pred_ids_i, num_cls_labels-1)
 
-                cls_logits_i = torch.cat([cls_logits_i, bg_logits_i], dim=0)
+                cls_preds_i = torch.cat([cls_preds_i, bg_logits_i], dim=0)
                 cls_targets_i = torch.cat([cls_targets_i, bg_targets_i], dim=0)
 
             # Handle case where there are no targets
             if len(cls_targets_i) == 0:
-                loss_dict['cls_loss'] += 0.0 * cls_preds[i].sum()
-                analysis_dict['cls_acc'] += 100 / batch_size
+                cls_loss += 0.0 * cls_preds[i].sum()
+                cls_acc += 100 / batch_size
                 continue
 
             # Get classification losses
             if self.cls_type == 'sigmoid_focal':
-                cls_targets_oh_i = F.one_hot(cls_targets_i, num_classes=num_cls_labels).to(cls_logits_i.dtype)
+                cls_targets_oh_i = F.one_hot(cls_targets_i, num_classes=num_cls_labels).to(cls_preds_i.dtype)
                 cls_kwargs = {'alpha': self.cls_alpha, 'gamma': self.cls_gamma, 'reduction': 'none'}
-                cls_losses = sigmoid_focal_loss(cls_logits_i, cls_targets_oh_i, **cls_kwargs).sum(dim=1)
+                cls_losses = sigmoid_focal_loss(cls_preds_i, cls_targets_oh_i, **cls_kwargs).sum(dim=1)
 
             else:
                 error_msg = f"Invalid classification loss type '{self.cls_type}'."
@@ -312,52 +345,111 @@ class SBD(nn.Module):
                 bg_tgt_mask = cls_targets_i == num_cls_labels-1
                 cls_losses[bg_tgt_mask] = self.bg_weight * cls_losses[bg_tgt_mask]
 
-            # Get weighted classification loss
-            cls_loss = self.cls_weight * cls_losses.sum()
-            loss_dict['cls_loss'] += cls_loss
+            # Get classification loss
+            cls_loss_i = self.cls_weight * cls_losses.sum()
+            cls_loss += cls_loss_i
 
             # Get classification accuracy
             with torch.no_grad():
-                cls_labels_i = torch.argmax(cls_logits_i, dim=1)
-                cls_acc = torch.eq(cls_labels_i, cls_targets_i).sum() / len(cls_labels_i)
-                analysis_dict['cls_acc'] += 100 * cls_acc / batch_size
+                cls_labels_i = torch.argmax(cls_preds_i, dim=1)
+                cls_acc_i = torch.eq(cls_labels_i, cls_targets_i).sum() / len(cls_labels_i)
+                cls_acc += 100 * cls_acc_i / batch_size
 
-        # Get weighted bounding box loss and bounding box accuracy
+        return cls_loss, cls_acc
+
+    def get_box_loss(self, box_preds, tgt_dict, pred_ids, tgt_ids, pred_anchors=None):
+        """
+        Computes bounding box losses from predictions.
+
+        Args:
+            box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
+
+            pred_ids (List): List [batch_size] with indices of predictions of shape [num_preds].
+            tgt_ids (List): List [batch_size] with indices of targets matching with predictions of shape [num_preds].
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
+
+        Returns:
+            box_loss (FloatTensor): Tensor containing the bounding box loss of shape [1].
+            box_acc (FloatTensor): Tensor containing the bounding box accuracy (in percentage) of shape [1].
+
+        Raises:
+            ValueError: Error when no prediction anchors are provided when using relative object states.
+            ValueError: Error when invalid object state type is provided.
+            ValueError: Error when the number of bounding box loss types and corresponding loss weights is different.
+            ValueError: Error when invalid bounding box loss type is provided.
+        """
+
+        # Get batch size
+        batch_size = len(box_preds)
+
+        # Initialize bounding box loss and accuracy
+        tensor_kwargs = {'dtype': box_preds[0].dtype, 'device': box_preds[0].device}
+        box_loss = torch.zeros(1, **tensor_kwargs)
+        box_acc = torch.zeros(1, **tensor_kwargs)
+
+        # Iteratre over every batch entry
         for i in range(batch_size):
 
-            # Get box logits with corresponding anchors and target boxes
-            box_logits_i = box_preds[i][pred_ids[i]]
-            pred_anchors_i = pred_anchors[i][pred_ids[i]]
+            # Get box predictions and corresponding targets
+            box_preds_i = box_preds[i][pred_ids[i]]
             tgt_boxes_i = tgt_dict['boxes'][i][tgt_ids[i]]
 
             # Handle case where there are no targets
             if len(tgt_boxes_i) == 0:
-                loss_dict['box_loss'] += 0.0 * box_preds[i].sum()
-                analysis_dict['box_acc'] += 100 / batch_size
+                box_loss += 0.0 * box_preds[i].sum()
+                box_acc += 100 / batch_size
                 continue
 
-            # Get bounding box targets and prediction boxes
-            box_targets_i = get_box_deltas(pred_anchors_i, tgt_boxes_i)
-            pred_boxes_i = apply_box_deltas(box_logits_i, pred_anchors_i)
+            # Prepare predictions and targets
+            if self.state_type == 'abs':
+                box_targets_i = tgt_boxes_i.to_format('cxcywh').boxes
+                pred_boxes_i = Boxes(box_preds_i, format='cxcywh', normalized='img_with_padding')
 
+                well_defined = pred_boxes_i.well_defined()
+                pred_boxes_i = pred_boxes_i[well_defined]
+                tgt_boxes_i = tgt_boxes_i[well_defined]
+
+            elif self.state_type == 'rel':
+                if pred_anchors is not None:
+                    pred_anchors_i = pred_anchors[i][pred_ids[i]]
+                    box_targets_i = get_box_deltas(pred_anchors_i, tgt_boxes_i)
+                    pred_boxes_i = apply_box_deltas(box_preds_i, pred_anchors_i)
+
+                else:
+                    error_msg = "A list with prediction anchors must be provided when using relative object states."
+                    raise ValueError(error_msg)
+
+            else:
+                error_msg = f"Invalid object state type '{self.state_type}'."
+                raise ValueError(error_msg)
+
+            # Get bounding box loss
             if len(self.box_types) != len(self.box_weights):
                 error_msg = "The number of bounding box loss types and corresponding loss weights must be equal."
                 raise ValueError(error_msg)
 
-            # Get weighted bounding box loss
             for box_type, box_weight in zip(self.box_types, self.box_weights):
                 if box_type == 'smooth_l1':
                     box_kwargs = {'beta': self.box_beta, 'reduction': 'sum'}
-                    box_loss = smooth_l1_loss(box_logits_i, box_targets_i, **box_kwargs)
-                    loss_dict['box_loss'] += box_weight * box_loss
+                    box_loss_i = smooth_l1_loss(box_preds_i, box_targets_i, **box_kwargs)
+                    box_loss += box_weight * box_loss_i
 
                 elif box_type == 'iou':
-                    box_loss = len(pred_boxes_i) - box_iou(pred_boxes_i, tgt_boxes_i).diag().sum()
-                    loss_dict['box_loss'] += box_weight * box_loss
+                    if len(pred_boxes_i) > 0:
+                        box_loss_i = len(pred_boxes_i) - box_iou(pred_boxes_i, tgt_boxes_i).diag().sum()
+                        box_loss += box_weight * box_loss_i
+                    else:
+                        box_loss += 0.0 * box_preds[i].sum()
 
                 elif box_type == 'giou':
-                    box_loss = len(pred_boxes_i) - box_giou(pred_boxes_i, tgt_boxes_i).diag().sum()
-                    loss_dict['box_loss'] += box_weight * box_loss
+                    if len(pred_boxes_i) > 0:
+                        box_loss_i = len(pred_boxes_i) - box_giou(pred_boxes_i, tgt_boxes_i).diag().sum()
+                        box_loss += box_weight * box_loss_i
+                    else:
+                        box_loss += 0.0 * box_preds[i].sum()
 
                 else:
                     error_msg = f"Invalid bounding box loss type '{box_type}'."
@@ -365,20 +457,65 @@ class SBD(nn.Module):
 
             # Get bounding box accuracy
             with torch.no_grad():
-                box_acc = box_iou(pred_boxes_i, tgt_boxes_i).diag().mean()
-                analysis_dict['box_acc'] += 100 * box_acc / batch_size
+                if len(pred_boxes_i) > 0:
+                    box_acc_i = box_iou(pred_boxes_i, tgt_boxes_i).diag().mean()
+                    box_acc += 100 * box_acc_i / batch_size
+
+        return box_loss, box_acc
+
+    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchor_ids=None, tgt_sorted_ids=None, pred_anchors=None):
+        """
+        Compute classification and bounding box losses from predictions.
+
+        Args:
+            cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
+            box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
+                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
+
+            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [num_anchors, num_targets] (default=None).
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
+
+        Returns:
+            loss_dict (Dict): Loss dictionary containing following keys:
+                - cls_loss (FloatTensor): tensor containing the classification loss of shape [1];
+                - box_loss (FloatTensor): tensor containing the bounding box loss of shape [1].
+
+            analysis_dict (Dict): Analysis dictionary containing following keys:
+                - cls_acc (FloatTensor): tensor containing the classification accuracy (in percentage) of shape [1];
+                - box_acc (FloatTensor): tensor containing the bounding box accuracy (in percentage) of shape [1].
+
+            pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
+            tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
+        """
+
+        # Perform prediction-target matching
+        pred_ids, tgt_ids, pos_pred_ids, tgt_found = self.perform_matching(pred_anchor_ids, tgt_sorted_ids)
+
+        # Get classification loss and accuracy
+        cls_loss, cls_acc = self.get_cls_loss(cls_preds, tgt_dict, pred_ids, tgt_ids, pos_pred_ids)
+
+        # Get bounding box loss and accuracy
+        box_loss, box_acc = self.get_box_loss(box_preds, tgt_dict, pred_ids, tgt_ids, pred_anchors)
+
+        # Get loss and analysis dictionaries
+        loss_dict = {'cls_loss': cls_loss, 'box_loss': box_loss}
+        analysis_dict = {'cls_acc': cls_acc, 'box_acc': box_acc}
 
         return loss_dict, analysis_dict, pos_pred_ids, tgt_found
 
     @torch.no_grad()
-    def make_predictions(self, cls_preds, box_preds, pred_anchors):
+    def make_predictions(self, cls_preds, box_preds, pred_anchors=None):
         """
         Makes classified bounding box predictions.
 
         Args:
             cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
             box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
-            pred_anchors (List): List [batch_size] of Boxes structures with prediction anchors of size [num_preds].
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
 
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
@@ -388,6 +525,8 @@ class SBD(nn.Module):
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
 
         Raises:
+            ValueError: Error when no prediction anchors are provided when using relative object states.
+            ValueError: Error when invalid object state type is provided.
             ValueError: Error when invalid duplicate removal mechanism is provided.
         """
 
@@ -406,7 +545,25 @@ class SBD(nn.Module):
             scores_i, labels_i = cls_preds_i.sigmoid().max(dim=1)
 
             # Get prediction boxes
-            boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
+            if self.state_type == 'abs':
+                boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
+
+            elif self.state_type == 'rel':
+                if pred_anchors is not None:
+                    boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
+                else:
+                    error_msg = "A list with prediction anchors must be provided when using relative object states."
+                    raise ValueError(error_msg)
+
+            else:
+                error_msg = f"Invalid object state type '{self.state_type}'."
+                raise ValueError(error_msg)
+
+            # Only keep entries with well-defined boxes
+            well_defined = boxes_i.well_defined()
+            boxes_i = boxes_i[well_defined]
+            scores_i = scores_i[well_defined]
+            labels_i = labels_i[well_defined]
 
             # Get top prediction indices sorted by score
             top_pred_ids = torch.argsort(scores_i, dim=0, descending=True)
@@ -444,7 +601,7 @@ class SBD(nn.Module):
 
         return pred_dict
 
-    def forward(self, feat_maps, tgt_dict=None, visualize=False, **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
         """
         Forward method of the SBD head.
 
@@ -456,6 +613,7 @@ class SBD(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            images (Images): Images structure containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this module, but passed to some sub-modules.
 
@@ -475,14 +633,16 @@ class SBD(nn.Module):
 
         Raises:
             NotImplementedError: Error when visualizations are requested.
+            ValueError: Error when no Images structure is provided.
         """
 
         # Check whether visualizations are requested
         if visualize:
             raise NotImplementedError
 
-        # Get batch size
+        # Get batch size and initialize empty loss dictionary
         batch_size = len(feat_maps[0])
+        loss_dict = {}
 
         # Apply DOD module and extract output
         dod_kwargs = {'tgt_dict': tgt_dict, 'stand_alone': False}
@@ -494,15 +654,16 @@ class SBD(nn.Module):
             logits, obj_probs, sel_ids, anchors, pos_masks, neg_masks, tgt_sorted_ids, analysis_dict = dod_output
         else:
             sel_ids, anchors, tgt_sorted_ids, dod_loss_dict, analysis_dict = dod_output
+            loss_dict.update(dod_loss_dict)
 
         # Get selected features
         feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
         feat_ids = [sel_ids_i // self.dod.num_cell_anchors for sel_ids_i in sel_ids]
         sel_feats = [feats[i, feat_ids[i], :] for i in range(batch_size)]
 
-        # Get initial object states and corresponding anchors
+        # Get initial relative object states and corresponding anchors
         tensor_kwargs = {'dtype': feats.dtype, 'device': feats.device}
-        obj_states = [torch.zeros(len(sel_ids[i]), self.obj_state_size, **tensor_kwargs) for i in range(batch_size)]
+        obj_states = [torch.zeros(len(sel_ids[i]), self.state_size, **tensor_kwargs) for i in range(batch_size)]
         osi_ids = [sel_ids_i % self.dod.num_cell_anchors for sel_ids_i in sel_ids]
 
         for i in range(batch_size):
@@ -514,29 +675,54 @@ class SBD(nn.Module):
         num_states = sum(len(obj_states_i) for obj_states_i in obj_states)
         analysis_dict['num_states_0'] = num_states / batch_size
 
+        # Get anchor encodings
+        if images is None:
+            error_msg = "An Images structure containing the batched images must be provided."
+            raise ValueError(error_msg)
+
+        norm_anchors = [obj_anchors[i].clone().normalize(images[i]).to_format('cxcywh') for i in range(batch_size)]
+        anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
+
+        # Get absolute object states if desired
+        if self.state_type == 'abs':
+            obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
+
         # Get initial predictions
-        cls_preds = [self.cls(obj_states_i) for obj_states_i in obj_states]
-        box_preds = [self.box(obj_states_i) for obj_states_i in obj_states]
+        cls_preds = [self.cls(obj_states[i]) for i in range(batch_size)]
+        box_preds = [self.box(obj_states[i]) for i in range(batch_size)]
 
         # Get initial loss
         if tgt_dict is not None:
 
-            # Get local target dictionary
+            # Get anchor encoding loss if desired
+            if self.state_type == 'abs':
+                ae_box_preds = [self.box(anchor_encs[i]) for i in range(batch_size)]
+                ae_tgt_dict = {'boxes': norm_anchors}
+
+                ae_pred_ids = [torch.arange(len(sel_ids[i]), device=feats.device) for i in range(batch_size)]
+                ae_tgt_ids = [ae_pred_ids[i].clone() for i in range(batch_size)]
+
+                ae_loss, ae_acc = self.get_box_loss(ae_box_preds, ae_tgt_dict, ae_pred_ids, ae_tgt_ids)
+                loss_dict['ae_loss'] = self.ae_weight * ae_loss
+                analysis_dict['ae_acc'] = ae_acc
+
+            # Get SBD target dictionary of desired format
+            tgt_boxes = tgt_dict['boxes']
             tgt_sizes = tgt_dict['sizes']
+
+            if self.state_type == 'abs':
+                tgt_boxes = tgt_boxes.normalize(images)
+
             tgt_labels = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
-            tgt_boxes = [tgt_dict['boxes'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
-            local_tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes}
+            tgt_boxes = [tgt_boxes[i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
+            sbd_tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes}
 
             # Get initial classification and bounding box losses with corresponding analyses
-            loss_kwargs = {}
+            loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids, 'pred_anchors': obj_anchors}
+            loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
+            local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
 
-            if self.match_mode == 'dod_rel':
-                loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids}
-
-            loss_output = self.get_loss(cls_preds, box_preds, obj_anchors, local_tgt_dict, **loss_kwargs)
-            loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
-
-            loss_dict = {f'{k}_0': v for k, v in loss_dict.items()}
+            loss_dict.update({f'{k}_0': v for k, v in local_loss_dict.items()})
             analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
 
             # Get DOD losses if in DOD external dynamic target mode
@@ -550,10 +736,8 @@ class SBD(nn.Module):
 
                 # Get DOD loss and analysis dictionary
                 dod_loss_dict, dod_analysis_dict = self.dod(feat_maps, ext_dict=ext_dict, **dod_kwargs, **kwargs)
+                loss_dict.update(dod_loss_dict)
                 analysis_dict.update(dod_analysis_dict)
-
-            # Add DOD losses to main loss dictionary
-            loss_dict.update(dod_loss_dict)
 
         # Get initial prediction dictionary
         if not self.training:

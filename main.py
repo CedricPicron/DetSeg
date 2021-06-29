@@ -230,13 +230,22 @@ def get_parser():
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
     # ** State-Based Detector (SBD) head
+    parser.add_argument('--sbd_state_size', default=256, type=int, help='size of SBD object states')
+    parser.add_argument('--sbd_state_type', default='rel', type=str, help='type of SBD object states')
+
     parser.add_argument('--sbd_osi_type', default='one_step_mlp', type=str, help='OSI network type')
     parser.add_argument('--sbd_osi_layers', default=1, type=int, help='number of layers of OSI network')
     parser.add_argument('--sbd_osi_hidden_size', default=1024, type=int, help='hidden feature size of OSI network')
-    parser.add_argument('--sbd_osi_out_size', default=256, type=int, help='size of object state')
     parser.add_argument('--sbd_osi_norm', default='layer', type=str, help='normalization type of OSI network')
     parser.add_argument('--sbd_osi_act_fn', default='relu', type=str, help='activation function of OSI network')
     parser.add_argument('--sbd_osi_skip', action='store_true', help='whether to use skip connection in OSI network')
+
+    parser.add_argument('--sbd_hae_type', default='one_step_mlp', type=str, help='HAE network type')
+    parser.add_argument('--sbd_hae_layers', default=1, type=int, help='number of layers of HAE network')
+    parser.add_argument('--sbd_hae_hidden_size', default=1024, type=int, help='hidden feature size of HAE network')
+    parser.add_argument('--sbd_hae_norm', default='layer', type=str, help='normalization type of HAE network')
+    parser.add_argument('--sbd_hae_act_fn', default='relu', type=str, help='activation function of HAE network')
+    parser.add_argument('--sbd_hae_no_skip', action='store_true', help='remove skip connection of HAE network')
 
     parser.add_argument('--sbd_hcls_type', default='one_step_mlp', type=str, help='HCLS network type')
     parser.add_argument('--sbd_hcls_layers', default=1, type=int, help='number of layers of HCLS network')
@@ -257,6 +266,7 @@ def get_parser():
     parser.add_argument('--sbd_match_mode', default='dod_rel', type=str, help='SBD prediction-target matching mode')
     parser.add_argument('--sbd_match_rel_thr', default=5, type=int, help='SBD relative matching threshold')
 
+    parser.add_argument('--sbd_loss_ae_weight', default=1.0, type=float, help='SBD anchor encoding loss weight')
     parser.add_argument('--sbd_loss_no_bg', action='store_true', help='SBD classification without background label')
     parser.add_argument('--sbd_loss_bg_weight', default=1.0, type=float, help='SBD classification background weight')
     parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')

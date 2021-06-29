@@ -42,7 +42,7 @@ class Images(object):
         # Set images, image ids and transforms attributes
         self.images = images
         self.image_ids = image_ids if isinstance(image_ids, list) else [image_ids] * len(self)
-        self.transforms = transforms if transforms is not None else [[]]
+        self.transforms = transforms if transforms is not None else [[] for _ in range(len(self))]
 
         # Set masks attribute
         img_width, img_height = self.size()
@@ -68,10 +68,10 @@ class Images(object):
             item (Images): New Images structure containing the selected images.
         """
 
-        images_tensor = self.images[key].view(1, -1) if isinstance(key, int) else self.images[key]
-        masks = self.masks[key].view(1, -1) if isinstance(key, int) else self.masks[key]
+        images_tensor = self.images[key][None, :] if isinstance(key, int) else self.images[key]
+        masks = self.masks[key][None, :] if isinstance(key, int) else self.masks[key]
 
-        image_ids = list(self.image_ids[key])
+        image_ids = [self.image_ids[key]] if isinstance(key, int) else self.image_ids[key]
         transforms = [self.transforms[key]] if isinstance(key, int) else self.transforms[key]
         item = Images(images_tensor, image_ids, masks, transforms)
 
