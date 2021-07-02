@@ -132,12 +132,13 @@ class OneStepMLP(nn.Module):
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats):
+    def forward(self, in_feats, **kwargs):
         """
         Forward method of the OneStepMLP module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [*, in_size].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
             out_feats (FloatTensor): Output features of shape [*, out_size].
@@ -206,12 +207,13 @@ class TwoStepMLP(nn.Module):
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats):
+    def forward(self, in_feats, **kwargs):
         """
         Forward method of the TwoStepMLP module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [*, in_size].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
             out_feats (FloatTensor): Output features of shape [*, out_size].

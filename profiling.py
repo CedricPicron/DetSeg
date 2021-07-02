@@ -434,6 +434,8 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_loss_no_bg = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
+    main_args.sbd_update_types = ['sa', 'ffn']
+    main_args.sbd_update_layers = 6
     main_args.sbd_pred_dup_removal = 'nms'
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)['sbd'].to('cuda')

@@ -171,6 +171,9 @@ def build_det_heads(args):
             if not isinstance(args.sbd_loss_box_weights, list):
                 args.sbd_loss_box_weights = [args.sbd_loss_box_weights]
 
+            if not isinstance(args.sbd_update_types, list):
+                args.sbd_update_types = [args.sbd_update_types]
+
             args_copy = deepcopy(args)
             args_copy.det_heads = ['dod']
             dod = build_det_heads(args_copy)['dod']
@@ -205,11 +208,22 @@ def build_det_heads(args):
             loss_dict = {**loss_dict, 'cls_weight': args.sbd_loss_cls_weight, 'box_types': args.sbd_loss_box_types}
             loss_dict = {**loss_dict, 'box_beta': args.sbd_loss_box_beta, 'box_weights': args.sbd_loss_box_weights}
 
+            update_dict = {'types': args.sbd_update_types, 'layers': args.sbd_update_layers}
+            update_dict = {**update_dict, 'iters': args.sbd_update_iters}
+
+            sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
+            sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}
+            sa_dict = {**sa_dict, 'act_fn': args.sbd_sa_act_fn, 'num_heads': args.sbd_sa_num_heads, 'skip': True}
+
+            ffn_dict = {'type': args.sbd_ffn_type, 'layers': args.sbd_ffn_layers, 'in_size': args.sbd_state_size}
+            ffn_dict = {**ffn_dict, 'hidden_size': args.sbd_ffn_hidden_size, 'out_size': args.sbd_state_size}
+            ffn_dict = {**ffn_dict, 'norm': args.sbd_ffn_norm, 'act_fn': args.sbd_ffn_act_fn, 'skip': True}
+
             pred_dict = {'dup_removal': args.sbd_pred_dup_removal, 'nms_candidates': args.sbd_pred_nms_candidates}
             pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}
 
-            sbd_args = (dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict)
-            sbd_args = (*sbd_args, metadata)
+            sbd_args = (dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, update_dict)
+            sbd_args = (*sbd_args, sa_dict, ffn_dict, pred_dict, metadata)
 
             sbd_head = SBD(*sbd_args)
             det_heads[det_head_type] = sbd_head

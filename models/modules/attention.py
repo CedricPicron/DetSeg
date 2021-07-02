@@ -210,9 +210,9 @@ class Attn2d(nn.Module):
         return out_feat_map
 
 
-class SelfAttn1d(nn.Module):
+class LegacySelfAttn1d(nn.Module):
     """
-    Class implementing the SelfAttn1d module.
+    Class implementing the LegacySelfAttn1d module.
 
     The module performs multi-head self-attention on sets of 1D features.
 
@@ -228,7 +228,7 @@ class SelfAttn1d(nn.Module):
 
     def __init__(self, feat_size, num_heads):
         """
-        Initializes the SelfAttn1d module.
+        Initializes the LegacySelfAttn1d module.
 
         Args:
             feat_size (int): Integer containing the feature size.
@@ -274,7 +274,7 @@ class SelfAttn1d(nn.Module):
 
     def forward(self, in_feat_list, pos_feat_list=None):
         """
-        Forward method of the SelfAttn1d module.
+        Forward method of the LegacySelfAttn1d module.
 
         Args:
             in_feat_list (List): List [num_feat_sets] containing input features of shape [num_features, feat_size].
@@ -324,3 +324,111 @@ class SelfAttn1d(nn.Module):
             out_feat_list.append(out_feats)
 
         return out_feat_list
+
+
+class SelfAttn1d(nn.Module):
+    """
+    Class implementing the SelfAttn1d module.
+
+    Attributes:
+        norm (nn.Module): Optional normalization module of the SelfAttn1d module.
+        act_fn (nn.Module): Optional module with the activation function of the SelfAttn1d module.
+        mha (nn.MultiheadAttention): Multi-head attention module of the SelfAttn1d module.
+        skip (bool): Boolean indicating whether skip connection is used or not.
+    """
+
+    def __init__(self, in_size, out_size=-1, norm='', act_fn='', num_heads=8, skip=True):
+        """
+        Initializes the SelfAttn1d module.
+
+        Args:
+            in_size (int): Size of input features.
+            out_size (int): Size of output features (default=-1).
+            norm (str): String containing the type of normalization (default='').
+            act_fn (str): String containing the type of activation function (default='').
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+
+        Raises:
+            ValueError: Error when unsupported type of normalization is provided.
+            ValueError: Error when unsupported type of activation function is provided.
+            ValueError: Error when input and output feature sizes are different when skip connection is used.
+            ValueError: Error when the output feature size is not specified when no skip connection is used.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Initialization of optional normalization module
+        if not norm:
+            pass
+        elif norm == 'layer':
+            self.norm = nn.LayerNorm(in_size)
+        else:
+            error_msg = f"The SelfAttn1d module does not support the '{norm}' normalization type."
+            raise ValueError(error_msg)
+
+        # Initialization of optional module with activation function
+        if not act_fn:
+            pass
+        elif act_fn == 'gelu':
+            self.act_fn = nn.GELU()
+        elif act_fn == 'relu':
+            self.act_fn = nn.ReLU(inplace=False) if not norm and skip else nn.ReLU(inplace=True)
+        else:
+            error_msg = f"The SelfAttn1d module does not support the '{act_fn}' activation function."
+
+        # Get and check output feature size
+        if skip and out_size == -1:
+            out_size = in_size
+
+        elif skip and in_size != out_size:
+            error_msg = f"Input ({in_size}) and output ({out_size}) sizes must match when skip connection is used."
+            raise ValueError(error_msg)
+
+        elif not skip and out_size == -1:
+            error_msg = "The output feature size must be specified when no skip connection is used."
+            raise ValueError(error_msg)
+
+        # Initialization of multi-head attention module
+        self.mha = nn.MultiheadAttention(in_size, num_heads)
+        self.mha.out_proj = nn.Linear(in_size, out_size)
+
+        # Set skip attribute
+        self.skip = skip
+
+    def forward(self, in_feats, feat_encs=None, **kwargs):
+        """
+        Forward method of the SelfAttn1d module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [*, num_feats, in_size].
+            feat_encs (FloatTensor): Feature encodings added to qk's of shape [*, num_feats, in_size] (default=None).
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [*, num_feats, out_size].
+        """
+
+        # Apply optional normalization and activation function modules
+        delta_feats = in_feats
+        delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
+        delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
+
+        # Apply multi-head attention module
+        orig_shape = delta_feats.shape
+        delta_feats = delta_feats.view(-1, *orig_shape[-2:]).transpose(0, 1)
+
+        if feat_encs is not None:
+            q = k = delta_feats + feat_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
+            v = delta_feats
+        else:
+            q = k = v = delta_feats
+
+        delta_feats = self.mha(q, k, v, need_weights=False)[0]
+        delta_feats = delta_feats.transpose(0, 1).view(*orig_shape[:-1], -1)
+
+        # Get output features
+        out_feats = in_feats + delta_feats if self.skip else delta_feats
+
+        return out_feats

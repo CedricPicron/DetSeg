@@ -277,6 +277,22 @@ def get_parser():
     parser.add_argument('--sbd_loss_box_beta', default=0.0, type=float, help='SBD bounding box smooth L1 beta value')
     parser.add_argument('--sbd_loss_box_weights', nargs='*', default=1.0, type=float, help='SBD box loss weights')
 
+    parser.add_argument('--sbd_update_types', nargs='*', default='', type=str, help='types of SBD update layers')
+    parser.add_argument('--sbd_update_layers', default=6, type=int, help='number of SBD update layers')
+    parser.add_argument('--sbd_update_iters', default=1, type=int, help='number of SBD update iterations')
+
+    parser.add_argument('--sbd_sa_type', default='self_attn_1d', type=str, help='SA network type')
+    parser.add_argument('--sbd_sa_layers', default=1, type=int, help='number of layers of SA network')
+    parser.add_argument('--sbd_sa_norm', default='layer', type=str, help='normalization type of SA network')
+    parser.add_argument('--sbd_sa_act_fn', default='', type=str, help='activation function of SA network')
+    parser.add_argument('--sbd_sa_num_heads', default=8, type=int, help='number of SA attention heads')
+
+    parser.add_argument('--sbd_ffn_type', default='two_step_mlp', type=str, help='FFN network type')
+    parser.add_argument('--sbd_ffn_layers', default=1, type=int, help='number of layers of FFN network')
+    parser.add_argument('--sbd_ffn_hidden_size', default=1024, type=int, help='hidden feature size of FFN network')
+    parser.add_argument('--sbd_ffn_norm', default='layer', type=str, help='normalization type of FFN network')
+    parser.add_argument('--sbd_ffn_act_fn', default='relu', type=str, help='activation function of FFN network')
+
     parser.add_argument('--sbd_pred_dup_removal', default='nms', type=str, help='SBD prediction duplicate removal')
     parser.add_argument('--sbd_pred_nms_candidates', default=1000, type=int, help='SBD NMS candidates')
     parser.add_argument('--sbd_pred_nms_thr', default=0.5, type=float, help='SBD NMS IoU threshold')

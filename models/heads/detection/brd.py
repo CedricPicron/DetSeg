@@ -13,7 +13,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.functional.position import sine_pos_encodings
-from models.modules.attention import SelfAttn1d
+from models.modules.attention import LegacySelfAttn1d
 from models.modules.container import Sequential
 from models.modules.ffn import FFN
 from models.modules.mlp import MLP
@@ -114,7 +114,7 @@ class BRD(nn.Module):
         self.policy = PolicyNet(feat_size, input_type='pyramid', **policy_dict)
 
         # Initialize decoder
-        self_attn = SelfAttn1d(feat_size, decoder_dict['num_heads'])
+        self_attn = LegacySelfAttn1d(feat_size, decoder_dict['num_heads'])
         ffn = FFN(feat_size, decoder_dict['hidden_size'])
         decoder_layer = Sequential(self_attn, ffn)
 

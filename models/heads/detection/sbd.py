@@ -10,6 +10,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.modules.attention import SelfAttn1d
+from models.modules.container import Sequential
 from models.modules.mlp import OneStepMLP, TwoStepMLP
 from structures.boxes import apply_box_deltas, Boxes, box_giou, box_iou, get_box_deltas
 
@@ -25,9 +27,9 @@ class SBD(nn.Module):
         state_type (str): String containing the type of object states.
 
         osi (nn.ModuleList): List of object state initialization (OSI) modules computing the initial object states.
-        ae (nn.Sequential): Anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
-        cls (nn.Sequential): Classification (CLS) module computing classification predictions from object states.
-        box (nn.Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
+        ae (Sequential): Anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
+        cls (Sequential): Classification (CLS) module computing classification predictions from object states.
+        box (Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
         match_mode (str): String containing the prediction-target matching mode.
         match_rel_thr (int): Integer containing the relative prediction-target matching threshold.
@@ -43,6 +45,9 @@ class SBD(nn.Module):
         box_beta (float): Beta value used by the bounding box smooth L1 loss.
         box_weights (List): List with factors weighting the different bounding box losses.
 
+        up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
+        up_iters (int): Integer containing the number of iterations over all update layers.
+
         dup_removal (str): String containing the duplicate removal mechanism used during prediction.
         nms_candidates (int): Integer containing the maximum number of candidates retained before NMS.
         nms_thr (float): IoU threshold used during NMS to remove duplicate detections.
@@ -51,8 +56,8 @@ class SBD(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict,
-                 metadata):
+    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, update_dict,
+                 sa_dict, ffn_dict, pred_dict, metadata):
         """
         Initializes the SBD module.
 
@@ -120,6 +125,31 @@ class SBD(nn.Module):
                 - box_beta (float): beta value used by the bounding box smooth L1 loss;
                 - box_weights (List): list with factors weighting the different bounding box losses.
 
+            update_dict (Dict): Update dictionary containing following keys:
+                - types (List): list with strings containing the type of modules present in each update layer;
+                - layers (int): integer containing the number of update layers;
+                - iters (int): integer containing the number of iterations over all update layers.
+
+            sa_dict: Self-attention (SA) network dictionary containing following keys:
+                - type (str): string containing the type of SA network;
+                - layers (int): integer containing the number of SA network layers;
+                - in_size (int): input feature size of the SA network;
+                - out_size (int): output feature size of the SA network;
+                - norm (str): string containing the type of normalization of the SA network;
+                - act_fn (str): string containing the type of activation function of the SA network;
+                - num_heads (int): integer containing the number of attention heads of the SA network;
+                - skip (bool): boolean indicating whether layers of the SA network contain skip connections.
+
+            ffn_dict (Dict): Feedforward network (FFN) dictionary containing following keys:
+                - type (str): string containing the type of FFN network;
+                - layers (int): integer containing the number of FFN network layers;
+                - in_size (int): input feature size of the FFN network;
+                - hidden_size (int): hidden feature size of the FFN network;
+                - out_size (int): output feature size of the FFN network;
+                - norm (str): string containing the type of normalization of the FFN network;
+                - act_fn (str): string containing the type of activation function of the FFN network;
+                - skip (bool): boolean indicating whether layers of the FFN network contain skip connections.
+
             pred_dict (Dict): Prediction dictionary containing following keys:
                 - dup_removal (str): string containing the duplicate removal mechanism used during prediction;
                 - nms_candidates (int): integer containing the maximum number of candidates retained before NMS;
@@ -127,6 +157,9 @@ class SBD(nn.Module):
                 - max_dets (int): integer containing the maximum number of detections during prediction.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+
+        Raises:
+            ValueError: Error when invalid module type is provided for update layer.
         """
 
         # Initialization of default nn.Module
@@ -146,7 +179,7 @@ class SBD(nn.Module):
         # Initialization of anchor encoding (AE) network
         iae = nn.Linear(4, ae_dict['in_size'])
         hae = SBD.get_net(ae_dict)
-        self.ae = nn.Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
+        self.ae = Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
 
         # Initialization of classification prediction (CLS) network
         num_classes = cls_dict.pop('num_classes')
@@ -154,12 +187,12 @@ class SBD(nn.Module):
 
         hcls = SBD.get_net(cls_dict)
         ocls = nn.Linear(cls_dict['out_size'], num_cls_labels)
-        self.cls = nn.Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
+        self.cls = Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
 
         # Initialization of bounding box prediction (BOX) network
         hbox = SBD.get_net(box_dict)
         obox = nn.Linear(cls_dict['out_size'], 4)
-        self.box = nn.Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
+        self.box = Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
 
         # Set matching attributes
         for k, v in match_dict.items():
@@ -168,6 +201,28 @@ class SBD(nn.Module):
         # Set loss attributes
         for k, v in loss_dict.items():
             setattr(self, k, v)
+
+        # Initialization of update layers and attributes
+        module_dict = OrderedDict()
+
+        for module_type in update_dict['types']:
+            if not module_type:
+                update_dict['layers'] = 0
+                break
+
+            elif module_type == 'sa':
+                module_dict['sa'] = SBD.get_net(sa_dict)
+
+            elif module_type == 'ffn':
+                module_dict['ffn'] = SBD.get_net(ffn_dict)
+
+            else:
+                error_msg = f"Invalid module type '{module_type}' for update layer."
+                raise ValueError(error_msg)
+
+        up_layer = Sequential(module_dict)
+        self.up_layers = nn.ModuleList([deepcopy(up_layer) for _ in range(update_dict['layers'])])
+        self.up_iters = update_dict['iters']
 
         # Set prediction attributes
         for k, v in pred_dict.items():
@@ -184,18 +239,19 @@ class SBD(nn.Module):
         Get network from network dictionary.
 
         Args:
-            net_dict (Dict): Network dictionary containing following keys:
+            net_dict (Dict): Network dictionary, possibly containing following keys:
                 - type (str): string containing the type of network;
                 - layers (int): integer containing the number of network layers;
                 - in_size (int): input feature size of the network;
                 - hidden_size (int): hidden feature size of the network;
                 - out_size (int): output feature size of the network;
                 - norm (str): string containing the type of normalization of the network;
-                - act_fn (str): string containing the type of activation function of the etwork;
+                - act_fn (str): string containing the type of activation function of the network;
+                - num_heads (int): integer containing the number of attention heads of the network;
                 - skip (bool): boolean indicating whether layers of the network contain skip connections.
 
         Returns:
-            net (nn.Sequential): Module implementing the network specified by the given network dictionary.
+            net (Sequential): Module implementing the network specified by the given network dictionary.
 
         Raises:
             ValueError: Error when unsupported type of network is provided.
@@ -207,6 +263,11 @@ class SBD(nn.Module):
             net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'skip')}
             net_layer = OneStepMLP(*net_args, **net_kwargs)
 
+        elif net_dict['type'] == 'self_attn_1d':
+            net_args = (net_dict['in_size'], net_dict['out_size'])
+            net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'num_heads', 'skip')}
+            net_layer = SelfAttn1d(*net_args, **net_kwargs)
+
         elif net_dict['type'] == 'two_step_mlp':
             net_args = (net_dict['in_size'], net_dict['hidden_size'], net_dict['out_size'])
             net_kwargs = {'norm1': net_dict['norm'], 'act_fn2': net_dict['act_fn'], 'skip': net_dict['skip']}
@@ -217,7 +278,7 @@ class SBD(nn.Module):
             raise ValueError(error_msg)
 
         if net_dict['layers'] > 0:
-            net = nn.Sequential(*[deepcopy(net_layer) for _ in range(net_dict['layers'])])
+            net = Sequential(*[deepcopy(net_layer) for _ in range(net_dict['layers'])])
         else:
             error_msg = f"The number of network layers must be positive, but got {net_dict['layers']}."
             raise ValueError(error_msg)
@@ -628,7 +689,7 @@ class SBD(nn.Module):
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
             * If SBD module not in training mode and tgt_dict is None (i.e. during testing):
-                pred_dicts (List): List of size [num_layers+1] with SBD prediction dictionaries.
+                pred_dicts (List): List of size [up_iters*num_up_layers + 1] with SBD prediction dictionaries.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
         Raises:
@@ -691,7 +752,7 @@ class SBD(nn.Module):
         cls_preds = [self.cls(obj_states[i]) for i in range(batch_size)]
         box_preds = [self.box(obj_states[i]) for i in range(batch_size)]
 
-        # Get initial loss
+        # Get initial loss if desired
         if tgt_dict is not None:
 
             # Get anchor encoding loss if desired
@@ -725,24 +786,55 @@ class SBD(nn.Module):
             loss_dict.update({f'{k}_0': v for k, v in local_loss_dict.items()})
             analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
 
-            # Get DOD losses if in DOD external dynamic target mode
-            if self.dod.tgt_mode == 'ext_dynamic':
-
-                # Get external dictionary
-                pos_anchor_ids = [sel_ids[i][pos_pred_ids[i]] for i in range(batch_size)]
-                ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_anchor_ids': pos_anchor_ids}
-                ext_dict = {**ext_dict, 'tgt_found': tgt_found, 'pos_masks': pos_masks, 'neg_masks': neg_masks}
-                ext_dict = {**ext_dict, 'tgt_sorted_ids': tgt_sorted_ids}
-
-                # Get DOD loss and analysis dictionary
-                dod_loss_dict, dod_analysis_dict = self.dod(feat_maps, ext_dict=ext_dict, **dod_kwargs, **kwargs)
-                loss_dict.update(dod_loss_dict)
-                analysis_dict.update(dod_analysis_dict)
-
-        # Get initial prediction dictionary
+        # Get initial prediction dictionary if desired
         if not self.training:
             pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
             pred_dicts = [pred_dict]
+
+        # Get keyword arguments for update layers
+        up_kwargs = [{} for _ in range(batch_size)]
+
+        if self.state_type == 'rel':
+            for i in range(batch_size):
+                up_kwargs[i]['feat_encs'] = anchor_encs[i]
+
+        # Update object states and get losses and prediction dictionaries if desired
+        for i in range(1, self.up_iters+1):
+            for j, up_layer in enumerate(self.up_layers, 1):
+
+                # Update object states
+                obj_states = [up_layer(obj_states[i], **up_kwargs[i]) for i in range(batch_size)]
+
+                # Get predictions
+                cls_preds = [self.cls(obj_states[i]) for i in range(batch_size)]
+                box_preds = [self.box(obj_states[i]) for i in range(batch_size)]
+
+                # Get loss if desired
+                if tgt_dict is not None:
+                    loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
+                    local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+
+                    loss_dict.update({f'{k}_{i}_{j}': v for k, v in local_loss_dict.items()})
+                    analysis_dict.update({f'{k}_{i}_{j}': v for k, v in local_analysis_dict.items()})
+
+                # Get prediction dictionary if desired
+                if not self.training:
+                    pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
+                    pred_dicts.append(pred_dict)
+
+        # Get DOD losses if in trainval and in DOD external dynamic target mode
+        if tgt_dict is not None and self.dod.tgt_mode == 'ext_dynamic':
+
+            # Get external dictionary
+            pos_anchor_ids = [sel_ids[i][pos_pred_ids[i]] for i in range(batch_size)]
+            ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_anchor_ids': pos_anchor_ids}
+            ext_dict = {**ext_dict, 'tgt_found': tgt_found, 'pos_masks': pos_masks, 'neg_masks': neg_masks}
+            ext_dict = {**ext_dict, 'tgt_sorted_ids': tgt_sorted_ids}
+
+            # Get DOD loss and analysis dictionary
+            dod_loss_dict, dod_analysis_dict = self.dod(feat_maps, ext_dict=ext_dict, **dod_kwargs, **kwargs)
+            loss_dict.update(dod_loss_dict)
+            analysis_dict.update(dod_analysis_dict)
 
         # Return desired dictionaries
         if self.training:
