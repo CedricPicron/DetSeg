@@ -428,13 +428,13 @@ elif profiling_args.model == 'sbd':
     main_args.det_heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
-    main_args.sbd_state_type = 'rel'
+    main_args.sbd_state_type = 'rel_static'
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_match_mode = 'dod_rel'
     main_args.sbd_loss_no_bg = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
-    main_args.sbd_update_types = ['sa', 'ffn']
+    main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
     main_args.sbd_pred_dup_removal = 'nms'
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')

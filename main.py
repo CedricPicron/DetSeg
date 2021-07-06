@@ -231,7 +231,7 @@ def get_parser():
 
     # ** State-Based Detector (SBD) head
     parser.add_argument('--sbd_state_size', default=256, type=int, help='size of SBD object states')
-    parser.add_argument('--sbd_state_type', default='rel', type=str, help='type of SBD object states')
+    parser.add_argument('--sbd_state_type', default='rel_static', type=str, help='type of SBD object states')
 
     parser.add_argument('--sbd_osi_type', default='one_step_mlp', type=str, help='OSI network type')
     parser.add_argument('--sbd_osi_layers', default=1, type=int, help='number of layers of OSI network')
@@ -280,6 +280,13 @@ def get_parser():
     parser.add_argument('--sbd_update_types', nargs='*', default='', type=str, help='types of SBD update layers')
     parser.add_argument('--sbd_update_layers', default=6, type=int, help='number of SBD update layers')
     parser.add_argument('--sbd_update_iters', default=1, type=int, help='number of SBD update iterations')
+
+    parser.add_argument('--sbd_ca_type', default='deformable_attn', type=str, help='CA network type')
+    parser.add_argument('--sbd_ca_layers', default=1, type=int, help='number of layers of CA network')
+    parser.add_argument('--sbd_ca_norm', default='layer', type=str, help='normalization type of CA network')
+    parser.add_argument('--sbd_ca_act_fn', default='', type=str, help='activation function of CA network')
+    parser.add_argument('--sbd_ca_num_heads', default=8, type=int, help='number of CA attention heads')
+    parser.add_argument('--sbd_ca_num_points', default=4, type=int, help='number of deformable CA points')
 
     parser.add_argument('--sbd_sa_type', default='self_attn_1d', type=str, help='SA network type')
     parser.add_argument('--sbd_sa_layers', default=1, type=int, help='number of layers of SA network')
@@ -373,8 +380,8 @@ def get_parser():
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
     # * Learning rates (BCH and BVN)
-    parser.add_argument('--lr_core', default=1e-4, type=float, help='BiVeNet core learning rate')
-    parser.add_argument('--lr_heads', default=1e-4, type=float, help='BiViNet heads learning rate')
+    parser.add_argument('--lr_core', default=1e-4, type=float, help='core learning rate')
+    parser.add_argument('--lr_heads', default=1e-4, type=float, help='heads learning rate')
 
     # * Learning rates (DETR)
     parser.add_argument('--lr_projector', default=1e-4, type=float, help='DETR projector learning rate')
@@ -382,6 +389,9 @@ def get_parser():
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='DETR decoder learning rate')
     parser.add_argument('--lr_class_head', default=1e-4, type=float, help='DETR classification head learning rate')
     parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
+
+    # * Learning rates (MSDA)
+    parser.add_argument('--lr_sampling_offsets', default=1e-5, type=float, help='MSDA sampling offsets learning rate')
 
     # Scheduler
     parser.add_argument('--epochs', default=36, type=int, help='total number of training epochs')
@@ -503,6 +513,7 @@ def main(args):
 
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
+    param_families = ['sampling_offsets', *param_families]
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():
@@ -511,6 +522,10 @@ def main(args):
                 if family_name in param_name:
                     param_dicts[family_name]['params'].append(parameter)
                     break
+
+    for family_name in param_families:
+        if len(param_dicts[family_name]['params']) == 0:
+            param_dicts.pop(family_name)
 
     optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_drops)

@@ -10,7 +10,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.modules.attention import SelfAttn1d
+from models.modules.attention import DeformableAttn, SelfAttn1d
 from models.modules.container import Sequential
 from models.modules.mlp import OneStepMLP, TwoStepMLP
 from structures.boxes import apply_box_deltas, Boxes, box_giou, box_iou, get_box_deltas
@@ -45,6 +45,7 @@ class SBD(nn.Module):
         box_beta (float): Beta value used by the bounding box smooth L1 loss.
         box_weights (List): List with factors weighting the different bounding box losses.
 
+        up_has_deformable (boolean): Boolean indicating whether update layers contain deformable attention layers.
         up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
         up_iters (int): Integer containing the number of iterations over all update layers.
 
@@ -57,7 +58,7 @@ class SBD(nn.Module):
     """
 
     def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, update_dict,
-                 sa_dict, ffn_dict, pred_dict, metadata):
+                 ca_dict, sa_dict, ffn_dict, pred_dict, metadata):
         """
         Initializes the SBD module.
 
@@ -129,6 +130,18 @@ class SBD(nn.Module):
                 - types (List): list with strings containing the type of modules present in each update layer;
                 - layers (int): integer containing the number of update layers;
                 - iters (int): integer containing the number of iterations over all update layers.
+
+            ca_dict: Cross-attention (CA) network dictionary containing following keys:
+                - type (str): string containing the type of CA network;
+                - layers (int): integer containing the number of CA network layers;
+                - in_size (int): input feature size of the CA network;
+                - out_size (int): output feature size of the CA network;
+                - norm (str): string containing the type of normalization of the CA network;
+                - act_fn (str): string containing the type of activation function of the CA network;
+                - num_levels (int): integer containing the number of map levels for the CA network to sample from;
+                - num_heads (int): integer containing the number of attention heads of the CA network;
+                - num_points (int): integer containing the number of deformable points of the CA network;
+                - skip (bool): boolean indicating whether layers of the CA network contain skip connections.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -204,11 +217,16 @@ class SBD(nn.Module):
 
         # Initialization of update layers and attributes
         module_dict = OrderedDict()
+        self.up_has_deformable = False
 
         for module_type in update_dict['types']:
             if not module_type:
                 update_dict['layers'] = 0
                 break
+
+            elif module_type == 'ca':
+                module_dict['ca'] = SBD.get_net(ca_dict)
+                self.up_has_deformable = ca_dict['type'] == 'deformable_attn'
 
             elif module_type == 'sa':
                 module_dict['sa'] = SBD.get_net(sa_dict)
@@ -247,7 +265,9 @@ class SBD(nn.Module):
                 - out_size (int): output feature size of the network;
                 - norm (str): string containing the type of normalization of the network;
                 - act_fn (str): string containing the type of activation function of the network;
+                - num_levels (int): integer containing the number of map levels for the network to sample from;
                 - num_heads (int): integer containing the number of attention heads of the network;
+                - num_points (int): integer containing the number of deformable points of the network;
                 - skip (bool): boolean indicating whether layers of the network contain skip connections.
 
         Returns:
@@ -258,7 +278,13 @@ class SBD(nn.Module):
             ValueError: Error when the number of layers in non-positive.
         """
 
-        if net_dict['type'] == 'one_step_mlp':
+        if net_dict['type'] == 'deformable_attn':
+            net_args = (net_dict['in_size'], net_dict['out_size'])
+            net_keys = ('norm', 'act_fn', 'num_levels', 'num_heads', 'num_points', 'skip')
+            net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
+            net_layer = DeformableAttn(*net_args, **net_kwargs)
+
+        elif net_dict['type'] == 'one_step_mlp':
             net_args = (net_dict['in_size'], net_dict['out_size'])
             net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'skip')}
             net_layer = OneStepMLP(*net_args, **net_kwargs)
@@ -473,7 +499,7 @@ class SBD(nn.Module):
                 pred_boxes_i = pred_boxes_i[well_defined]
                 tgt_boxes_i = tgt_boxes_i[well_defined]
 
-            elif self.state_type == 'rel':
+            elif self.state_type in ['rel_static', 'rel_dynamic']:
                 if pred_anchors is not None:
                     pred_anchors_i = pred_anchors[i][pred_ids[i]]
                     box_targets_i = get_box_deltas(pred_anchors_i, tgt_boxes_i)
@@ -609,7 +635,7 @@ class SBD(nn.Module):
             if self.state_type == 'abs':
                 boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
 
-            elif self.state_type == 'rel':
+            elif self.state_type in ['rel_static', 'rel_dynamic']:
                 if pred_anchors is not None:
                     boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
                 else:
@@ -722,7 +748,7 @@ class SBD(nn.Module):
         feat_ids = [sel_ids_i // self.dod.num_cell_anchors for sel_ids_i in sel_ids]
         sel_feats = [feats[i, feat_ids[i], :] for i in range(batch_size)]
 
-        # Get initial relative object states and corresponding anchors
+        # Get initial relative object states
         tensor_kwargs = {'dtype': feats.dtype, 'device': feats.device}
         obj_states = [torch.zeros(len(sel_ids[i]), self.state_size, **tensor_kwargs) for i in range(batch_size)]
         osi_ids = [sel_ids_i % self.dod.num_cell_anchors for sel_ids_i in sel_ids]
@@ -732,15 +758,15 @@ class SBD(nn.Module):
                 osi_mask = osi_ids[i] == j
                 obj_states[i][osi_mask] = self.osi[j](sel_feats[i][osi_mask])
 
-        obj_anchors = [anchors[sel_ids_i] for sel_ids_i in sel_ids]
         num_states = sum(len(obj_states_i) for obj_states_i in obj_states)
         analysis_dict['num_states_0'] = num_states / batch_size
 
-        # Get anchor encodings
+        # Get anchors and corresponding anchor encodings
         if images is None:
             error_msg = "An Images structure containing the batched images must be provided."
             raise ValueError(error_msg)
 
+        obj_anchors = [anchors[sel_ids_i] for sel_ids_i in sel_ids]
         norm_anchors = [obj_anchors[i].clone().normalize(images[i]).to_format('cxcywh') for i in range(batch_size)]
         anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
 
@@ -791,16 +817,48 @@ class SBD(nn.Module):
             pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
             pred_dicts = [pred_dict]
 
-        # Get keyword arguments for update layers
+        # Get static keyword arguments for update layers
         up_kwargs = [{} for _ in range(batch_size)]
 
-        if self.state_type == 'rel':
+        if self.state_type == 'rel_static':
             for i in range(batch_size):
-                up_kwargs[i]['feat_encs'] = anchor_encs[i]
+                up_kwargs[i]['in_feat_encs'] = anchor_encs[i]
+
+        if self.up_has_deformable:
+            sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=feats.device)
+            sample_map_start_ids = sample_map_shapes.prod(dim=1).cumsum(dim=0)[:-1]
+            sample_map_start_ids = torch.cat([sample_map_shapes.new_zeros((1,)), sample_map_start_ids], dim=0)
+
+            for i in range(batch_size):
+                if self.state_type == 'rel_static':
+                    up_kwargs[i]['sample_points'] = norm_anchors[i].boxes
+
+                up_kwargs[i]['sample_feats'] = feats[i]
+                up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
+                up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
 
         # Update object states and get losses and prediction dictionaries if desired
         for i in range(1, self.up_iters+1):
             for j, up_layer in enumerate(self.up_layers, 1):
+
+                # Update anchors if desired
+                if self.state_type == 'rel_dynamic':
+                    obj_anchors = [apply_box_deltas(box_preds[i], obj_anchors[i]) for i in range(batch_size)]
+                    norm_anchors = [obj_anchors[i].clone().normalize(images[i]) for i in range(batch_size)]
+                    norm_anchors = [norm_anchors[i].to_format('cxcywh') for i in range(batch_size)]
+                    anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
+
+                # Get dynamic keyword arguments for update layers
+                if self.state_type == 'abs' and self.up_has_deformable:
+                    for i in range(batch_size):
+                        up_kwargs[i]['sample_points'] = box_preds[i]
+
+                elif self.state_type == 'rel_dynamic':
+                    for i in range(batch_size):
+                        up_kwargs[i]['in_feat_encs'] = anchor_encs[i]
+
+                        if self.up_has_deformable:
+                            up_kwargs[i]['sample_points'] = norm_anchors[i].boxes
 
                 # Update object states
                 obj_states = [up_layer(obj_states[i], **up_kwargs[i]) for i in range(batch_size)]

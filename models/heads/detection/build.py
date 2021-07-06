@@ -164,6 +164,7 @@ def build_det_heads(args):
         elif det_head_type == 'sbd':
             in_feat_size = args.core_feat_sizes[0]
             assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            num_levels = len(args.core_feat_sizes)
 
             if not isinstance(args.sbd_loss_box_types, list):
                 args.sbd_loss_box_types = [args.sbd_loss_box_types]
@@ -211,6 +212,12 @@ def build_det_heads(args):
             update_dict = {'types': args.sbd_update_types, 'layers': args.sbd_update_layers}
             update_dict = {**update_dict, 'iters': args.sbd_update_iters}
 
+            ca_dict = {'type': args.sbd_ca_type, 'layers': args.sbd_ca_layers, 'in_size': args.sbd_state_size}
+            ca_dict = {**ca_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_ca_norm}
+            ca_dict = {**ca_dict, 'act_fn': args.sbd_ca_act_fn, 'num_levels': num_levels}
+            ca_dict = {**ca_dict, 'num_heads': args.sbd_ca_num_heads, 'num_points': args.sbd_ca_num_points}
+            ca_dict = {**ca_dict, 'skip': True}
+
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}
             sa_dict = {**sa_dict, 'act_fn': args.sbd_sa_act_fn, 'num_heads': args.sbd_sa_num_heads, 'skip': True}
@@ -223,7 +230,7 @@ def build_det_heads(args):
             pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}
 
             sbd_args = (dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, update_dict)
-            sbd_args = (*sbd_args, sa_dict, ffn_dict, pred_dict, metadata)
+            sbd_args = (*sbd_args, ca_dict, sa_dict, ffn_dict, pred_dict, metadata)
 
             sbd_head = SBD(*sbd_args)
             det_heads[det_head_type] = sbd_head

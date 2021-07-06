@@ -2,6 +2,7 @@
 Collection of attention-based modules.
 """
 
+from deformable_detr.models.ops.modules import MSDeformAttn as MSDA
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -210,6 +211,131 @@ class Attn2d(nn.Module):
         return out_feat_map
 
 
+class DeformableAttn(nn.Module):
+    """
+    Class implementing the DeformableAttn module.
+
+    Attributes:
+        norm (nn.Module): Optional normalization module of the DeformableAttn module.
+        act_fn (nn.Module): Optional module with the activation function of the DeformableAttn module.
+        msda (MSDA): Multi-scale deformable attention module of the DeformableAttn module.
+        skip (bool): Boolean indicating whether skip connection is used or not.
+    """
+
+    def __init__(self, in_size, out_size=-1, norm='', act_fn='', num_levels=5, num_heads=8, num_points=4, skip=True):
+        """
+        Initializes the DeformableAttn module.
+
+        Args:
+            in_size (int): Size of input features.
+            out_size (int): Size of output features (default=-1).
+            norm (str): String containing the type of normalization (default='').
+            act_fn (str): String containing the type of activation function (default='').
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            num_points (int): Integer containing the number of sampling points per head and per level (default=4).
+            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+
+        Raises:
+            ValueError: Error when unsupported type of normalization is provided.
+            ValueError: Error when unsupported type of activation function is provided.
+            ValueError: Error when input and output feature sizes are different when skip connection is used.
+            ValueError: Error when the output feature size is not specified when no skip connection is used.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Initialization of optional normalization module
+        if not norm:
+            pass
+        elif norm == 'layer':
+            self.norm = nn.LayerNorm(in_size)
+        else:
+            error_msg = f"The DeformableAttn module does not support the '{norm}' normalization type."
+            raise ValueError(error_msg)
+
+        # Initialization of optional module with activation function
+        if not act_fn:
+            pass
+        elif act_fn == 'gelu':
+            self.act_fn = nn.GELU()
+        elif act_fn == 'relu':
+            self.act_fn = nn.ReLU(inplace=False) if not norm and skip else nn.ReLU(inplace=True)
+        else:
+            error_msg = f"The DeformableAttn module does not support the '{act_fn}' activation function."
+
+        # Get and check output feature size
+        if skip and out_size == -1:
+            out_size = in_size
+
+        elif skip and in_size != out_size:
+            error_msg = f"Input ({in_size}) and output ({out_size}) sizes must match when skip connection is used."
+            raise ValueError(error_msg)
+
+        elif not skip and out_size == -1:
+            error_msg = "The output feature size must be specified when no skip connection is used."
+            raise ValueError(error_msg)
+
+        # Initialization of multi-scale deformable attention module
+        self.msda = MSDA(in_size, num_levels, num_heads, num_points)
+        self.msda.output_proj = nn.Linear(in_size, out_size)
+        nn.init.xavier_uniform_(self.msda.output_proj.weight)
+        nn.init.zeros_(self.msda.output_proj.bias)
+
+        # Set skip attribute
+        self.skip = skip
+
+    def forward(self, in_feats, sample_points, sample_feats, sample_map_shapes, sample_map_start_ids,
+                in_feat_encs=None, sample_padding_mask=None, **kwargs):
+        """
+        Forward method of the DeformableAttn module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [*, num_in_feats, in_size].
+            sample_points (FloatTensor): Normalized sample coordinates of shape [*, num_in_feats, {2, 4}].
+            sample_feats (FloatTensor): Features to be sampled of shape [*, num_sample_feats, in_size].
+            sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
+            sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            in_feat_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
+            sample_padding_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [*, num_in_feats, out_size].
+        """
+
+        # Apply optional normalization and activation function modules
+        delta_feats = in_feats
+        delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
+        delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
+
+        # Apply multi-scale deformable attention module
+        orig_shape = delta_feats.shape
+        delta_feats = delta_feats.view(-1, *orig_shape[-2:])
+
+        if in_feat_encs is not None:
+            delta_feats = delta_feats + in_feat_encs.view(-1, *orig_shape[-2:])
+
+        num_levels = self.msda.n_levels
+        reference_points = sample_points.view(-1, *sample_points.shape[-2:])
+        reference_points = reference_points[:, :, None, :].expand(-1, -1, num_levels, -1)
+
+        msda_kwargs = {'reference_points': reference_points}
+        msda_kwargs['input_flatten'] = sample_feats.view(-1, *sample_feats.shape[-2:])
+        msda_kwargs['input_spatial_shapes'] = sample_map_shapes
+        msda_kwargs['input_level_start_index'] = sample_map_start_ids
+        msda_kwargs['input_padding_mask'] = sample_padding_mask
+
+        delta_feats = self.msda(delta_feats, **msda_kwargs)
+        delta_feats = delta_feats.view(*orig_shape[:-1], -1)
+
+        # Get output features
+        out_feats = in_feats + delta_feats if self.skip else delta_feats
+
+        return out_feats
+
+
 class LegacySelfAttn1d(nn.Module):
     """
     Class implementing the LegacySelfAttn1d module.
@@ -393,17 +519,18 @@ class SelfAttn1d(nn.Module):
         # Initialization of multi-head attention module
         self.mha = nn.MultiheadAttention(in_size, num_heads)
         self.mha.out_proj = nn.Linear(in_size, out_size)
+        nn.init.zeros_(self.mha.out_proj.bias)
 
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats, feat_encs=None, **kwargs):
+    def forward(self, in_feats, in_feat_encs=None, **kwargs):
         """
         Forward method of the SelfAttn1d module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [*, num_feats, in_size].
-            feat_encs (FloatTensor): Feature encodings added to qk's of shape [*, num_feats, in_size] (default=None).
+            in_feat_encs (FloatTensor): Encodings added to qk's of shape [*, num_feats, in_size] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -419,8 +546,8 @@ class SelfAttn1d(nn.Module):
         orig_shape = delta_feats.shape
         delta_feats = delta_feats.view(-1, *orig_shape[-2:]).transpose(0, 1)
 
-        if feat_encs is not None:
-            q = k = delta_feats + feat_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
+        if in_feat_encs is not None:
+            q = k = delta_feats + in_feat_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
             v = delta_feats
         else:
             q = k = v = delta_feats
