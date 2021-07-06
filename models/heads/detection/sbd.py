@@ -35,6 +35,8 @@ class SBD(nn.Module):
         match_rel_thr (int): Integer containing the relative prediction-target matching threshold.
 
         ae_weight (float): Factor weighting the anchor encoding loss.
+        apply_freq (str): String containing the frequency at which losses are computed and applied.
+        freeze_inter (bool): Boolean indicating whether CLS and BOX modules are frozen for intermediate losses.
         with_bg (bool): Boolean indicating whether background label is added to the classification labels.
         bg_weight (float): Factor weighting the classification losses with background targets.
         cls_type (str): String containing the type of classification loss function.
@@ -45,20 +47,20 @@ class SBD(nn.Module):
         box_beta (float): Beta value used by the bounding box smooth L1 loss.
         box_weights (List): List with factors weighting the different bounding box losses.
 
-        up_has_deformable (boolean): Boolean indicating whether update layers contain deformable attention layers.
-        up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
-        up_iters (int): Integer containing the number of iterations over all update layers.
-
         dup_removal (str): String containing the duplicate removal mechanism used during prediction.
         nms_candidates (int): Integer containing the maximum number of candidates retained before NMS.
         nms_thr (float): IoU threshold used during NMS to remove duplicate detections.
         max_dets (int): Integer containing the maximum number of detections during prediction.
 
+        up_has_deformable (boolean): Boolean indicating whether update layers contain deformable attention layers.
+        up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
+        up_iters (int): Integer containing the number of iterations over all update layers.
+
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, update_dict,
-                 ca_dict, sa_dict, ffn_dict, pred_dict, metadata):
+    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict,
+                 update_dict, ca_dict, sa_dict, ffn_dict, metadata):
         """
         Initializes the SBD module.
 
@@ -116,6 +118,8 @@ class SBD(nn.Module):
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - ae_weight (float): factor weighting the anchor encoding loss;
+                - apply_freq (str): string containing the frequency at which losses are computed and applied;
+                - freeze_inter (bool): boolean indicating whether CLS and BOX are frozen for intermediate losses;
                 - with_bg (bool): boolean indicating whether background label is added to the classification labels;
                 - bg_weight (float): factor weighting the classification losses with background targets;
                 - cls_type (str): string containing the type of classification loss function;
@@ -125,6 +129,12 @@ class SBD(nn.Module):
                 - box_types (List): list with strings containing the types of bounding box loss functions;
                 - box_beta (float): beta value used by the bounding box smooth L1 loss;
                 - box_weights (List): list with factors weighting the different bounding box losses.
+
+            pred_dict (Dict): Prediction dictionary containing following keys:
+                - dup_removal (str): string containing the duplicate removal mechanism used during prediction;
+                - nms_candidates (int): integer containing the maximum number of candidates retained before NMS;
+                - nms_thr (float): IoU threshold used during NMS to remove duplicate detections;
+                - max_dets (int): integer containing the maximum number of detections during prediction.
 
             update_dict (Dict): Update dictionary containing following keys:
                 - types (List): list with strings containing the type of modules present in each update layer;
@@ -162,12 +172,6 @@ class SBD(nn.Module):
                 - norm (str): string containing the type of normalization of the FFN network;
                 - act_fn (str): string containing the type of activation function of the FFN network;
                 - skip (bool): boolean indicating whether layers of the FFN network contain skip connections.
-
-            pred_dict (Dict): Prediction dictionary containing following keys:
-                - dup_removal (str): string containing the duplicate removal mechanism used during prediction;
-                - nms_candidates (int): integer containing the maximum number of candidates retained before NMS;
-                - nms_thr (float): IoU threshold used during NMS to remove duplicate detections;
-                - max_dets (int): integer containing the maximum number of detections during prediction.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
@@ -215,6 +219,10 @@ class SBD(nn.Module):
         for k, v in loss_dict.items():
             setattr(self, k, v)
 
+        # Set prediction attributes
+        for k, v in pred_dict.items():
+            setattr(self, k, v)
+
         # Initialization of update layers and attributes
         module_dict = OrderedDict()
         self.up_has_deformable = False
@@ -241,10 +249,6 @@ class SBD(nn.Module):
         up_layer = Sequential(module_dict)
         self.up_layers = nn.ModuleList([deepcopy(up_layer) for _ in range(update_dict['layers'])])
         self.up_iters = update_dict['iters']
-
-        # Set prediction attributes
-        for k, v in pred_dict.items():
-            setattr(self, k, v)
 
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
@@ -721,15 +725,24 @@ class SBD(nn.Module):
         Raises:
             NotImplementedError: Error when visualizations are requested.
             ValueError: Error when no Images structure is provided.
+            ValueError: Error when invalid loss application frequency is provided.
+            ValueError: Error when the number of update iterations is smaller than one.
         """
 
         # Check whether visualizations are requested
         if visualize:
             raise NotImplementedError
 
-        # Get batch size and initialize empty loss dictionary
+        # Get batch size
         batch_size = len(feat_maps[0])
-        loss_dict = {}
+
+        # Initialize empty loss dictionary
+        if tgt_dict is not None:
+            loss_dict = {}
+
+        # Initialize empty list for prediction dictionaries
+        if not self.training:
+            pred_dicts = []
 
         # Apply DOD module and extract output
         dod_kwargs = {'tgt_dict': tgt_dict, 'stand_alone': False}
@@ -774,9 +787,25 @@ class SBD(nn.Module):
         if self.state_type == 'abs':
             obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
 
+        # Get boolean indicating whether initial losses/prediction dictionary should be computed
+        if self.apply_freq == 'last':
+            compute_loss_preds = len(self.up_layers) == 0
+        elif self.apply_freq in ['iters', 'layers']:
+            compute_loss_preds = True
+        else:
+            error_msg = f"Invalid type of loss application frequency '{self.apply_freq}'."
+            raise ValueError(error_msg)
+
         # Get initial predictions
-        cls_preds = [self.cls(obj_states[i]) for i in range(batch_size)]
-        box_preds = [self.box(obj_states[i]) for i in range(batch_size)]
+        if self.training and self.freeze_inter and len(self.up_layers) > 0:
+            cls_module = deepcopy(self.cls).requires_grad_(False)
+            box_module = deepcopy(self.box).requires_grad_(False)
+        else:
+            cls_module = self.cls
+            box_module = self.box
+
+        cls_preds = [cls_module(obj_states[i]) for i in range(batch_size)]
+        box_preds = [box_module(obj_states[i]) for i in range(batch_size)]
 
         # Get initial loss if desired
         if tgt_dict is not None:
@@ -804,18 +833,22 @@ class SBD(nn.Module):
             tgt_boxes = [tgt_boxes[i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
             sbd_tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes}
 
-            # Get initial classification and bounding box losses with corresponding analyses
-            loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids, 'pred_anchors': obj_anchors}
-            loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
-            local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+            # Get static loss keyword arguments
+            loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids}
 
-            loss_dict.update({f'{k}_0': v for k, v in local_loss_dict.items()})
-            analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
+            # Get initial classification and bounding box losses with corresponding analyses if desired
+            if compute_loss_preds:
+                loss_kwargs['pred_anchors'] = obj_anchors
+                loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
+                local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+
+                loss_dict.update({f'{k}_0': v for k, v in local_loss_dict.items()})
+                analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
 
         # Get initial prediction dictionary if desired
-        if not self.training:
+        if not self.training and compute_loss_preds:
             pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
-            pred_dicts = [pred_dict]
+            pred_dicts.append(pred_dict)
 
         # Get static keyword arguments for update layers
         up_kwargs = [{} for _ in range(batch_size)]
@@ -836,6 +869,11 @@ class SBD(nn.Module):
                 up_kwargs[i]['sample_feats'] = feats[i]
                 up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
+
+        # Check whether the number of update iteration is greater than zero
+        if self.up_iters < 1:
+            error_msg = f"The number of update iterations should be greater than zero (got {self.up_iters})."
+            raise ValueError(error_msg)
 
         # Update object states and get losses and prediction dictionaries if desired
         for i in range(1, self.up_iters+1):
@@ -863,12 +901,24 @@ class SBD(nn.Module):
                 # Update object states
                 obj_states = [up_layer(obj_states[i], **up_kwargs[i]) for i in range(batch_size)]
 
+                # Get boolean indicating whether losses/prediction dictionary should be computed
+                last_iter = i == self.up_iters
+                last_layer = j == len(self.up_layers)
+
+                compute_loss_preds = (last_iter and last_layer) or (last_layer and self.apply_freq != 'last')
+                compute_loss_preds = compute_loss_preds or (self.apply_freq == 'layers')
+
                 # Get predictions
-                cls_preds = [self.cls(obj_states[i]) for i in range(batch_size)]
-                box_preds = [self.box(obj_states[i]) for i in range(batch_size)]
+                if self.training and self.freeze_inter and last_iter and last_layer:
+                    cls_module = self.cls
+                    box_module = self.box
+
+                cls_preds = [cls_module(obj_states[i]) for i in range(batch_size)]
+                box_preds = [box_module(obj_states[i]) for i in range(batch_size)]
 
                 # Get loss if desired
-                if tgt_dict is not None:
+                if tgt_dict is not None and compute_loss_preds:
+                    loss_kwargs['pred_anchors'] = obj_anchors
                     loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
                     local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
 
@@ -876,7 +926,7 @@ class SBD(nn.Module):
                     analysis_dict.update({f'{k}_{i}_{j}': v for k, v in local_analysis_dict.items()})
 
                 # Get prediction dictionary if desired
-                if not self.training:
+                if not self.training and compute_loss_preds:
                     pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
                     pred_dicts.append(pred_dict)
 

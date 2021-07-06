@@ -267,6 +267,8 @@ def get_parser():
     parser.add_argument('--sbd_match_rel_thr', default=5, type=int, help='SBD relative matching threshold')
 
     parser.add_argument('--sbd_loss_ae_weight', default=1.0, type=float, help='SBD anchor encoding loss weight')
+    parser.add_argument('--sbd_loss_apply_freq', default='layers', type=str, help='frequency of SBD loss application')
+    parser.add_argument('--sbd_loss_freeze_inter', action='store_true', help='freeze intermediate SBD sub-heads')
     parser.add_argument('--sbd_loss_no_bg', action='store_true', help='SBD classification without background label')
     parser.add_argument('--sbd_loss_bg_weight', default=1.0, type=float, help='SBD classification background weight')
     parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')
@@ -276,6 +278,11 @@ def get_parser():
     parser.add_argument('--sbd_loss_box_types', nargs='*', default='smooth_l1', help='SBD bounding box loss types')
     parser.add_argument('--sbd_loss_box_beta', default=0.0, type=float, help='SBD bounding box smooth L1 beta value')
     parser.add_argument('--sbd_loss_box_weights', nargs='*', default=1.0, type=float, help='SBD box loss weights')
+
+    parser.add_argument('--sbd_pred_dup_removal', default='nms', type=str, help='SBD prediction duplicate removal')
+    parser.add_argument('--sbd_pred_nms_candidates', default=1000, type=int, help='SBD NMS candidates')
+    parser.add_argument('--sbd_pred_nms_thr', default=0.5, type=float, help='SBD NMS IoU threshold')
+    parser.add_argument('--sbd_pred_max_dets', default=100, type=int, help='maximum number of SBD detections')
 
     parser.add_argument('--sbd_update_types', nargs='*', default='', type=str, help='types of SBD update layers')
     parser.add_argument('--sbd_update_layers', default=6, type=int, help='number of SBD update layers')
@@ -299,11 +306,6 @@ def get_parser():
     parser.add_argument('--sbd_ffn_hidden_size', default=1024, type=int, help='hidden feature size of FFN network')
     parser.add_argument('--sbd_ffn_norm', default='layer', type=str, help='normalization type of FFN network')
     parser.add_argument('--sbd_ffn_act_fn', default='relu', type=str, help='activation function of FFN network')
-
-    parser.add_argument('--sbd_pred_dup_removal', default='nms', type=str, help='SBD prediction duplicate removal')
-    parser.add_argument('--sbd_pred_nms_candidates', default=1000, type=int, help='SBD NMS candidates')
-    parser.add_argument('--sbd_pred_nms_thr', default=0.5, type=float, help='SBD NMS IoU threshold')
-    parser.add_argument('--sbd_pred_max_dets', default=100, type=int, help='maximum number of SBD detections')
 
     # ** Segmentation heads
     parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
