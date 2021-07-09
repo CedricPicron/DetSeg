@@ -795,7 +795,7 @@ class SBD(nn.Module):
                 obj_states[i][osi_mask] = self.osi[j](sel_feats[i][osi_mask])
 
         num_states = sum(len(obj_states_i) for obj_states_i in obj_states)
-        analysis_dict['num_states_0'] = num_states / batch_size
+        analysis_dict['num_states_0'] = torch.tensor([num_states], device=feats.device) / batch_size
 
         # Get anchors and corresponding anchor encodings if needed
         obj_anchors = [anchors[sel_ids_i] for sel_ids_i in sel_ids]
