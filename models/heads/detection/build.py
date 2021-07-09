@@ -191,6 +191,11 @@ def build_det_heads(args):
             ae_dict = {**ae_dict, 'norm': args.sbd_hae_norm, 'act_fn': args.sbd_hae_act_fn}
             ae_dict = {**ae_dict, 'skip': not args.sbd_hae_no_skip}
 
+            se_dict = {'needed': args.sbd_se, 'type': args.sbd_hse_type, 'layers': args.sbd_hse_layers}
+            se_dict = {**se_dict, 'in_size': args.sbd_state_size, 'hidden_size': args.sbd_hse_hidden_size}
+            se_dict = {**se_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_hse_norm}
+            se_dict = {**se_dict, 'act_fn': args.sbd_hse_act_fn, 'skip': not args.sbd_hse_no_skip}
+
             cls_dict = {'type': args.sbd_hcls_type, 'layers': args.sbd_hcls_layers, 'in_size': args.sbd_state_size}
             cls_dict = {**cls_dict, 'hidden_size': args.sbd_hcls_hidden_size, 'out_size': args.sbd_hcls_out_size}
             cls_dict = {**cls_dict, 'norm': args.sbd_hcls_norm, 'act_fn': args.sbd_hcls_act_fn}
@@ -230,8 +235,8 @@ def build_det_heads(args):
             ffn_dict = {**ffn_dict, 'hidden_size': args.sbd_ffn_hidden_size, 'out_size': args.sbd_state_size}
             ffn_dict = {**ffn_dict, 'norm': args.sbd_ffn_norm, 'act_fn': args.sbd_ffn_act_fn, 'skip': True}
 
-            sbd_args = (dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict)
-            sbd_args = (*sbd_args, update_dict, ca_dict, sa_dict, ffn_dict, metadata)
+            sbd_args = (dod, state_dict, osi_dict, ae_dict, se_dict, cls_dict, box_dict, match_dict, loss_dict)
+            sbd_args = (*sbd_args, pred_dict, update_dict, ca_dict, sa_dict, ffn_dict, metadata)
 
             sbd_head = SBD(*sbd_args)
             det_heads[det_head_type] = sbd_head

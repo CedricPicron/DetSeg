@@ -430,6 +430,7 @@ elif profiling_args.model == 'sbd':
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
     main_args.sbd_state_type = 'rel_static'
     main_args.sbd_osi_type = 'one_step_mlp'
+    main_args.sbd_se = False
     main_args.sbd_match_mode = 'dod_rel'
     main_args.sbd_loss_apply_freq = 'layers'
     main_args.sbd_loss_freeze_inter = False

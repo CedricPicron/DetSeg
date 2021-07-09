@@ -247,6 +247,14 @@ def get_parser():
     parser.add_argument('--sbd_hae_act_fn', default='relu', type=str, help='activation function of HAE network')
     parser.add_argument('--sbd_hae_no_skip', action='store_true', help='remove skip connection of HAE network')
 
+    parser.add_argument('--sbd_se', action='store_true', help='compute separate scale encoding (SE)')
+    parser.add_argument('--sbd_hse_type', default='one_step_mlp', type=str, help='HSE network type')
+    parser.add_argument('--sbd_hse_layers', default=1, type=int, help='number of layers of HSE network')
+    parser.add_argument('--sbd_hse_hidden_size', default=1024, type=int, help='hidden feature size of HSE network')
+    parser.add_argument('--sbd_hse_norm', default='layer', type=str, help='normalization type of HSE network')
+    parser.add_argument('--sbd_hse_act_fn', default='relu', type=str, help='activation function of HSE network')
+    parser.add_argument('--sbd_hse_no_skip', action='store_true', help='remove skip connection of HSE network')
+
     parser.add_argument('--sbd_hcls_type', default='one_step_mlp', type=str, help='HCLS network type')
     parser.add_argument('--sbd_hcls_layers', default=1, type=int, help='number of layers of HCLS network')
     parser.add_argument('--sbd_hcls_hidden_size', default=1024, type=int, help='hidden feature size of HCLS network')

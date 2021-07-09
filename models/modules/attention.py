@@ -287,7 +287,7 @@ class DeformableAttn(nn.Module):
         self.skip = skip
 
     def forward(self, in_feats, sample_points, sample_feats, sample_map_shapes, sample_map_start_ids,
-                in_feat_encs=None, sample_padding_mask=None, **kwargs):
+                add_encs=None, mul_encs=None, sample_padding_mask=None, **kwargs):
         """
         Forward method of the DeformableAttn module.
 
@@ -297,7 +297,8 @@ class DeformableAttn(nn.Module):
             sample_feats (FloatTensor): Features to be sampled of shape [*, num_sample_feats, in_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
-            in_feat_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
+            add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
+            mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
             sample_padding_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
@@ -314,8 +315,11 @@ class DeformableAttn(nn.Module):
         orig_shape = delta_feats.shape
         delta_feats = delta_feats.view(-1, *orig_shape[-2:])
 
-        if in_feat_encs is not None:
-            delta_feats = delta_feats + in_feat_encs.view(-1, *orig_shape[-2:])
+        if mul_encs is not None:
+            delta_feats = delta_feats * mul_encs.view(-1, *orig_shape[-2:])
+
+        if add_encs is not None:
+            delta_feats = delta_feats + add_encs.view(-1, *orig_shape[-2:])
 
         num_levels = self.msda.n_levels
         reference_points = sample_points.view(-1, *sample_points.shape[-2:])
@@ -524,13 +528,14 @@ class SelfAttn1d(nn.Module):
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats, in_feat_encs=None, **kwargs):
+    def forward(self, in_feats, add_encs=None, mul_encs=None, **kwargs):
         """
         Forward method of the SelfAttn1d module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [*, num_feats, in_size].
-            in_feat_encs (FloatTensor): Encodings added to qk's of shape [*, num_feats, in_size] (default=None).
+            add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
+            mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -545,14 +550,16 @@ class SelfAttn1d(nn.Module):
         # Apply multi-head attention module
         orig_shape = delta_feats.shape
         delta_feats = delta_feats.view(-1, *orig_shape[-2:]).transpose(0, 1)
+        values = delta_feats
 
-        if in_feat_encs is not None:
-            q = k = delta_feats + in_feat_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
-            v = delta_feats
-        else:
-            q = k = v = delta_feats
+        if mul_encs is not None:
+            delta_feats = delta_feats * mul_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
 
-        delta_feats = self.mha(q, k, v, need_weights=False)[0]
+        if add_encs is not None:
+            delta_feats = delta_feats + add_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
+
+        queries = keys = delta_feats
+        delta_feats = self.mha(queries, keys, values, need_weights=False)[0]
         delta_feats = delta_feats.transpose(0, 1).view(*orig_shape[:-1], -1)
 
         # Get output features

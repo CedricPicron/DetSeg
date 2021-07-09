@@ -27,7 +27,8 @@ class SBD(nn.Module):
         state_type (str): String containing the type of object states.
 
         osi (nn.ModuleList): List of object state initialization (OSI) modules computing the initial object states.
-        ae (Sequential): Anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
+        ae (Sequential): Optional anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
+        se (Sequential): Optional scale encoding (SE) module computing scale encodings from normalized anchor sizes.
         cls (Sequential): Classification (CLS) module computing classification predictions from object states.
         box (Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
@@ -59,8 +60,8 @@ class SBD(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, dod, state_dict, osi_dict, ae_dict, cls_dict, box_dict, match_dict, loss_dict, pred_dict,
-                 update_dict, ca_dict, sa_dict, ffn_dict, metadata):
+    def __init__(self, dod, state_dict, osi_dict, ae_dict, se_dict, cls_dict, box_dict, match_dict, loss_dict,
+                 pred_dict, update_dict, ca_dict, sa_dict, ffn_dict, metadata):
         """
         Initializes the SBD module.
 
@@ -90,6 +91,17 @@ class SBD(nn.Module):
                 - norm (str): string containing the type of normalization of the HAE network;
                 - act_fn (str): string containing the type of activation function of the HAE network;
                 - skip (bool): boolean indicating whether layers of the HAE network contain skip connections.
+
+            se_dict (Dict): Scale encoding (SE) dictionary containing following keys:
+                - needed (bool): boolean indicating whether scale encodings are needed;
+                - type (str): string containing the type of hidden SE (HSE) network;
+                - layers (int): integer containing the number of HSE network layers;
+                - in_size (int): input feature size of the HSE network;
+                - hidden_size (int): hidden feature size of the HSE network;
+                - out_size (int): output feature size of the HSE network;
+                - norm (str): string containing the type of normalization of the HSE network;
+                - act_fn (str): string containing the type of activation function of the HSE network;
+                - skip (bool): boolean indicating whether layers of the HSE network contain skip connections.
 
             cls_dict (Dict): Classification (CLS) network dictionary containing following keys:
                 - type (str): string containing the type of hidden CLS (HCLS) network;
@@ -193,10 +205,20 @@ class SBD(nn.Module):
         osi = SBD.get_net(osi_dict)
         self.osi = nn.ModuleList([deepcopy(osi) for _ in range(dod.num_cell_anchors)])
 
-        # Initialization of anchor encoding (AE) network
-        iae = nn.Linear(4, ae_dict['in_size'])
-        hae = SBD.get_net(ae_dict)
-        self.ae = Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
+        # Initialization of anchor encoding (AE) network if needed
+        needs_ae = [t for t in update_dict['types'] if t in ['ca', 'sa']] and update_dict['layers'] > 0
+        needs_ae = needs_ae or self.state_type == 'abs'
+
+        if needs_ae:
+            iae = nn.Linear(4, ae_dict['in_size'])
+            hae = SBD.get_net(ae_dict)
+            self.ae = Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
+
+        # Initialization of scale encoding (SE) network if needed
+        if se_dict.pop('needed'):
+            ise = nn.Linear(2, se_dict['in_size'])
+            hse = SBD.get_net(se_dict)
+            self.se = Sequential(OrderedDict([('in', ise), ('hidden', hse)]))
 
         # Initialization of classification prediction (CLS) network
         num_classes = cls_dict.pop('num_classes')
@@ -227,24 +249,25 @@ class SBD(nn.Module):
         module_dict = OrderedDict()
         self.up_has_deformable = False
 
-        for module_type in update_dict['types']:
-            if not module_type:
-                update_dict['layers'] = 0
-                break
+        if update_dict['layers'] > 0:
+            for module_type in update_dict['types']:
+                if not module_type:
+                    update_dict['layers'] = 0
+                    break
 
-            elif module_type == 'ca':
-                module_dict['ca'] = SBD.get_net(ca_dict)
-                self.up_has_deformable = ca_dict['type'] == 'deformable_attn'
+                elif module_type == 'ca':
+                    module_dict['ca'] = SBD.get_net(ca_dict)
+                    self.up_has_deformable = ca_dict['type'] == 'deformable_attn'
 
-            elif module_type == 'sa':
-                module_dict['sa'] = SBD.get_net(sa_dict)
+                elif module_type == 'sa':
+                    module_dict['sa'] = SBD.get_net(sa_dict)
 
-            elif module_type == 'ffn':
-                module_dict['ffn'] = SBD.get_net(ffn_dict)
+                elif module_type == 'ffn':
+                    module_dict['ffn'] = SBD.get_net(ffn_dict)
 
-            else:
-                error_msg = f"Invalid module type '{module_type}' for update layer."
-                raise ValueError(error_msg)
+                else:
+                    error_msg = f"Invalid module type '{module_type}' for update layer."
+                    raise ValueError(error_msg)
 
         up_layer = Sequential(module_dict)
         self.up_layers = nn.ModuleList([deepcopy(up_layer) for _ in range(update_dict['layers'])])
@@ -774,18 +797,25 @@ class SBD(nn.Module):
         num_states = sum(len(obj_states_i) for obj_states_i in obj_states)
         analysis_dict['num_states_0'] = num_states / batch_size
 
-        # Get anchors and corresponding anchor encodings
-        if images is None:
-            error_msg = "An Images structure containing the batched images must be provided."
-            raise ValueError(error_msg)
-
+        # Get anchors and corresponding anchor encodings if needed
         obj_anchors = [anchors[sel_ids_i] for sel_ids_i in sel_ids]
-        norm_anchors = [obj_anchors[i].clone().normalize(images[i]).to_format('cxcywh') for i in range(batch_size)]
-        anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
+
+        if hasattr(self, 'ae'):
+            if images is None:
+                error_msg = "An Images structure containing the batched images must be provided."
+                raise ValueError(error_msg)
+
+            norm_anchors = [obj_anchors[i].clone().normalize(images[i]).to_format('cxcywh') for i in range(batch_size)]
+            anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
+
+            if hasattr(self, 'se'):
+                scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in range(batch_size)]
 
         # Get absolute object states if desired
         if self.state_type == 'abs':
-            obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
+            if hasattr(self, 'se'):
+                obj_states = [obj_states[i] * scale_encs[i] for i in range(batch_size)]
+            obj_states = [obj_states[i] + anchor_encs[i] for i in range(batch_size)]
 
         # Get boolean indicating whether initial losses/prediction dictionary should be computed
         if self.apply_freq == 'last':
@@ -853,9 +883,10 @@ class SBD(nn.Module):
         # Get static keyword arguments for update layers
         up_kwargs = [{} for _ in range(batch_size)]
 
-        if self.state_type == 'rel_static':
+        if self.state_type == 'rel_static' and hasattr(self, 'ae'):
             for i in range(batch_size):
-                up_kwargs[i]['in_feat_encs'] = anchor_encs[i]
+                up_kwargs[i]['add_encs'] = anchor_encs[i]
+                up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
         if self.up_has_deformable:
             sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=feats.device)
@@ -886,6 +917,9 @@ class SBD(nn.Module):
                     norm_anchors = [norm_anchors[i].to_format('cxcywh') for i in range(batch_size)]
                     anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
 
+                    if hasattr(self, 'se'):
+                        scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in range(batch_size)]
+
                 # Get dynamic keyword arguments for update layers
                 if self.state_type == 'abs' and self.up_has_deformable:
                     for i in range(batch_size):
@@ -893,7 +927,8 @@ class SBD(nn.Module):
 
                 elif self.state_type == 'rel_dynamic':
                     for i in range(batch_size):
-                        up_kwargs[i]['in_feat_encs'] = anchor_encs[i]
+                        up_kwargs[i]['add_encs'] = anchor_encs[i]
+                        up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
                         if self.up_has_deformable:
                             up_kwargs[i]['sample_points'] = norm_anchors[i].boxes
