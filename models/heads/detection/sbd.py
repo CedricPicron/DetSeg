@@ -815,7 +815,7 @@ class SBD(nn.Module):
         if self.state_type == 'abs':
             if hasattr(self, 'se'):
                 obj_states = [obj_states[i] * scale_encs[i] for i in range(batch_size)]
-            obj_states = [obj_states[i] + anchor_encs[i] for i in range(batch_size)]
+            obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
 
         # Get boolean indicating whether initial losses/prediction dictionary should be computed
         if self.apply_freq == 'last':
