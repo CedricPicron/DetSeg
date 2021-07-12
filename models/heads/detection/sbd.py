@@ -33,12 +33,15 @@ class SBD(nn.Module):
         box (Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
         match_mode (str): String containing the prediction-target matching mode.
-        match_rel_thr (int): Integer containing the relative prediction-target matching threshold.
+        match_static_mode (str): String containing the static prediction-target matching mode.
+        match_abs_pos (float): Absolute positive threshold used static prediction-target matching.
+        match_abs_neg (float): Absolute negative threshold used static prediction-target matching.
+        match_rel_pos (int): Relative positive threshold used static prediction-target matching.
+        match_rel_neg (int): Relative negative threshold used static prediction-target matching.
 
         ae_weight (float): Factor weighting the anchor encoding loss.
         apply_freq (str): String containing the frequency at which losses are computed and applied.
         freeze_inter (bool): Boolean indicating whether CLS and BOX modules are frozen for intermediate losses.
-        with_bg (bool): Boolean indicating whether background label is added to the classification labels.
         bg_weight (float): Factor weighting the classification losses with background targets.
         cls_type (str): String containing the type of classification loss function.
         cls_alpha (float): Alpha value used by the classification sigmoid focal loss.
@@ -126,13 +129,16 @@ class SBD(nn.Module):
 
             match_dict (Dict): Matching dictionary containing following keys:
                 - mode (str): string containing the prediction-target matching mode;
-                - rel_thr (int): integer containing the relative prediction-target matching threshold.
+                - static_mode (str): string containing the static prediction-target matching mode;
+                - abs_pos (float): absolute positive threshold used static prediction-target matching;
+                - abs_neg (float): absolute negative threshold used static prediction-target matching;
+                - rel_pos (int): relative positive threshold used static prediction-target matching;
+                - rel_neg (int): relative negative threshold used static prediction-target matching.
 
             loss_dict (Dict): Loss dictionary containing following keys:
                 - ae_weight (float): factor weighting the anchor encoding loss;
                 - apply_freq (str): string containing the frequency at which losses are computed and applied;
                 - freeze_inter (bool): boolean indicating whether CLS and BOX are frozen for intermediate losses;
-                - with_bg (bool): boolean indicating whether background label is added to the classification labels;
                 - bg_weight (float): factor weighting the classification losses with background targets;
                 - cls_type (str): string containing the type of classification loss function;
                 - cls_alpha (float): alpha value used by the classification sigmoid focal loss;
@@ -222,7 +228,7 @@ class SBD(nn.Module):
 
         # Initialization of classification prediction (CLS) network
         num_classes = cls_dict.pop('num_classes')
-        num_cls_labels = num_classes + 1 if loss_dict['with_bg'] else num_classes
+        num_cls_labels = num_classes + 1
 
         hcls = SBD.get_net(cls_dict)
         ocls = nn.Linear(cls_dict['out_size'], num_cls_labels)
@@ -339,55 +345,106 @@ class SBD(nn.Module):
         return net
 
     @torch.no_grad()
-    def perform_matching(self, pred_anchor_ids=None, tgt_sorted_ids=None):
+    def perform_matching(self, pred_anchors=None, tgt_boxes=None, pred_anchor_ids=None, tgt_sorted_ids=None):
         """
         Perform prediction-target matching.
 
         Args:
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
+            tgt_boxes (List): List [batch_size] of target boxes of size [num_targets] (default=None).
             pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
-            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [num_anchors, num_targets] (default=None).
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets] (default=None).
 
         Returns:
-            pred_ids (List): List [batch_size] with indices of predictions of shape [num_preds].
-            tgt_ids (List): List [batch_size] with indices of targets matching with predictions of shape [num_preds].
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
-            tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
+            pos_tgt_ids (List): List [batch_size] with indices of positive targets of shape [num_pos_preds].
+            neg_pred_ids (List): List [batch_size] with indices of negative predictions of shape [num_neg_preds].
 
         Raises:
+            ValueError: Error when the 'pred_anchors' input is missing when needed.
+            ValueError: Error when the 'tgt_boxes' input is missing when needed.
+            ValueError: Error when the 'pred_anchor_ids' input is missing when needed.
+            ValueError: Error when the 'tgt_sorted_ids' input is missing when needed.
+            ValueError: Error when invalid static prediction-target matching mode is provided.
             ValueError: Error when invalid prediction-target matching mode is provided.
         """
 
         # Initialize empty lists for prediction-target matching
-        pred_ids = []
-        tgt_ids = []
         pos_pred_ids = []
-        tgt_found = []
+        pos_tgt_ids = []
+        neg_pred_ids = []
 
         # Perform prediction-target matching
-        if self.match_mode == 'dod_rel':
+        if self.match_mode == 'static':
+            if 'abs' in self.match_static_mode:
+                if pred_anchors is None:
+                    mode = self.match_static_mode
+                    error_msg = f"The 'pred_anchors' input must be provided when in '{mode}' static match mode."
+                    raise ValueError(error_msg)
+
+                if tgt_boxes is None:
+                    mode = self.match_static_mode
+                    error_msg = f"The 'tgt_boxes' input must be provided when in '{mode}' static match mode."
+                    raise ValueError(error_msg)
+
+            if 'rel' in self.match_static_mode:
+                if pred_anchor_ids is None:
+                    mode = self.match_static_mode
+                    error_msg = f"The 'pred_anchor_ids' input must be provided when in '{mode}' static match mode."
+                    raise ValueError(error_msg)
+
+                if tgt_sorted_ids is None:
+                    mode = self.match_static_mode
+                    error_msg = f"The 'tgt_sorted_ids' input must be provided when in '{mode}' static match mode."
+                    raise ValueError(error_msg)
+
             for i in range(len(pred_anchor_ids)):
-                pred_pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_thr]
-                pred_pos_mask = pred_pos_masks.sum(dim=1)
+                if 'abs' in self.match_static_mode:
+                    sim_matrix = box_iou(pred_anchors[i], tgt_boxes[i])
+                    abs_pos_mask = sim_matrix >= self.match_abs_pos
+                    abs_neg_mask = sim_matrix < self.match_abs_neg
 
-                pred_ids_i, tgt_ids_i = torch.nonzero(pred_pos_mask, as_tuple=True)
-                pos_pred_ids_i = torch.unique_consecutive(pred_ids_i)
+                if 'rel' in self.match_static_mode:
+                    pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_pos]
+                    non_neg_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_neg]
 
-                num_tgts = pred_pos_mask.shape[1]
-                tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=tgt_ids_i.device)
-                tgt_found_i[tgt_ids_i] = True
+                    rel_pos_mask = pos_masks.any(dim=1)
+                    rel_neg_mask = ~non_neg_masks.any(dim=1)
 
-                pred_ids.append(pred_ids_i)
-                tgt_ids.append(tgt_ids_i)
+                if self.match_static_mode == 'abs':
+                    pos_mask = abs_pos_mask
+                    neg_mask = abs_neg_mask
+
+                elif self.match_static_mode == 'abs_and_rel':
+                    pos_mask = abs_pos_mask & rel_pos_mask
+                    neg_mask = abs_neg_mask & rel_neg_mask
+
+                elif self.match_static_mode == 'abs_or_rel':
+                    pos_mask = abs_pos_mask | rel_pos_mask
+                    neg_mask = abs_neg_mask | rel_neg_mask
+
+                elif self.match_static_mode == 'rel':
+                    pos_mask = rel_pos_mask
+                    neg_mask = rel_neg_mask
+
+                else:
+                    error_msg = f"Invalid static prediction-target matching mode '{self.match_static_mode}'."
+                    raise ValueError(error_msg)
+
+                pos_pred_ids_i, pos_tgt_ids_i = torch.nonzero(pos_mask, as_tuple=True)
+                neg_pred_ids_i = neg_mask.all(dim=1).nonzero(as_tuple=True)[0]
+
                 pos_pred_ids.append(pos_pred_ids_i)
-                tgt_found.append(tgt_found_i)
+                pos_tgt_ids.append(pos_tgt_ids_i)
+                neg_pred_ids.append(neg_pred_ids_i)
 
         else:
             error_msg = f"Invalid prediction-target matching mode '{self.match_mode}'."
             raise ValueError(error_msg)
 
-        return pred_ids, tgt_ids, pos_pred_ids, tgt_found
+        return pos_pred_ids, pos_tgt_ids, neg_pred_ids
 
-    def get_cls_loss(self, cls_preds, tgt_dict, pred_ids, tgt_ids, pos_pred_ids):
+    def get_cls_loss(self, cls_preds, tgt_dict, pos_pred_ids, pos_tgt_ids, neg_pred_ids):
         """
         Compute classification loss from predictions.
 
@@ -397,9 +454,9 @@ class SBD(nn.Module):
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets].
 
-            pred_ids (List): List [batch_size] with indices of predictions of shape [num_preds].
-            tgt_ids (List): List [batch_size] with indices of targets matching with predictions of shape [num_preds].
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
+            pos_tgt_ids (List): List [batch_size] with indices of positive targets of shape [num_pos_preds].
+            neg_pred_ids (List): List [batch_size] with indices of negative predictions of shape [num_neg_preds].
 
         Returns:
             cls_loss (FloatTensor): Tensor containing the classification loss of shape [1].
@@ -422,21 +479,15 @@ class SBD(nn.Module):
         for i in range(batch_size):
 
             # Get classification predictions and corresponding targets
-            cls_preds_i = cls_preds[i][pred_ids[i]]
-            cls_targets_i = tgt_dict['labels'][i][tgt_ids[i]]
+            cls_preds_i = cls_preds[i][pos_pred_ids[i]]
+            cls_targets_i = tgt_dict['labels'][i][pos_tgt_ids[i]]
 
-            # Add predictions with background targets if requested
-            if self.with_bg:
-                num_preds_i = len(cls_preds[i])
-                bg_pred_mask_i = torch.ones(num_preds_i, dtype=torch.bool, device=tensor_kwargs['device'])
-                bg_pred_mask_i[pos_pred_ids[i]] = False
-                bg_pred_ids_i = torch.nonzero(bg_pred_mask_i, as_tuple=True)[0]
+            # Add predictions with background targets
+            bg_preds_i = cls_preds[i][neg_pred_ids[i]]
+            bg_targets_i = torch.full_like(neg_pred_ids[i], num_cls_labels-1)
 
-                bg_logits_i = cls_preds[i][bg_pred_ids_i]
-                bg_targets_i = torch.full_like(bg_pred_ids_i, num_cls_labels-1)
-
-                cls_preds_i = torch.cat([cls_preds_i, bg_logits_i], dim=0)
-                cls_targets_i = torch.cat([cls_targets_i, bg_targets_i], dim=0)
+            cls_preds_i = torch.cat([cls_preds_i, bg_preds_i], dim=0)
+            cls_targets_i = torch.cat([cls_targets_i, bg_targets_i], dim=0)
 
             # Handle case where there are no targets
             if len(cls_targets_i) == 0:
@@ -455,7 +506,7 @@ class SBD(nn.Module):
                 raise ValueError(error_msg)
 
             # Weight losses of background targets if needed
-            if self.with_bg:
+            if self.bg_weight != 1.0:
                 bg_tgt_mask = cls_targets_i == num_cls_labels-1
                 cls_losses[bg_tgt_mask] = self.bg_weight * cls_losses[bg_tgt_mask]
 
@@ -577,7 +628,7 @@ class SBD(nn.Module):
 
         return box_loss, box_acc
 
-    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchor_ids=None, tgt_sorted_ids=None, pred_anchors=None):
+    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchors=None, pred_anchor_ids=None, tgt_sorted_ids=None):
         """
         Compute classification and bounding box losses from predictions.
 
@@ -589,9 +640,9 @@ class SBD(nn.Module):
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
 
-            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
-            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [num_anchors, num_targets] (default=None).
             pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
+            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets] (default=None).
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -603,23 +654,23 @@ class SBD(nn.Module):
                 - box_acc (FloatTensor): tensor containing the bounding box accuracy (in percentage) of shape [1].
 
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
-            tgt_found (List): List [batch_size] with masks of found targets of shape [num_targets].
         """
 
         # Perform prediction-target matching
-        pred_ids, tgt_ids, pos_pred_ids, tgt_found = self.perform_matching(pred_anchor_ids, tgt_sorted_ids)
+        match_args = (pred_anchors, tgt_dict['boxes'], pred_anchor_ids, tgt_sorted_ids)
+        pos_pred_ids, pos_tgt_ids, neg_pred_ids = self.perform_matching(*match_args)
 
         # Get classification loss and accuracy
-        cls_loss, cls_acc = self.get_cls_loss(cls_preds, tgt_dict, pred_ids, tgt_ids, pos_pred_ids)
+        cls_loss, cls_acc = self.get_cls_loss(cls_preds, tgt_dict, pos_pred_ids, pos_tgt_ids, neg_pred_ids)
 
         # Get bounding box loss and accuracy
-        box_loss, box_acc = self.get_box_loss(box_preds, tgt_dict, pred_ids, tgt_ids, pred_anchors)
+        box_loss, box_acc = self.get_box_loss(box_preds, tgt_dict, pos_pred_ids, pos_tgt_ids, pred_anchors)
 
         # Get loss and analysis dictionaries
         loss_dict = {'cls_loss': cls_loss, 'box_loss': box_loss}
         analysis_dict = {'cls_acc': cls_acc, 'box_acc': box_acc}
 
-        return loss_dict, analysis_dict, pos_pred_ids, tgt_found
+        return loss_dict, analysis_dict, pos_pred_ids, pos_tgt_ids
 
     @torch.no_grad()
     def make_predictions(self, cls_preds, box_preds, pred_anchors=None):
@@ -655,7 +706,7 @@ class SBD(nn.Module):
         for i in range(batch_size):
 
             # Get prediction labels and scores
-            cls_preds_i = cls_preds[i][:, :-1] if self.with_bg else cls_preds[i]
+            cls_preds_i = cls_preds[i][:, :-1]
             scores_i, labels_i = cls_preds_i.sigmoid().max(dim=1)
 
             # Get prediction boxes
@@ -870,7 +921,7 @@ class SBD(nn.Module):
             if compute_loss_preds:
                 loss_kwargs['pred_anchors'] = obj_anchors
                 loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
-                local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+                local_loss_dict, local_analysis_dict, pos_pred_ids, pos_tgt_ids = loss_output
 
                 loss_dict.update({f'{k}_0': v for k, v in local_loss_dict.items()})
                 analysis_dict.update({f'{k}_0': v for k, v in local_analysis_dict.items()})
@@ -955,7 +1006,7 @@ class SBD(nn.Module):
                 if tgt_dict is not None and compute_loss_preds:
                     loss_kwargs['pred_anchors'] = obj_anchors
                     loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
-                    local_loss_dict, local_analysis_dict, pos_pred_ids, tgt_found = loss_output
+                    local_loss_dict, local_analysis_dict, pos_pred_ids, pos_tgt_ids = loss_output
 
                     loss_dict.update({f'{k}_{i}_{j}': v for k, v in local_loss_dict.items()})
                     analysis_dict.update({f'{k}_{i}_{j}': v for k, v in local_analysis_dict.items()})
@@ -969,7 +1020,16 @@ class SBD(nn.Module):
         if tgt_dict is not None and self.dod.tgt_mode == 'ext_dynamic':
 
             # Get external dictionary
+            pos_pred_ids = [torch.unique_consecutive(pos_pred_ids[i]) for i in range(batch_size)]
             pos_anchor_ids = [sel_ids[i][pos_pred_ids[i]] for i in range(batch_size)]
+            tgt_found = []
+
+            for i in range(batch_size):
+                num_tgts = tgt_sorted_ids[i].shape[1]
+                tgt_found_i = torch.zeros(num_tgts, dtype=torch.bool, device=logits.device)
+                tgt_found_i[pos_tgt_ids[i]] = True
+                tgt_found.append(tgt_found_i)
+
             ext_dict = {'logits': logits, 'obj_probs': obj_probs, 'pos_anchor_ids': pos_anchor_ids}
             ext_dict = {**ext_dict, 'tgt_found': tgt_found, 'pos_masks': pos_masks, 'neg_masks': neg_masks}
             ext_dict = {**ext_dict, 'tgt_sorted_ids': tgt_sorted_ids}

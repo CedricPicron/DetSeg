@@ -23,9 +23,9 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr', 'dfd', 'dod']
-model_choices = [*model_choices, 'encoder', 'fpn', 'gc', 'global_decoder', 'resnet', 'ret', 'sample_decoder', 'sbd']
-model_choices = [*model_choices, 'sem']
+model_choices = ['bch_dod', 'bch_sbd', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr', 'dfd']
+model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'resnet', 'ret', 'sample_decoder']
+model_choices = [*model_choices, 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -44,6 +44,35 @@ if profiling_args.model == 'bch_dod':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
     main_args.det_heads = ['dod']
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
+    model = build_arch(main_args).to('cuda')
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
+
+elif profiling_args.model == 'bch_sbd':
+    main_args.num_classes = 80
+    main_args.arch_type = 'bch'
+    main_args.det_heads = ['sbd']
+    main_args.dod_anchor_num_sizes = 3
+    main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
+    main_args.dod_tgt_mode = 'static'
+    main_args.sbd_match_rel_pos = 15
+    main_args.sbd_match_rel_neg = 15
+    main_args.sbd_update_types = ['ca', 'sa', 'ffn']
+    main_args.sbd_update_layers = 6
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
@@ -428,13 +457,15 @@ elif profiling_args.model == 'sbd':
     main_args.det_heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
+    main_args.dod_sel_mode = 'rel'
+    main_args.dod_tgt_decision = 'rel'
     main_args.sbd_state_type = 'rel_static'
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_se = False
-    main_args.sbd_match_mode = 'dod_rel'
+    main_args.sbd_match_mode = 'static'
+    main_args.sbd_match_static_mode = 'rel'
     main_args.sbd_loss_apply_freq = 'layers'
     main_args.sbd_loss_freeze_inter = False
-    main_args.sbd_loss_no_bg = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']

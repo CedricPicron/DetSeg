@@ -32,11 +32,12 @@ class DOD(nn.Module):
         sel_rel_thr (int): Relative threshold determining the selected anchors.
 
         tgt_metric (str): String containing the anchor-target matching metric.
+        tgt_sort_thr (int): Threshold containing the amount of sorted anchor indices to return per target.
         tgt_decision (str): String containing the target decision maker type.
-        abs_pos_tgt (float): Absolute threshold used during positive target decision making.
-        abs_neg_tgt (float): Absolute threshold used during negative target decision making.
-        rel_pos_tgt (int): Relative threshold used during positive target decision making.
-        rel_neg_tgt (int): Relative threshold used during negative target decision making.
+        tgt_abs_pos (float): Absolute threshold used during positive target decision making.
+        tgt_abs_neg (float): Absolute threshold used during negative target decision making.
+        tgt_rel_pos (int): Relative threshold used during positive target decision making.
+        tgt_rel_neg (int): Relative threshold used during negative target decision making.
         tgt_mode (str): String containing the target mode.
 
         loss_type (str): String containing the type of loss.
@@ -81,11 +82,12 @@ class DOD(nn.Module):
 
             tgt_dict (Dict): Dictionary with items used during target computation containing following keys:
                 - metric (str): string containing the anchor-target matching metric;
+                - sort_thr (int): threshold containing the amount of sorted anchor indices to return per target;
                 - decision (str): string containing the target decision maker type;
-                - abs_pos_tgt (float): absolute threshold used during positive target decision making;
-                - abs_neg_tgt (float): absolute threshold used during negative target decision making;
-                - rel_pos_tgt (int): relative threshold used during positive target decision making;
-                - rel_neg_tgt (int): relative threshold used during negative target decision making;
+                - abs_pos (float): absolute threshold used during positive target decision making;
+                - abs_neg (float): absolute threshold used during negative target decision making;
+                - rel_pos (int): relative threshold used during positive target decision making;
+                - rel_neg (int): relative threshold used during negative target decision making;
                 - mode (str): string containing the target mode.
 
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -142,18 +144,12 @@ class DOD(nn.Module):
         self.anchor_dict = anchor_dict
 
         # Set anchor selection attributes
-        self.sel_mode = sel_dict['mode']
-        self.sel_abs_thr = sel_dict['abs_thr']
-        self.sel_rel_thr = sel_dict['rel_thr']
+        for k, v in sel_dict.items():
+            setattr(self, f'sel_{k}', v)
 
         # Set target-related attributes
-        self.tgt_metric = tgt_dict['metric']
-        self.tgt_decision = tgt_dict['decision']
-        self.abs_pos_tgt = tgt_dict['abs_pos_tgt']
-        self.abs_neg_tgt = tgt_dict['abs_neg_tgt']
-        self.rel_pos_tgt = tgt_dict['rel_pos_tgt']
-        self.rel_neg_tgt = tgt_dict['rel_neg_tgt']
-        self.tgt_mode = tgt_dict['mode']
+        for k, v in tgt_dict.items():
+            setattr(self, f'tgt_{k}', v)
 
         # Set loss-related attributes
         self.loss_type = loss_dict['type']
@@ -187,7 +183,7 @@ class DOD(nn.Module):
             neg_masks (List): List [batch_size] of negative static target masks of shape [num_anchors, num_targets].
 
             If 'return_ids' is True:
-                tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
+                tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [sort_thr, num_targets].
 
         Raises:
             ValueError: Error when unknown anchor-target metric is present in 'tgt_metric' attribute.
@@ -209,32 +205,49 @@ class DOD(nn.Module):
             if not return_ids:
                 return pos_masks, neg_masks
 
-            tgt_sorted_ids = [torch.zeros(num_anchors, 0, dtype=torch.int64, device=device) for _ in range(batch_size)]
+            tensor_kwargs = {'dtype': torch.int64, 'device': device}
+            tgt_sorted_ids = [torch.zeros(self.tgt_sort_thr, 0, **tensor_kwargs) for _ in range(batch_size)]
 
             return pos_masks, neg_masks, tgt_sorted_ids
 
         # Get anchor-target similarity matrix and target sorted anchor indices
         if self.tgt_metric == 'iou':
             sim_matrix = box_iou(anchors, tgt_boxes)
-            tgt_sorted_ids = torch.argsort(sim_matrix, dim=0, descending=True)
+            tgt_sorted_ids = torch.topk(sim_matrix, self.tgt_sort_thr, dim=0, sorted=True).indices
 
         else:
             error_msg = f"Unknown anchor-target metric '{self.tgt_metric}'."
             raise ValueError(error_msg)
 
         # Get positive and negative static target masks
+        if 'abs' in self.tgt_decision:
+            abs_pos_mask = sim_matrix >= self.tgt_abs_pos
+            abs_neg_mask = sim_matrix < self.tgt_abs_neg
+
+        if 'rel' in self.tgt_decision:
+            pos_ids = tgt_sorted_ids[:self.tgt_rel_pos, :]
+            rel_pos_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
+            rel_pos_mask[pos_ids, torch.arange(num_tgts)] = True
+
+            non_neg_ids = tgt_sorted_ids[:self.tgt_rel_neg, :]
+            rel_neg_mask = torch.ones_like(sim_matrix, dtype=torch.bool)
+            rel_neg_mask[non_neg_ids, torch.arange(num_tgts)] = False
+
         if self.tgt_decision == 'abs':
-            pos_mask = sim_matrix >= self.abs_pos_tgt
-            neg_mask = sim_matrix < self.abs_neg_tgt
+            pos_mask = abs_pos_mask
+            neg_mask = abs_neg_mask
+
+        elif self.tgt_decision == 'abs_and_rel':
+            pos_mask = abs_pos_mask & rel_pos_mask
+            neg_mask = abs_neg_mask & rel_neg_mask
+
+        elif self.tgt_decision == 'abs_or_rel':
+            pos_mask = abs_pos_mask | rel_pos_mask
+            neg_mask = abs_neg_mask | rel_neg_mask
 
         elif self.tgt_decision == 'rel':
-            pos_ids = tgt_sorted_ids[:self.rel_pos_tgt, :]
-            pos_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
-            pos_mask[pos_ids, torch.arange(num_tgts)] = True
-
-            non_neg_ids = tgt_sorted_ids[:self.rel_neg_tgt, :]
-            neg_mask = torch.ones_like(sim_matrix, dtype=torch.bool)
-            neg_mask[non_neg_ids, torch.arange(num_tgts)] = False
+            pos_mask = rel_pos_mask
+            neg_mask = rel_neg_mask
 
         else:
             error_msg = f"Unknown target decision maker type '{self.tgt_decision}'."
@@ -258,14 +271,16 @@ class DOD(nn.Module):
 
         Args:
             obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_anchors].
-            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
+            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [sort_thr, num_targets].
 
         Returns:
             ap (FloatTensor): Tensor containing the average precision (AP) of shape [1].
         """
 
-        # Get batch size and initialize average precision tensor
-        batch_size = len(obj_probs)
+        # Get batch size and number of anchors
+        batch_size, num_anchors = obj_probs.shape
+
+        # Initialize average precision tensor
         ap = torch.zeros(1).to(obj_probs)
 
         # Get average precision for every batch entry
@@ -281,7 +296,7 @@ class DOD(nn.Module):
 
             # Get positives mask sorted according to object probabilities
             pos_ids = tgt_sorted_ids[i][:self.pred_num_pos, :]
-            pos_mask = torch.zeros_like(tgt_sorted_ids[i], dtype=torch.bool)
+            pos_mask = torch.zeros(num_anchors, num_tgts, dtype=torch.bool, device=ap.device)
             pos_mask[pos_ids, torch.arange(num_tgts)] = True
 
             pred_sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)[:self.pred_max_dets]
@@ -318,7 +333,7 @@ class DOD(nn.Module):
 
         Args:
             obj_probs (FloatTensor): Tensor containing object probabilities of shape [batch_size, num_anchors].
-            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [num_anchors, num_targets].
+            tgt_sorted_ids (List): List [batch_size] of sorted anchor indices of shape [sort_thr, num_targets].
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
@@ -333,8 +348,8 @@ class DOD(nn.Module):
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
         """
 
-        # Get batch size
-        batch_size = len(obj_probs)
+        # Get batch size and number of anchors
+        batch_size, num_anchors = obj_probs.shape
 
         # Group targets per batch entry
         tgt_sizes = tgt_dict['sizes']
@@ -362,7 +377,7 @@ class DOD(nn.Module):
             # Get positives mask sorted according to object probabilities
             num_tgts = tgt_sorted_ids[i].shape[1]
             pos_ids = tgt_sorted_ids[i][:self.pred_num_pos, :]
-            pos_mask = torch.zeros_like(tgt_sorted_ids[i], dtype=torch.bool)
+            pos_mask = torch.zeros(num_anchors, num_tgts, dtype=torch.bool, device=device)
             pos_mask[pos_ids, torch.arange(num_tgts)] = True
 
             pred_sorted_ids = torch.argsort(obj_probs[i], dim=0, descending=True)[:self.pred_max_dets]
@@ -431,7 +446,7 @@ class DOD(nn.Module):
                 - tgt_found (List): list [batch_size] with masks of found targets of shape [num_targets];
                 - pos_masks (List): list [batch_size] of positive target masks of shape [num_anchors, num_targets];
                 - neg_masks (List): list [batch_size] of negative target masks of shape [num_anchors, num_targets];
-                - tgt_sorted_ids (List): list [batch_size] of sorted anchor indices [num_anchors, num_targets].
+                - tgt_sorted_ids (List): list [batch_size] of sorted anchor indices [sort_thr, num_targets].
 
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this head module.
@@ -455,7 +470,7 @@ class DOD(nn.Module):
                     anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
                     pos_masks (List): List [batch_size] of positive target masks of shape [num_anchors, num_targets].
                     neg_masks (List): List [batch_size] of negative target masks of shape [num_anchors, num_targets].
-                    tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_anchors, num_targets].
+                    tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [sort_thr, num_targets].
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
                 * If in remaining cases:
@@ -465,7 +480,7 @@ class DOD(nn.Module):
                     * If DOD module is not stand-alone and not in 'ext_dynamic' target mode:
                         sel_ids (List): List [batch_size] with indices of selected anchors of shape [num_sel_anchors].
                         anchors (Boxes): Structure containing axis-aligned anchor boxes of size [num_anchors].
-                        tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [num_anchors, num_targets].
+                        tgt_sorted_ids (List): List [batch_size] of sorted indices of shape [sort_thr, num_targets].
 
                     loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                     analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
@@ -516,12 +531,14 @@ class DOD(nn.Module):
             analysis_dict['neg_preds'] = torch.sum(~pos_preds)[None] / batch_size
 
             # Get indices of selected anchors
-            if self.sel_mode == 'abs':
-                vals, ids = torch.sort(obj_probs, dim=1, descending=True)
-                sel_ids = [ids_i[vals_i >= self.sel_abs_thr] for vals_i, ids_i in zip(vals, ids)]
+            if self.sel_mode == 'abs_or_rel':
+                ids = torch.arange(len(anchors), device=obj_probs.device)
+                abs_sel_ids = [ids[obj_probs_i >= self.sel_abs_thr] for obj_probs_i in obj_probs]
+                rel_sel_ids = torch.topk(obj_probs, self.sel_rel_thr, dim=1, sorted=False).indices
+                sel_ids = [torch.cat([abs_sel_ids[i], rel_sel_ids[i]]).unique() for i in range(batch_size)]
 
             elif self.sel_mode == 'rel':
-                sel_ids = torch.argsort(obj_probs, dim=1, descending=True)[:, :self.sel_rel_thr]
+                sel_ids = torch.topk(obj_probs, self.sel_rel_thr, dim=1, sorted=False).indices
                 sel_ids = [*sel_ids]
 
             else:
@@ -623,7 +640,7 @@ class DOD(nn.Module):
             analysis_dict['tgt_found'] = 100 * torch.ones(1).to(tgt_found)
 
         # Get weighted positive and negative losses
-        targets = torch.full_like(pos_preds, fill_value=-1, dtype=torch.int64)
+        targets = torch.full_like(obj_probs, fill_value=-1, dtype=torch.int64)
         targets[neg_tgts] = 0
         targets[pos_tgts] = 1
 

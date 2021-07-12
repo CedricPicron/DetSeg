@@ -115,6 +115,12 @@ def build_det_heads(args):
             if not isinstance(args.dod_anchor_asp_ratios, list):
                 args.dod_anchor_asp_ratios = [args.dod_anchor_asp_ratios]
 
+            if 'sort_thr' in args:
+                sort_thr = args.sort_thr
+            else:
+                sort_list = [args.dod_tgt_rel_pos, args.dod_tgt_rel_neg, args.dod_pred_num_pos]
+                sort_thr = max(sort_list)
+
             net_dict = {'feat_size': args.dod_feat_size, 'norm': args.dod_norm, 'kernel_size': args.dod_kernel_size}
             net_dict = {**net_dict, 'bottle_size': args.dod_bottle_size, 'hidden_layers': args.dod_hidden_layers}
             net_dict = {**net_dict, 'rel_preds': args.dod_rel_preds, 'prior_prob': args.dod_prior_prob}
@@ -125,9 +131,9 @@ def build_det_heads(args):
 
             sel_dict = {'mode': args.dod_sel_mode, 'abs_thr': args.dod_sel_abs_thr, 'rel_thr': args.dod_sel_rel_thr}
 
-            tgt_dict = {'metric': args.dod_tgt_metric, 'decision': args.dod_tgt_decision}
-            tgt_dict = {**tgt_dict, 'abs_pos_tgt': args.dod_abs_pos_tgt, 'abs_neg_tgt': args.dod_abs_neg_tgt}
-            tgt_dict = {**tgt_dict, 'rel_pos_tgt': args.dod_rel_pos_tgt, 'rel_neg_tgt': args.dod_rel_neg_tgt}
+            tgt_dict = {'metric': args.dod_tgt_metric, 'sort_thr': sort_thr, 'decision': args.dod_tgt_decision}
+            tgt_dict = {**tgt_dict, 'abs_pos': args.dod_tgt_abs_pos, 'abs_neg': args.dod_tgt_abs_neg}
+            tgt_dict = {**tgt_dict, 'rel_pos': args.dod_tgt_rel_pos, 'rel_neg': args.dod_tgt_rel_neg}
             tgt_dict = {**tgt_dict, 'mode': args.dod_tgt_mode}
 
             loss_dict = {'type': args.dod_loss_type, 'focal_alpha': args.dod_focal_alpha}
@@ -175,8 +181,12 @@ def build_det_heads(args):
             if not isinstance(args.sbd_update_types, list):
                 args.sbd_update_types = [args.sbd_update_types]
 
+            sort_list = [args.dod_tgt_rel_pos, args.dod_tgt_rel_neg, args.dod_pred_num_pos, args.sbd_match_rel_pos]
+            sort_list = [*sort_list, args.sbd_match_rel_neg]
+
             args_copy = deepcopy(args)
             args_copy.det_heads = ['dod']
+            args_copy.sort_thr = max(sort_list)
             dod = build_det_heads(args_copy)['dod']
 
             state_dict = {'size': args.sbd_state_size, 'type': args.sbd_state_type}
@@ -206,14 +216,16 @@ def build_det_heads(args):
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
             box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
 
-            match_dict = {'mode': args.sbd_match_mode, 'rel_thr': args.sbd_match_rel_thr}
+            match_dict = {'mode': args.sbd_match_mode, 'static_mode': args.sbd_match_static_mode}
+            match_dict = {**match_dict, 'abs_pos': args.sbd_match_abs_pos, 'abs_neg': args.sbd_match_abs_neg}
+            match_dict = {**match_dict, 'rel_pos': args.sbd_match_rel_pos, 'rel_neg': args.sbd_match_rel_neg}
 
             loss_dict = {'ae_weight': args.sbd_loss_ae_weight, 'apply_freq': args.sbd_loss_apply_freq}
-            loss_dict = {**loss_dict, 'freeze_inter': args.sbd_loss_freeze_inter, 'with_bg': not args.sbd_loss_no_bg}
-            loss_dict = {**loss_dict, 'bg_weight': args.sbd_loss_bg_weight, 'cls_type': args.sbd_loss_cls_type}
-            loss_dict = {**loss_dict, 'cls_alpha': args.sbd_loss_cls_alpha, 'cls_gamma': args.sbd_loss_cls_gamma}
-            loss_dict = {**loss_dict, 'cls_weight': args.sbd_loss_cls_weight, 'box_types': args.sbd_loss_box_types}
-            loss_dict = {**loss_dict, 'box_beta': args.sbd_loss_box_beta, 'box_weights': args.sbd_loss_box_weights}
+            loss_dict = {**loss_dict, 'freeze_inter': args.sbd_loss_freeze_inter, 'bg_weight': args.sbd_loss_bg_weight}
+            loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}
+            loss_dict = {**loss_dict, 'cls_gamma': args.sbd_loss_cls_gamma, 'cls_weight': args.sbd_loss_cls_weight}
+            loss_dict = {**loss_dict, 'box_types': args.sbd_loss_box_types, 'box_beta': args.sbd_loss_box_beta}
+            loss_dict = {**loss_dict, 'box_weights': args.sbd_loss_box_weights}
 
             pred_dict = {'dup_removal': args.sbd_pred_dup_removal, 'nms_candidates': args.sbd_pred_nms_candidates}
             pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}
