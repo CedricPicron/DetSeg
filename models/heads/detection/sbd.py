@@ -417,11 +417,11 @@ class SBD(nn.Module):
 
                 elif self.match_static_mode == 'abs_and_rel':
                     pos_mask = abs_pos_mask & rel_pos_mask
-                    neg_mask = abs_neg_mask & rel_neg_mask
+                    neg_mask = abs_neg_mask | rel_neg_mask
 
                 elif self.match_static_mode == 'abs_or_rel':
                     pos_mask = abs_pos_mask | rel_pos_mask
-                    neg_mask = abs_neg_mask | rel_neg_mask
+                    neg_mask = abs_neg_mask & rel_neg_mask
 
                 elif self.match_static_mode == 'rel':
                     pos_mask = rel_pos_mask

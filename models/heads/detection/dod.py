@@ -239,11 +239,11 @@ class DOD(nn.Module):
 
         elif self.tgt_decision == 'abs_and_rel':
             pos_mask = abs_pos_mask & rel_pos_mask
-            neg_mask = abs_neg_mask & rel_neg_mask
+            neg_mask = abs_neg_mask | rel_neg_mask
 
         elif self.tgt_decision == 'abs_or_rel':
             pos_mask = abs_pos_mask | rel_pos_mask
-            neg_mask = abs_neg_mask | rel_neg_mask
+            neg_mask = abs_neg_mask & rel_neg_mask
 
         elif self.tgt_decision == 'rel':
             pos_mask = rel_pos_mask
