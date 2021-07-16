@@ -1,8 +1,10 @@
 """
 Collection of attention-based modules.
 """
+import math
 
 from deformable_detr.models.ops.modules import MSDeformAttn as MSDA
+from deformable_detr.models.ops.functions import MSDeformAttnFunction as MSDAF
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -218,29 +220,35 @@ class DeformableAttn(nn.Module):
     Attributes:
         norm (nn.Module): Optional normalization module of the DeformableAttn module.
         act_fn (nn.Module): Optional module with the activation function of the DeformableAttn module.
-        msda (MSDA): Multi-scale deformable attention module of the DeformableAttn module.
+        msda (nn.Module): Multi-scale deformable attention module of the DeformableAttn module.
         skip (bool): Boolean indicating whether skip connection is used or not.
     """
 
-    def __init__(self, in_size, out_size=-1, norm='', act_fn='', num_levels=5, num_heads=8, num_points=4, skip=True):
+    def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_levels=5,
+                 num_heads=8, num_points=4, qk_size=-1, value_size=-1):
         """
         Initializes the DeformableAttn module.
 
         Args:
             in_size (int): Size of input features.
+            sample_size (int): Size of sample features.
             out_size (int): Size of output features (default=-1).
             norm (str): String containing the type of normalization (default='').
             act_fn (str): String containing the type of activation function (default='').
+            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+            version (int): Integer containing the version of the MSDA module (default=0).
             num_levels (int): Integer containing the number of map levels to sample from (default=5).
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
-            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+            qk_size (int): Size of query and key features (default=-1).
+            value_size (int): Size of value features (default=-1).
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.
             ValueError: Error when unsupported type of activation function is provided.
             ValueError: Error when input and output feature sizes are different when skip connection is used.
             ValueError: Error when the output feature size is not specified when no skip connection is used.
+            ValueError: Error when invalid MSDA version number is provided.
         """
 
         # Initialization of default nn.Module
@@ -278,28 +286,39 @@ class DeformableAttn(nn.Module):
             raise ValueError(error_msg)
 
         # Initialization of multi-scale deformable attention module
-        self.msda = MSDA(in_size, num_levels, num_heads, num_points)
-        self.msda.output_proj = nn.Linear(in_size, out_size)
-        nn.init.xavier_uniform_(self.msda.output_proj.weight)
-        nn.init.zeros_(self.msda.output_proj.bias)
+        if version == 0:
+            self.msda = MSDA(in_size, num_levels, num_heads, num_points)
+            self.msda.output_proj = nn.Linear(in_size, out_size)
+            nn.init.xavier_uniform_(self.msda.output_proj.weight)
+            nn.init.zeros_(self.msda.output_proj.bias)
+
+        elif version == 1:
+            self.msda = MSDAv1(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size)
+
+        elif version == 2:
+            self.msda = MSDAv2(in_size, sample_size, out_size, num_levels, num_heads, num_points, qk_size, value_size)
+
+        else:
+            error_msg = f"Invalid MSDA version number '{version}'."
+            raise ValueError(error_msg)
 
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats, sample_points, sample_feats, sample_map_shapes, sample_map_start_ids,
-                add_encs=None, mul_encs=None, sample_padding_mask=None, **kwargs):
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids,
+                add_encs=None, mul_encs=None, sample_mask=None, **kwargs):
         """
         Forward method of the DeformableAttn module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [*, num_in_feats, in_size].
-            sample_points (FloatTensor): Normalized sample coordinates of shape [*, num_in_feats, {2, 4}].
-            sample_feats (FloatTensor): Features to be sampled of shape [*, num_sample_feats, in_size].
+            sample_priors (FloatTensor): Sample priors of shape [*, num_in_feats, {2, 4}].
+            sample_feats (FloatTensor): Sample features of shape [*, num_sample_feats, sample_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
             add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
             mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
-            sample_padding_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
+            sample_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -321,18 +340,14 @@ class DeformableAttn(nn.Module):
         if add_encs is not None:
             delta_feats = delta_feats + add_encs.view(-1, *orig_shape[-2:])
 
-        num_levels = self.msda.n_levels
-        reference_points = sample_points.view(-1, *sample_points.shape[-2:])
-        reference_points = reference_points[:, :, None, :].expand(-1, -1, num_levels, -1)
+        num_levels = len(sample_map_start_ids)
+        sample_priors = sample_priors.view(-1, *sample_priors.shape[-2:])
+        sample_priors = sample_priors[:, :, None, :].expand(-1, -1, num_levels, -1)
+        sample_feats = sample_feats.view(-1, *sample_feats.shape[-2:])
 
-        msda_kwargs = {'reference_points': reference_points}
-        msda_kwargs['input_flatten'] = sample_feats.view(-1, *sample_feats.shape[-2:])
-        msda_kwargs['input_spatial_shapes'] = sample_map_shapes
-        msda_kwargs['input_level_start_index'] = sample_map_start_ids
-        msda_kwargs['input_padding_mask'] = sample_padding_mask
-
-        delta_feats = self.msda(delta_feats, **msda_kwargs)
-        delta_feats = delta_feats.view(*orig_shape[:-1], -1)
+        msda_args = (delta_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids)
+        msda_kwargs = {'input_padding_mask': sample_mask}
+        delta_feats = self.msda(*msda_args, **msda_kwargs).view(*orig_shape[:-1], -1)
 
         # Get output features
         out_feats = in_feats + delta_feats if self.skip else delta_feats
@@ -456,6 +471,283 @@ class LegacySelfAttn1d(nn.Module):
         return out_feat_list
 
 
+class MSDAv1(nn.Module):
+    """
+    Class implementing the MSDAv1 module.
+
+    Attributes:
+        sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
+        attention_weights (nn.Linear): Module computing the attention weights from the input features.
+        value_proj (nn.Linear): Module computing value features from sample features.
+        out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        num_levels (int): Integer containing the number of map levels to sample from.
+        num_heads (int): Integer containing the number of attention heads.
+        num_points (int): Integer containing the number of sampling points per head and per level.
+    """
+
+    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1):
+        """
+        Initializes the MSDAv1 module.
+
+        Args:
+            in_size (int): Size of input features.
+            sample_size (int): Size of sample features.
+            out_size (int): Size of output features (default=-1).
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            num_points (int): Integer containing the number of sampling points per head and per level (default=4).
+            value_size (int): Size of value features (default=-1).
+
+        Raises:
+            ValueError: Error when the input feature size does not divide the number of heads.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check divisibility query size by number of heads
+        if in_size % num_heads != 0:
+            error_msg = f"The input feature size ({in_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the sample offsets
+        self.sampling_offsets = nn.Linear(in_size, num_heads * num_levels * num_points * 2)
+        nn.init.zeros_(self.sampling_offsets.weight)
+
+        thetas = torch.arange(num_heads, dtype=torch.float) * (2.0 * math.pi / num_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=1)
+        grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
+        grid_init = grid_init.view(num_heads, 1, 1, 2).repeat(1, num_levels, 1, 1)
+
+        sizes = torch.arange(1, num_points+1, dtype=torch.float).view(1, 1, num_points, 1)
+        grid_init = sizes * grid_init
+        self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+
+        # Initialize module computing the unnormalized attention weights
+        self.attention_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
+        nn.init.zeros_(self.attention_weights.weight)
+        nn.init.zeros_(self.attention_weights.bias)
+
+        # Initialize module computing the value features
+        value_size = in_size if value_size == -1 else value_size
+        self.value_proj = nn.Linear(sample_size, value_size)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        nn.init.zeros_(self.value_proj.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.output_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
+
+        # Set attributes related to number of levels, heads and points
+        self.num_levels = num_levels
+        self.num_heads = num_heads
+        self.num_points = num_points
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        """
+        Forward method of the MSDAv1 module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [batch_size, num_in_feats, in_size].
+            sample_priors (FloatTensor): Sample priors of shape [batch_size, num_in_feats, num_levels, {2, 4}].
+            sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
+            sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
+            sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
+
+        Raises:
+            ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
+        """
+
+        # Get shapes of input tensors
+        batch_size, num_in_feats, in_size = in_feats.shape
+        common_shape = (batch_size, num_in_feats, self.num_heads)
+
+        # Get sample offsets
+        sample_offsets = self.sampling_offsets(in_feats).view(*common_shape, self.num_levels, self.num_points, 2)
+
+        # Get sample locations
+        if sample_priors.shape[-1] == 2:
+            offset_normalizers = sample_map_shapes.fliplr()[None, None, None, :, None, :]
+            sample_locations = sample_priors[:, :, None, :, None, :]
+            sample_locations = sample_locations + sample_offsets / offset_normalizers
+
+        elif sample_priors.shape[-1] == 4:
+            offset_factors = 0.5 * sample_priors[:, :, None, :, None, 2:] / self.num_points
+            sample_locations = sample_priors[:, :, None, :, None, :2]
+            sample_locations = sample_locations + sample_offsets * offset_factors
+
+        else:
+            error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
+            raise ValueError(error_msg)
+
+        # Get attention weights
+        attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=-1).view(*common_shape, self.num_levels, self.num_points)
+
+        # Get value features
+        value_feats = self.value_proj(sample_feats).view(batch_size, -1, self.num_heads, in_size // self.num_heads)
+
+        # Apply MSDA function
+        msdaf_args = (value_feats, sample_map_shapes, sample_map_start_ids, sample_locations, attn_weights, 64)
+        weighted_value_feats = MSDAF.apply(*msdaf_args)
+
+        # Get output features
+        out_feats = self.output_proj(weighted_value_feats)
+
+        return out_feats
+
+
+class MSDAv2(nn.Module):
+    """
+    Class implementing the MSDAv2 module.
+
+    Attributes:
+        sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
+        query_proj (nn.Linear): Module computing query features from input features.
+        key_proj (nn.Linear): Module computing key features from sample features.
+        value_proj (nn.Linear): Module computing value features from sample features.
+        out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        num_levels (int): Integer containing the number of map levels to sample from.
+        num_heads (int): Integer containing the number of attention heads.
+        num_points (int): Integer containing the number of sampling points per head and per level.
+    """
+
+    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, qk_size=-1,
+                 value_size=-1):
+        """
+        Initializes the MSDAv2 module.
+
+        Args:
+            in_size (int): Size of input features.
+            sample_size (int): Size of sample features.
+            out_size (int): Size of output features (default=-1).
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            num_points (int): Integer containing the number of sampling points per head and per level (default=4).
+            qk_size (int): Size of query and key features (default=-1).
+            value_size (int): Size of value features (default=-1).
+
+        Raises:
+            ValueError: Error when the input feature size does not divide the number of heads.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check divisibility input size by number of heads
+        if in_size % num_heads != 0:
+            error_msg = f"The input feature size ({in_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the sample offsets
+        self.sampling_offsets = nn.Linear(in_size, num_heads * num_levels * num_points * 2)
+        nn.init.zeros_(self.sampling_offsets.weight)
+
+        thetas = torch.arange(num_heads, dtype=torch.float) * (2.0 * math.pi / num_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=1)
+        grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
+        grid_init = grid_init.view(num_heads, 1, 1, 2).repeat(1, num_levels, 1, 1)
+
+        sizes = torch.arange(1, num_points+1, dtype=torch.float).view(1, 1, num_points, 1)
+        grid_init = sizes * grid_init
+        self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+
+        # Get size of query and key features
+        qk_size = in_size // num_heads if qk_size == -1 else qk_size
+
+        # Initialize module computing the query features
+        self.query_proj = nn.Linear(in_size, num_heads * qk_size)
+        nn.init.xavier_uniform_(self.query_proj.weight)
+        nn.init.zeros_(self.query_proj.bias)
+
+        # Initialize module computing the key features
+        self.key_proj = nn.Linear(sample_size, qk_size)
+        nn.init.xavier_uniform_(self.key_proj.weight)
+        nn.init.zeros_(self.key_proj.bias)
+
+        # Initialize module computing the value features
+        value_size = in_size if value_size == -1 else value_size
+        self.value_proj = nn.Linear(sample_size, value_size)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        nn.init.zeros_(self.value_proj.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.output_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
+
+        # Set attributes related to number of levels, heads and points
+        self.num_levels = num_levels
+        self.num_heads = num_heads
+        self.num_points = num_points
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        """
+        Forward method of the MSDAv2 module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [batch_size, num_in_feats, in_size].
+            sample_priors (FloatTensor): Sample priors of shape [batch_size, num_in_feats, num_levels, {2, 4}].
+            sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
+            sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
+            sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
+
+        Raises:
+            ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
+        """
+
+        # Get shapes of input tensors
+        batch_size, num_in_feats, in_size = in_feats.shape
+        common_shape = (batch_size, num_in_feats, self.num_heads)
+
+        # Get sample offsets
+        sample_offsets = self.sampling_offsets(in_feats).view(*common_shape, self.num_levels, self.num_points, 2)
+
+        # Get sample locations
+        if sample_priors.shape[-1] == 2:
+            offset_normalizers = sample_map_shapes.fliplr()[None, None, None, :, None, :]
+            sample_locations = sample_priors[:, :, None, :, None, :]
+            sample_locations = sample_locations + sample_offsets / offset_normalizers
+
+        elif sample_priors.shape[-1] == 4:
+            offset_factors = 0.5 * sample_priors[:, :, None, :, None, 2:] / self.num_points
+            sample_locations = sample_priors[:, :, None, :, None, :2]
+            sample_locations = sample_locations + sample_offsets * offset_factors
+
+        else:
+            error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
+            raise ValueError(error_msg)
+
+        # Get attention weights
+        attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=-1).view(*common_shape, self.num_levels, self.num_points)
+
+        # Get value features
+        value_feats = self.value_proj(sample_feats).view(batch_size, -1, self.num_heads, in_size // self.num_heads)
+
+        # Apply MSDA function
+        msdaf_args = (value_feats, sample_map_shapes, sample_map_start_ids, sample_locations, attn_weights, 64)
+        weighted_value_feats = MSDAF.apply(*msdaf_args)
+
+        # Get output features
+        out_feats = self.output_proj(weighted_value_feats)
+
+        return out_feats
+
+
 class SelfAttn1d(nn.Module):
     """
     Class implementing the SelfAttn1d module.
@@ -467,7 +759,7 @@ class SelfAttn1d(nn.Module):
         skip (bool): Boolean indicating whether skip connection is used or not.
     """
 
-    def __init__(self, in_size, out_size=-1, norm='', act_fn='', num_heads=8, skip=True):
+    def __init__(self, in_size, out_size=-1, norm='', act_fn='', skip=True, num_heads=8):
         """
         Initializes the SelfAttn1d module.
 
@@ -476,8 +768,8 @@ class SelfAttn1d(nn.Module):
             out_size (int): Size of output features (default=-1).
             norm (str): String containing the type of normalization (default='').
             act_fn (str): String containing the type of activation function (default='').
-            num_heads (int): Integer containing the number of attention heads (default=8).
             skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+            num_heads (int): Integer containing the number of attention heads (default=8).
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.

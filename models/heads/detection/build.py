@@ -234,14 +234,15 @@ def build_det_heads(args):
             update_dict = {**update_dict, 'iters': args.sbd_update_iters}
 
             ca_dict = {'type': args.sbd_ca_type, 'layers': args.sbd_ca_layers, 'in_size': args.sbd_state_size}
-            ca_dict = {**ca_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_ca_norm}
-            ca_dict = {**ca_dict, 'act_fn': args.sbd_ca_act_fn, 'num_levels': num_levels}
+            ca_dict = {**ca_dict, 'sample_size': in_feat_size, 'out_size': args.sbd_state_size}
+            ca_dict = {**ca_dict, 'norm': args.sbd_ca_norm, 'act_fn': args.sbd_ca_act_fn, 'skip': True}
+            ca_dict = {**ca_dict, 'version': args.sbd_ca_version, 'num_levels': num_levels}
             ca_dict = {**ca_dict, 'num_heads': args.sbd_ca_num_heads, 'num_points': args.sbd_ca_num_points}
-            ca_dict = {**ca_dict, 'skip': True}
+            ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'value_size': args.sbd_ca_value_size}
 
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}
-            sa_dict = {**sa_dict, 'act_fn': args.sbd_sa_act_fn, 'num_heads': args.sbd_sa_num_heads, 'skip': True}
+            sa_dict = {**sa_dict, 'act_fn': args.sbd_sa_act_fn, 'skip': True, 'num_heads': args.sbd_sa_num_heads}
 
             ffn_dict = {'type': args.sbd_ffn_type, 'layers': args.sbd_ffn_layers, 'in_size': args.sbd_state_size}
             ffn_dict = {**ffn_dict, 'hidden_size': args.sbd_ffn_hidden_size, 'out_size': args.sbd_state_size}

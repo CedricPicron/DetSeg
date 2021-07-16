@@ -163,13 +163,17 @@ class SBD(nn.Module):
                 - type (str): string containing the type of CA network;
                 - layers (int): integer containing the number of CA network layers;
                 - in_size (int): input feature size of the CA network;
+                - sample_size (int): sample feature size of the CA network;
                 - out_size (int): output feature size of the CA network;
                 - norm (str): string containing the type of normalization of the CA network;
                 - act_fn (str): string containing the type of activation function of the CA network;
+                - skip (bool): boolean indicating whether layers of the CA network contain skip connections;
+                - version (int): integer containing the version of the CA network;
                 - num_levels (int): integer containing the number of map levels for the CA network to sample from;
                 - num_heads (int): integer containing the number of attention heads of the CA network;
                 - num_points (int): integer containing the number of deformable points of the CA network;
-                - skip (bool): boolean indicating whether layers of the CA network contain skip connections.
+                - qk_size (int): query and key feature size of the CA network;
+                - value_size (int): value feature size of the CA network.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -178,18 +182,18 @@ class SBD(nn.Module):
                 - out_size (int): output feature size of the SA network;
                 - norm (str): string containing the type of normalization of the SA network;
                 - act_fn (str): string containing the type of activation function of the SA network;
-                - num_heads (int): integer containing the number of attention heads of the SA network;
-                - skip (bool): boolean indicating whether layers of the SA network contain skip connections.
+                - skip (bool): boolean indicating whether layers of the SA network contain skip connections;
+                - num_heads (int): integer containing the number of attention heads of the SA network.
 
             ffn_dict (Dict): Feedforward network (FFN) dictionary containing following keys:
                 - type (str): string containing the type of FFN network;
                 - layers (int): integer containing the number of FFN network layers;
                 - in_size (int): input feature size of the FFN network;
-                - hidden_size (int): hidden feature size of the FFN network;
                 - out_size (int): output feature size of the FFN network;
                 - norm (str): string containing the type of normalization of the FFN network;
                 - act_fn (str): string containing the type of activation function of the FFN network;
-                - skip (bool): boolean indicating whether layers of the FFN network contain skip connections.
+                - skip (bool): boolean indicating whether layers of the FFN network contain skip connections;
+                - hidden_size (int): hidden feature size of the FFN network.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
@@ -294,14 +298,18 @@ class SBD(nn.Module):
                 - type (str): string containing the type of network;
                 - layers (int): integer containing the number of network layers;
                 - in_size (int): input feature size of the network;
+                - sample_size (int): sample feature size of the network;
                 - hidden_size (int): hidden feature size of the network;
                 - out_size (int): output feature size of the network;
                 - norm (str): string containing the type of normalization of the network;
                 - act_fn (str): string containing the type of activation function of the network;
+                - skip (bool): boolean indicating whether layers of the network contain skip connections;
+                - version (int): integer containing the version of the network;
                 - num_levels (int): integer containing the number of map levels for the network to sample from;
                 - num_heads (int): integer containing the number of attention heads of the network;
                 - num_points (int): integer containing the number of deformable points of the network;
-                - skip (bool): boolean indicating whether layers of the network contain skip connections.
+                - qk_size (int): query and key feature size of the network;
+                - value_size (int): value feature size of the network.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -312,8 +320,9 @@ class SBD(nn.Module):
         """
 
         if net_dict['type'] == 'deformable_attn':
-            net_args = (net_dict['in_size'], net_dict['out_size'])
-            net_keys = ('norm', 'act_fn', 'num_levels', 'num_heads', 'num_points', 'skip')
+            net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
+            net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_levels', 'num_heads', 'num_points', 'qk_size')
+            net_keys = (*net_keys, 'value_size')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = DeformableAttn(*net_args, **net_kwargs)
 
@@ -324,7 +333,7 @@ class SBD(nn.Module):
 
         elif net_dict['type'] == 'self_attn_1d':
             net_args = (net_dict['in_size'], net_dict['out_size'])
-            net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'num_heads', 'skip')}
+            net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'skip', 'num_heads')}
             net_layer = SelfAttn1d(*net_args, **net_kwargs)
 
         elif net_dict['type'] == 'two_step_mlp':
@@ -946,7 +955,7 @@ class SBD(nn.Module):
 
             for i in range(batch_size):
                 if self.state_type == 'rel_static':
-                    up_kwargs[i]['sample_points'] = norm_anchors[i].boxes
+                    up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
 
                 up_kwargs[i]['sample_feats'] = feats[i]
                 up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
@@ -974,7 +983,7 @@ class SBD(nn.Module):
                 # Get dynamic keyword arguments for update layers
                 if self.state_type == 'abs' and self.up_has_deformable:
                     for i in range(batch_size):
-                        up_kwargs[i]['sample_points'] = box_preds[i]
+                        up_kwargs[i]['sample_priors'] = box_preds[i]
 
                 elif self.state_type == 'rel_dynamic':
                     for i in range(batch_size):
@@ -982,7 +991,7 @@ class SBD(nn.Module):
                         up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
                         if self.up_has_deformable:
-                            up_kwargs[i]['sample_points'] = norm_anchors[i].boxes
+                            up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
 
                 # Update object states
                 obj_states = [up_layer(obj_states[i], **up_kwargs[i]) for i in range(batch_size)]
