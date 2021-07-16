@@ -65,6 +65,8 @@ if profiling_args.model == 'bch_dod':
 elif profiling_args.model == 'bch_sbd':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
+    main_args.core_type = 'gc'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     main_args.det_heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
@@ -363,7 +365,7 @@ elif profiling_args.model == 'gc':
     main_args.core_type = 'gc'
     main_args.core_min_map_id = 3
     main_args.core_max_map_id = 7
-    main_args.gc_yaml = './configs/gc/tpn_37_ceae_5b1_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
