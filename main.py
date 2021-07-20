@@ -306,7 +306,7 @@ def get_parser():
     parser.add_argument('--sbd_ca_version', default=0, type=int, help='version of CA network')
     parser.add_argument('--sbd_ca_num_heads', default=8, type=int, help='number of CA attention heads')
     parser.add_argument('--sbd_ca_num_points', default=4, type=int, help='number of deformable CA points')
-    parser.add_argument('--sbd_ca_qk_size', default=32, type=int, help='size of CA query and key features')
+    parser.add_argument('--sbd_ca_qk_size', default=256, type=int, help='size of CA query and key features')
     parser.add_argument('--sbd_ca_value_size', default=256, type=int, help='size of CA value features')
 
     parser.add_argument('--sbd_sa_type', default='self_attn_1d', type=str, help='SA network type')
