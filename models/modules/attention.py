@@ -550,9 +550,9 @@ class MSDAv1(nn.Module):
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
-        self.output_proj = nn.Linear(value_size, out_size)
-        nn.init.xavier_uniform_(self.output_proj.weight)
-        nn.init.zeros_(self.output_proj.bias)
+        self.out_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
         # Set attributes related to number of levels, heads and points
         self.num_levels = num_levels
@@ -602,7 +602,7 @@ class MSDAv1(nn.Module):
 
         # Get attention weights
         attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
-        attn_weights = F.softmax(attn_weights, dim=-1).view(*common_shape, self.num_levels, self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=3).view(*common_shape, self.num_levels, self.num_points)
 
         # Get value features
         value_feats = self.value_proj(sample_feats)
@@ -615,7 +615,7 @@ class MSDAv1(nn.Module):
         weighted_value_feats = MSDAF.apply(*msdaf_args)
 
         # Get output features
-        out_feats = self.output_proj(weighted_value_feats)
+        out_feats = self.out_proj(weighted_value_feats)
 
         return out_feats
 
@@ -694,9 +694,9 @@ class MSDAv2(nn.Module):
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
-        self.output_proj = nn.Linear(value_size, out_size)
-        nn.init.xavier_uniform_(self.output_proj.weight)
-        nn.init.zeros_(self.output_proj.bias)
+        self.out_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
         # Set attributes related to number of levels, heads and points
         self.num_levels = num_levels
@@ -723,7 +723,7 @@ class MSDAv2(nn.Module):
         """
 
         # Get shapes of input tensors
-        batch_size, num_in_feats, in_size = in_feats.shape
+        batch_size, num_in_feats = in_feats.shape[:2]
         common_shape = (batch_size, num_in_feats, self.num_heads)
 
         # Get sample offsets
@@ -746,7 +746,7 @@ class MSDAv2(nn.Module):
 
         # Get attention weights
         attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
-        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = F.softmax(attn_weights, dim=3)
 
         # Get value features
         value_feats = self.value_proj(sample_feats)
@@ -775,7 +775,7 @@ class MSDAv2(nn.Module):
         weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, value_size)
 
         # Get output features
-        out_feats = self.output_proj(weighted_feats)
+        out_feats = self.out_proj(weighted_feats)
 
         return out_feats
 
@@ -787,8 +787,7 @@ class MSDAv3(nn.Module):
     Attributes:
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         query_proj (nn.Linear): Module computing query features from input features.
-        key_proj (nn.Linear): Module computing key features from sample features.
-        value_proj (nn.Linear): Module computing value features from sample features.
+        kv_proj (nn.Linear): Module computing key-value features from sample features.
         out_proj (nn.Linear): Module computing output features from weighted value features.
 
         num_levels (int): Integer containing the number of map levels to sample from.
@@ -847,14 +846,9 @@ class MSDAv3(nn.Module):
             raise ValueError(error_msg)
 
         # Initialize module computing the query features
-        self.query_proj = nn.Linear(in_size, num_heads * qk_size)
+        self.query_proj = nn.Linear(in_size, qk_size)
         nn.init.xavier_uniform_(self.query_proj.weight)
         nn.init.zeros_(self.query_proj.bias)
-
-        # Initialize module computing the key features
-        self.key_proj = nn.Linear(sample_size, qk_size)
-        nn.init.xavier_uniform_(self.key_proj.weight)
-        nn.init.zeros_(self.key_proj.bias)
 
         # Get and check size of value features
         if value_size == -1:
@@ -864,16 +858,17 @@ class MSDAv3(nn.Module):
             error_msg = f"The value feature size ({value_size}) must divide the number of heads ({num_heads})."
             raise ValueError(error_msg)
 
-        # Initialize module computing the value features
-        self.value_proj = nn.Linear(sample_size, value_size)
-        nn.init.xavier_uniform_(self.value_proj.weight)
-        nn.init.zeros_(self.value_proj.bias)
+        # Initialize module computing the key-value features
+        kv_size = qk_size + value_size
+        self.kv_proj = nn.Linear(sample_size, kv_size)
+        nn.init.xavier_uniform_(self.kv_proj.weight)
+        nn.init.zeros_(self.kv_proj.bias)
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
-        self.output_proj = nn.Linear(value_size, out_size)
-        nn.init.xavier_uniform_(self.output_proj.weight)
-        nn.init.zeros_(self.output_proj.bias)
+        self.out_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
         # Set attributes related to number of levels, heads and points
         self.num_levels = num_levels
@@ -921,19 +916,44 @@ class MSDAv3(nn.Module):
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
 
+        # Get query and key-value features
+        query_feats = self.query_proj(in_feats).view(*common_shape, 1, -1)
+        kv_feats = self.kv_proj(sample_feats)
+
+        # Get sampled key-value features
+        kv_size = kv_feats.shape[-1]
+        kv_feats = kv_feats.view(batch_size, -1, self.num_heads, kv_size // self.num_heads)
+        kv_feats = kv_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, kv_size // self.num_heads)
+
+        sample_map_shapes = sample_map_shapes.fliplr()
+        sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 2)
+
+        sample_map_ids = torch.arange(self.num_levels, device=sample_locations.device)
+        sample_map_ids = sample_map_ids[None, None, :, None]
+        sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
+        sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
+
+        sampler_args = (kv_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sampled_feats = naive_maps_sampler_2d(*sampler_args)
+
+        sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, kv_size // self.num_heads)
+        sampled_feats = sampled_feats.transpose(1, 2)
+
+        # Get sampled key and value features
+        head_qk_size = query_feats.shape[-1]
+        sampled_key_feats = sampled_feats[:, :, :, :, :head_qk_size]
+        sampled_value_feats = sampled_feats[:, :, :, :, head_qk_size:]
+
         # Get attention weights
-        attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
-        attn_weights = F.softmax(attn_weights, dim=-1).view(*common_shape, self.num_levels, self.num_points)
+        attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
+        attn_weights = F.softmax(attn_weights, dim=3)
 
-        # Get value features
-        value_feats = self.value_proj(sample_feats).view(batch_size, -1, self.num_heads, in_size // self.num_heads)
-
-        # Apply MSDA function
-        msdaf_args = (value_feats, sample_map_shapes, sample_map_start_ids, sample_locations, attn_weights, 64)
-        weighted_value_feats = MSDAF.apply(*msdaf_args)
+        # Get weighted value features
+        weighted_feats = attn_weights[:, :, :, :, None] * sampled_value_feats
+        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, -1)
 
         # Get output features
-        out_feats = self.output_proj(weighted_value_feats)
+        out_feats = self.out_proj(weighted_feats)
 
         return out_feats
 
