@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from models.ops.sampler.functional import naive_maps_sampler_2d
+from models.ops.sampler.functional import naive_maps_sampler_2d, naive_maps_sampler_3d
 
 
 class Attn2d(nn.Module):
@@ -302,6 +302,9 @@ class DeformableAttn(nn.Module):
 
         elif version == 3:
             self.msda = MSDAv3(in_size, sample_size, out_size, num_levels, num_heads, num_points, qk_size, value_size)
+
+        elif version == 4:
+            self.msda = MSDAv4(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -951,6 +954,167 @@ class MSDAv3(nn.Module):
         # Get weighted value features
         weighted_feats = attn_weights[:, :, :, :, None] * sampled_value_feats
         weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, -1)
+
+        # Get output features
+        out_feats = self.out_proj(weighted_feats)
+
+        return out_feats
+
+
+class MSDAv4(nn.Module):
+    """
+    Class implementing the MSDAv4 module.
+
+    Attributes:
+        sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
+        attention_weights (nn.Linear): Module computing the attention weights from the input features.
+        value_proj (nn.Linear): Module computing value features from sample features.
+        out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        num_levels (int): Integer containing the number of map levels to sample from.
+        num_heads (int): Integer containing the number of attention heads.
+        num_points (int): Integer containing the number of sampling points per head and per level.
+    """
+
+    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1):
+        """
+        Initializes the MSDAv4 module.
+
+        Args:
+            in_size (int): Size of input features.
+            sample_size (int): Size of sample features.
+            out_size (int): Size of output features (default=-1).
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            num_points (int): Integer containing the number of sampling points per head and per level (default=4).
+            value_size (int): Size of value features (default=-1).
+
+        Raises:
+            ValueError: Error when the input feature size does not divide the number of heads.
+            ValueError: Error when the value feature size does not divide the number of heads.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check divisibility query size by number of heads
+        if in_size % num_heads != 0:
+            error_msg = f"The input feature size ({in_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the sample offsets
+        self.sampling_offsets = nn.Linear(in_size, num_heads * num_levels * num_points * 3)
+        nn.init.zeros_(self.sampling_offsets.weight)
+
+        thetas = torch.arange(num_heads, dtype=torch.float) * (2.0 * math.pi / num_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin(), torch.zeros_like(thetas)], dim=1)
+        grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
+        grid_init = grid_init.view(num_heads, 1, 1, 3).repeat(1, num_levels, 1, 1)
+
+        sizes = torch.arange(1, num_points+1, dtype=torch.float).view(1, 1, num_points, 1)
+        grid_init = sizes * grid_init
+        self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
+
+        # Initialize module computing the unnormalized attention weights
+        self.attention_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
+        nn.init.zeros_(self.attention_weights.weight)
+        nn.init.zeros_(self.attention_weights.bias)
+
+        # Get and check size of value features
+        if value_size == -1:
+            value_size = in_size
+
+        elif value_size % num_heads != 0:
+            error_msg = f"The value feature size ({value_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the value features
+        self.value_proj = nn.Linear(sample_size, value_size)
+        nn.init.xavier_uniform_(self.value_proj.weight)
+        nn.init.zeros_(self.value_proj.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.out_proj = nn.Linear(value_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+        # Set attributes related to number of levels, heads and points
+        self.num_levels = num_levels
+        self.num_heads = num_heads
+        self.num_points = num_points
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        """
+        Forward method of the MSDAv4 module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [batch_size, num_in_feats, in_size].
+            sample_priors (FloatTensor): Sample priors of shape [batch_size, num_in_feats, num_levels, {2, 4}].
+            sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
+            sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
+            sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
+
+        Raises:
+            ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
+        """
+
+        # Get shapes of input tensors
+        batch_size, num_in_feats = in_feats.shape[:2]
+        common_shape = (batch_size, num_in_feats, self.num_heads)
+        num_levels = len(sample_map_shapes)
+
+        # Get sample offsets
+        sample_offsets = self.sampling_offsets(in_feats).view(*common_shape, self.num_levels, self.num_points, 3)
+
+        # Get sample locations
+        sample_z = torch.linspace(0, 1, num_levels, dtype=sample_priors.dtype, device=sample_priors.device)
+        sample_z = sample_z.view(1, 1, 1, num_levels, 1, 1).expand(batch_size, num_in_feats, -1, -1, -1, -1)
+
+        if sample_priors.shape[-1] == 2:
+            offset_normalizers = sample_map_shapes.fliplr()[None, None, None, :, None, :]
+            sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] / offset_normalizers
+
+            sample_locations = torch.cat([sample_priors[:, :, None, :, None, :], sample_z], dim=5)
+            sample_locations = sample_locations + sample_offsets
+
+        elif sample_priors.shape[-1] == 4:
+            offset_factors = 0.5 * sample_priors[:, :, None, :, None, 2:] / self.num_points
+            sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] * offset_factors
+
+            sample_locations = torch.cat([sample_priors[:, :, None, :, None, :2], sample_z], dim=5)
+            sample_locations = sample_locations + sample_offsets
+
+        else:
+            error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
+            raise ValueError(error_msg)
+
+        # Get attention weights
+        attn_weights = self.attention_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=3)
+
+        # Get value features
+        value_feats = self.value_proj(sample_feats)
+
+        # Get sampled value features
+        value_size = value_feats.shape[-1]
+        value_feats = value_feats.view(batch_size, -1, self.num_heads, value_size // self.num_heads)
+        value_feats = value_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, value_size // self.num_heads)
+
+        sample_map_shapes = sample_map_shapes.fliplr()
+        sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
+
+        sampled_feats = naive_maps_sampler_3d(value_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
+        sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, value_size // self.num_heads)
+        sampled_feats = sampled_feats.transpose(1, 2)
+
+        # Get weighted value features
+        weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
+        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, value_size)
 
         # Get output features
         out_feats = self.out_proj(weighted_feats)
