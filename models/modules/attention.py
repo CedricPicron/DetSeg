@@ -791,6 +791,7 @@ class MSDAv3(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         query_proj (nn.Linear): Module computing query features from input features.
         kv_proj (nn.Linear): Module computing key-value features from sample features.
+        point_encs (nn.Parameter): Parameter tensor containing the point encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
 
         num_levels (int): Integer containing the number of map levels to sample from.
@@ -867,6 +868,9 @@ class MSDAv3(nn.Module):
         nn.init.xavier_uniform_(self.kv_proj.weight)
         nn.init.zeros_(self.kv_proj.bias)
 
+        # Initialize point encodings
+        self.point_encs = nn.Parameter(torch.zeros(num_heads, num_levels * num_points, qk_size // num_heads))
+
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
         self.out_proj = nn.Linear(value_size, out_size)
@@ -898,7 +902,7 @@ class MSDAv3(nn.Module):
         """
 
         # Get shapes of input tensors
-        batch_size, num_in_feats, in_size = in_feats.shape
+        batch_size, num_in_feats = in_feats.shape[:2]
         common_shape = (batch_size, num_in_feats, self.num_heads)
 
         # Get sample offsets
@@ -946,6 +950,9 @@ class MSDAv3(nn.Module):
         head_qk_size = query_feats.shape[-1]
         sampled_key_feats = sampled_feats[:, :, :, :, :head_qk_size]
         sampled_value_feats = sampled_feats[:, :, :, :, head_qk_size:]
+
+        # Add point encodings to sampled key features
+        sampled_key_feats = sampled_key_feats + self.point_encs
 
         # Get attention weights
         attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
