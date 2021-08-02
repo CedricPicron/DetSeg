@@ -24,14 +24,19 @@ def naive_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample_m
     batch_size, _, feat_size = feats.size()
     _, num_samples, _ = sample_xy.size()
 
-    # Get unnormalized sample locations
+    # Clamp sample locations between 0 and 1
+    sample_xy = sample_xy.clamp_(min=0.0, max=1.0)
+
+    # Get sample widths, heights and offsets
     sample_wh = feat_map_wh[sample_map_ids]
     sample_w = sample_wh[:, :, 0]
     sample_offs = feat_map_offs[sample_map_ids]
+
+    # Get unnormalized sample locations
     sample_xy = sample_xy * (sample_wh - 1)
 
     # Get unweighted sample features
-    sample_ij = sample_xy.floor().to(dtype=torch.int64).clamp_(min=0)
+    sample_ij = sample_xy.floor().to(dtype=torch.int64)
     sample_ij = torch.min(torch.stack([sample_ij, sample_wh-2], dim=3), dim=3)[0]
 
     top_left_ids = sample_offs + sample_w * sample_ij[:, :, 1] + sample_ij[:, :, 0]
@@ -77,18 +82,24 @@ def naive_maps_sampler_3d(feats, feat_map_wh, feat_map_offs, sample_xyz):
     num_maps, _ = feat_map_wh.size()
     _, num_samples, _ = sample_xyz.size()
 
-    # Get unnormalized sample locations
+    # Clamp sample locations between 0 and 1
+    sample_xyz = sample_xyz.clamp_(min=0.0, max=1.0)
+
+    # Get sample map indices
     sample_z = sample_xyz[:, :, 2] * (num_maps - 1)
-    sample_k = sample_z.floor().to(dtype=torch.int64).clamp_(min=0, max=num_maps-2)
+    sample_k = sample_z.floor().to(dtype=torch.int64).clamp_(max=num_maps-2)
     sample_map_ids = torch.stack([sample_k, sample_k+1], dim=2)
 
+    # Get sample widths, heights and offsets
     sample_wh = feat_map_wh[sample_map_ids]
     sample_w = sample_wh[:, :, :, 0]
     sample_offs = feat_map_offs[sample_map_ids]
+
+    # Get unnormalized sample locations
     sample_xy = sample_xyz[:, :, None, :2] * (sample_wh - 1)
 
     # Get unweighted sample features
-    sample_ij = sample_xy.floor().to(dtype=torch.int64).clamp_(min=0)
+    sample_ij = sample_xy.floor().to(dtype=torch.int64)
     sample_ij = torch.min(torch.stack([sample_ij, sample_wh-2], dim=4), dim=4)[0]
 
     top_left_ids = sample_offs + sample_w * sample_ij[:, :, :, 1] + sample_ij[:, :, :, 0]
@@ -115,6 +126,6 @@ def naive_maps_sampler_3d(feats, feat_map_wh, feat_map_offs, sample_xyz):
 
     sample_weights = torch.cat([top_left_ws, top_right_ws, bot_left_ws, bot_right_ws], dim=2).flatten(1, 2)
     sample_feats = sample_weights * sample_feats
-    sample_feats = sample_feats.view(batch_size, 8, num_samples, feat_size).sum(dim=1)
+    sample_feats = sample_feats.view(batch_size, num_samples, 8, feat_size).sum(dim=2)
 
     return sample_feats
