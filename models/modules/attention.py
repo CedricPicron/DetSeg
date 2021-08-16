@@ -955,6 +955,7 @@ class MSDAv3(nn.Module):
         sampled_key_feats = sampled_key_feats + self.point_encs
 
         # Get attention weights
+        query_feats = query_feats / math.sqrt(head_qk_size)
         attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
         attn_weights = F.softmax(attn_weights, dim=3)
 
