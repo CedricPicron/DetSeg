@@ -173,7 +173,8 @@ class SBD(nn.Module):
                 - num_heads (int): integer containing the number of attention heads of the CA network;
                 - num_points (int): integer containing the number of deformable points of the CA network;
                 - qk_size (int): query and key feature size of the CA network;
-                - value_size (int): value feature size of the CA network.
+                - value_size (int): value feature size of the CA network;
+                - val_with_pos (bool): boolean indicating whether position info is added to CA value features.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -309,7 +310,8 @@ class SBD(nn.Module):
                 - num_heads (int): integer containing the number of attention heads of the network;
                 - num_points (int): integer containing the number of deformable points of the network;
                 - qk_size (int): query and key feature size of the network;
-                - value_size (int): value feature size of the network.
+                - value_size (int): value feature size of the network;
+                - val_with_pos (bool): boolean indicating whether position info is added to value features.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -322,7 +324,7 @@ class SBD(nn.Module):
         if net_dict['type'] == 'deformable_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_levels', 'num_heads', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'value_size')
+            net_keys = (*net_keys, 'value_size', 'val_with_pos')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = DeformableAttn(*net_args, **net_kwargs)
 

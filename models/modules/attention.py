@@ -227,7 +227,7 @@ class DeformableAttn(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_levels=5,
-                 num_heads=8, num_points=4, qk_size=-1, value_size=-1):
+                 num_heads=8, num_points=4, qk_size=-1, value_size=-1, val_with_pos=False):
         """
         Initializes the DeformableAttn module.
 
@@ -244,6 +244,7 @@ class DeformableAttn(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             qk_size (int): Size of query and key features (default=-1).
             value_size (int): Size of value features (default=-1).
+            val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.
@@ -298,13 +299,16 @@ class DeformableAttn(nn.Module):
             self.msda = MSDAv1(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size)
 
         elif version == 2:
-            self.msda = MSDAv2(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size)
+            self.msda = MSDAv2(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size,
+                               val_with_pos)
 
         elif version == 3:
-            self.msda = MSDAv3(in_size, sample_size, out_size, num_levels, num_heads, num_points, qk_size, value_size)
+            self.msda = MSDAv3(in_size, sample_size, out_size, num_levels, num_heads, num_points, qk_size, value_size,
+                               val_with_pos)
 
         elif version == 4:
-            self.msda = MSDAv4(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size)
+            self.msda = MSDAv4(in_size, sample_size, out_size, num_levels, num_heads, num_points, value_size,
+                               val_with_pos)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -631,6 +635,7 @@ class MSDAv2(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         attention_weights (nn.Linear): Module computing the attention weights from the input features.
         value_proj (nn.Linear): Module computing value features from sample features.
+        val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
 
         num_levels (int): Integer containing the number of map levels to sample from.
@@ -638,7 +643,8 @@ class MSDAv2(nn.Module):
         num_points (int): Integer containing the number of sampling points per head and per level.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1):
+    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1,
+                 val_with_pos=False):
         """
         Initializes the MSDAv2 module.
 
@@ -650,6 +656,7 @@ class MSDAv2(nn.Module):
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             value_size (int): Size of value features (default=-1).
+            val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -694,6 +701,10 @@ class MSDAv2(nn.Module):
         self.value_proj = nn.Linear(sample_size, value_size)
         nn.init.xavier_uniform_(self.value_proj.weight)
         nn.init.zeros_(self.value_proj.bias)
+
+        # Initialize module computing the value position encodings if requested
+        if val_with_pos:
+            self.val_pos_encs = nn.Linear(3, value_size // num_heads)
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
@@ -773,6 +784,15 @@ class MSDAv2(nn.Module):
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, value_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 
+        # Get and add position encodings to sampled value features if needed
+        if hasattr(self, 'val_pos_encs'):
+            sample_xy = 0.5 * sample_offsets / self.num_points
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
+            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
+
         # Get weighted value features
         weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
         weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, value_size)
@@ -792,6 +812,7 @@ class MSDAv3(nn.Module):
         query_proj (nn.Linear): Module computing query features from input features.
         kv_proj (nn.Linear): Module computing key-value features from sample features.
         point_encs (nn.Parameter): Parameter tensor containing the point encodings.
+        val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
 
         num_levels (int): Integer containing the number of map levels to sample from.
@@ -800,7 +821,7 @@ class MSDAv3(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, qk_size=-1,
-                 value_size=-1):
+                 value_size=-1, val_with_pos=False):
         """
         Initializes the MSDAv3 module.
 
@@ -813,6 +834,7 @@ class MSDAv3(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             qk_size (int): Size of query and key features (default=-1).
             value_size (int): Size of value features (default=-1).
+            val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -870,6 +892,10 @@ class MSDAv3(nn.Module):
 
         # Initialize point encodings
         self.point_encs = nn.Parameter(torch.zeros(num_heads, num_levels * num_points, qk_size // num_heads))
+
+        # Initialize module computing the value position encodings if requested
+        if val_with_pos:
+            self.val_pos_encs = nn.Linear(3, value_size // num_heads)
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
@@ -959,6 +985,15 @@ class MSDAv3(nn.Module):
         attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
         attn_weights = F.softmax(attn_weights, dim=3)
 
+        # Get and add position encodings to sampled value features if needed
+        if hasattr(self, 'val_pos_encs'):
+            sample_xy = 0.5 * sample_offsets / self.num_points
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
+            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            sampled_value_feats = sampled_value_feats + self.val_pos_encs(sample_xyz)
+
         # Get weighted value features
         weighted_feats = attn_weights[:, :, :, :, None] * sampled_value_feats
         weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, -1)
@@ -977,6 +1012,7 @@ class MSDAv4(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         attention_weights (nn.Linear): Module computing the attention weights from the input features.
         value_proj (nn.Linear): Module computing value features from sample features.
+        val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
 
         num_levels (int): Integer containing the number of map levels to sample from.
@@ -984,7 +1020,8 @@ class MSDAv4(nn.Module):
         num_points (int): Integer containing the number of sampling points per head and per level.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1):
+    def __init__(self, in_size, sample_size, out_size=-1, num_levels=5, num_heads=8, num_points=4, value_size=-1,
+                 val_with_pos=False):
         """
         Initializes the MSDAv4 module.
 
@@ -996,6 +1033,7 @@ class MSDAv4(nn.Module):
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             value_size (int): Size of value features (default=-1).
+            val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1040,6 +1078,10 @@ class MSDAv4(nn.Module):
         self.value_proj = nn.Linear(sample_size, value_size)
         nn.init.xavier_uniform_(self.value_proj.weight)
         nn.init.zeros_(self.value_proj.bias)
+
+        # Initialize module computing the value position encodings if requested
+        if val_with_pos:
+            self.val_pos_encs = nn.Linear(3, value_size // num_heads)
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
@@ -1119,6 +1161,16 @@ class MSDAv4(nn.Module):
         sampled_feats = naive_maps_sampler_3d(value_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, value_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
+
+        # Get and add position encodings to sampled value features if needed
+        if hasattr(self, 'val_pos_encs'):
+            sample_xy = 0.5 * sample_offsets[:, :, :, :, :, :2] / self.num_points
+            sample_z = sample_locations[:, :, 2]
+            sample_z = sample_z.view(batch_size, self.num_heads, num_in_feats, self.num_levels, self.num_points, 1)
+            sample_z = sample_z.transpose(1, 2)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get weighted value features
         weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
