@@ -26,7 +26,8 @@ def pytorch_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample
     """
 
     # Get feature size
-    feat_size = feats.shape[2]
+    batch_size, _, feat_size = feats.size()
+    _, num_samples, _ = sample_xy.size()
 
     # Clamp sample locations between 0 and 1
     sample_xy = sample_xy.clamp_(min=0.0, max=1.0)
@@ -39,7 +40,7 @@ def pytorch_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample
     # Get unnormalized sample locations
     sample_xy = sample_xy * (sample_wh - 1)
 
-    # Get unweighted corner features
+    # Get corner features
     sample_ij = sample_xy.floor().to(dtype=torch.int64)
     sample_ij = torch.min(torch.stack([sample_ij, sample_wh-2], dim=3), dim=3)[0]
 
@@ -50,31 +51,31 @@ def pytorch_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample
 
     sample_ids = torch.cat([top_left_ids, top_right_ids, bot_left_ids, bot_right_ids], dim=1)
     corner_feats = torch.gather(feats, dim=1, index=sample_ids[:, :, None].expand(-1, -1, feat_size))
-    top_left_feats, top_right_feats, bot_left_feats, bot_right_feats = torch.chunk(corner_feats, chunks=4, dim=1)
 
     # Get corner weights
     right_weights, bot_weights = (sample_xy - sample_ij).split(1, dim=2)
     left_weights, top_weights = (1-right_weights, 1-bot_weights)
 
-    # Get X and Y derivatives if requested
-    if return_derivatives:
-        dx = top_weights * (top_right_feats-top_left_feats) + bot_weights * (bot_right_feats-bot_left_feats)
-        dy = left_weights * (bot_left_feats-top_left_feats) + right_weights * (bot_right_feats-top_right_feats)
-
-    # Get 2D weighted corner features
-    top_left_feats = left_weights * top_weights * top_left_feats
-    top_right_feats = right_weights * top_weights * top_right_feats
-    bot_left_feats = left_weights * bot_weights * bot_left_feats
-    bot_right_feats = right_weights * bot_weights * bot_right_feats
+    top_left_ws = left_weights * top_weights
+    top_right_ws = right_weights * top_weights
+    bot_left_ws = left_weights * bot_weights
+    bot_right_ws = right_weights * bot_weights
+    corner_weights = torch.cat([top_left_ws, top_right_ws, bot_left_ws, bot_right_ws], dim=1)
 
     # Get 2D sampled features
-    sampled_feats = top_left_feats + top_right_feats + bot_left_feats + bot_right_feats
+    sampled_feats = corner_weights * corner_feats
+    sampled_feats = sampled_feats.view(batch_size, 4, num_samples, feat_size).sum(dim=1)
 
-    # Return sampled features with derivatives if requested
-    if return_derivatives:
-        return sampled_feats, dx, dy
+    # Return if no derivatives are requested
+    if not return_derivatives:
+        return sampled_feats
 
-    return sampled_feats
+    # Get X and Y derivatives
+    top_left_feats, top_right_feats, bot_left_feats, bot_right_feats = torch.chunk(corner_feats, chunks=4, dim=1)
+    dx = top_weights * (top_right_feats-top_left_feats) + bot_weights * (bot_right_feats-bot_left_feats)
+    dy = left_weights * (bot_left_feats-top_left_feats) + right_weights * (bot_right_feats-top_right_feats)
+
+    return sampled_feats, dx, dy
 
 
 def pytorch_maps_sampler_3d(feats, feat_map_wh, feat_map_offs, sample_xyz, return_derivatives=False):
@@ -129,44 +130,40 @@ def pytorch_maps_sampler_3d(feats, feat_map_wh, feat_map_offs, sample_xyz, retur
 
     sample_ids = torch.cat([top_left_ids, top_right_ids, bot_left_ids, bot_right_ids], dim=1).flatten(1)
     corner_feats = torch.gather(feats, dim=1, index=sample_ids[:, :, None].expand(-1, -1, feat_size))
-
     corner_feats = corner_feats.view(batch_size, 4*num_samples, 2, feat_size)
-    top_left_feats, top_right_feats, bot_left_feats, bot_right_feats = torch.chunk(corner_feats, chunks=4, dim=1)
 
-    # Get corner weights
+    # Get 2D corner weights
     right_weights, bot_weights = (sample_xy - sample_ij).split(1, dim=3)
     left_weights, top_weights = (1-right_weights, 1-bot_weights)
 
-    back_weights = sample_z - sample_k
-    front_weights = 1-back_weights
-    front_back_weights = torch.stack([front_weights, back_weights], dim=2).unsqueeze(dim=3)
-
-    # Get X and Y derivatives if requested
-    if return_derivatives:
-        dx = top_weights * (top_right_feats-top_left_feats) + bot_weights * (bot_right_feats-bot_left_feats)
-        dy = left_weights * (bot_left_feats-top_left_feats) + right_weights * (bot_right_feats-top_right_feats)
-
-        dx = (front_back_weights*dx).sum(dim=2)
-        dy = (front_back_weights*dy).sum(dim=2)
-
-    # Get 2D weighted corner features
-    top_left_feats = left_weights * top_weights * top_left_feats
-    top_right_feats = right_weights * top_weights * top_right_feats
-    bot_left_feats = left_weights * bot_weights * bot_left_feats
-    bot_right_feats = right_weights * bot_weights * bot_right_feats
+    top_left_ws = left_weights * top_weights
+    top_right_ws = right_weights * top_weights
+    bot_left_ws = left_weights * bot_weights
+    bot_right_ws = right_weights * bot_weights
+    corner_weights = torch.cat([top_left_ws, top_right_ws, bot_left_ws, bot_right_ws], dim=1)
 
     # Get 2D sampled features
-    sampled_feats = top_left_feats + top_right_feats + bot_left_feats + bot_right_feats
-
-    # Get Z derivatives if requested
-    if return_derivatives:
-        dz = sampled_feats[:, :, 1, :] - sampled_feats[:, :, 0, :]
+    sampled_feats_2d = corner_weights * corner_feats
+    sampled_feats_2d = sampled_feats_2d.view(batch_size, 4, num_samples, 2, feat_size).sum(dim=1)
 
     # Get 3D sampled features
-    sampled_feats = (front_back_weights*sampled_feats).sum(dim=2)
+    back_weights = sample_z - sample_k
+    front_weights = 1-back_weights
 
-    # Return sampled features with derivatives if requested
-    if return_derivatives:
-        return sampled_feats, dx, dy, dz
+    front_back_weights = torch.stack([front_weights, back_weights], dim=2).unsqueeze(dim=3)
+    sampled_feats = (front_back_weights*sampled_feats_2d).sum(dim=2)
 
-    return sampled_feats
+    # Return if no derivatives are requested
+    if not return_derivatives:
+        return sampled_feats
+
+    # Get X, Y and Z derivatives
+    top_left_feats, top_right_feats, bot_left_feats, bot_right_feats = torch.chunk(corner_feats, chunks=4, dim=1)
+    dx = top_weights * (top_right_feats-top_left_feats) + bot_weights * (bot_right_feats-bot_left_feats)
+    dy = left_weights * (bot_left_feats-top_left_feats) + right_weights * (bot_right_feats-top_right_feats)
+
+    dx = (front_back_weights*dx).sum(dim=2)
+    dy = (front_back_weights*dy).sum(dim=2)
+    dz = sampled_feats_2d[:, :, 1, :] - sampled_feats_2d[:, :, 0, :]
+
+    return sampled_feats, dx, dy, dz
