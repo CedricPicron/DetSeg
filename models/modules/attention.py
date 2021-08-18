@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from models.ops.sampler.functional import naive_maps_sampler_2d, naive_maps_sampler_3d
+from models.ops.sampler.functional import pytorch_maps_sampler_2d, pytorch_maps_sampler_3d
 
 
 class Attn2d(nn.Module):
@@ -779,7 +779,7 @@ class MSDAv2(nn.Module):
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
 
         sampler_args = (value_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
-        sampled_feats = naive_maps_sampler_2d(*sampler_args)
+        sampled_feats = pytorch_maps_sampler_2d(*sampler_args)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, value_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -967,7 +967,7 @@ class MSDAv3(nn.Module):
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
 
         sampler_args = (kv_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
-        sampled_feats = naive_maps_sampler_2d(*sampler_args)
+        sampled_feats = pytorch_maps_sampler_2d(*sampler_args)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, kv_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -1158,7 +1158,7 @@ class MSDAv4(nn.Module):
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
 
-        sampled_feats = naive_maps_sampler_3d(value_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
+        sampled_feats = pytorch_maps_sampler_3d(value_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, value_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 
