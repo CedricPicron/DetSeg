@@ -236,10 +236,10 @@ def build_det_heads(args):
             ca_dict = {'type': args.sbd_ca_type, 'layers': args.sbd_ca_layers, 'in_size': args.sbd_state_size}
             ca_dict = {**ca_dict, 'sample_size': in_feat_size, 'out_size': args.sbd_state_size}
             ca_dict = {**ca_dict, 'norm': args.sbd_ca_norm, 'act_fn': args.sbd_ca_act_fn, 'skip': True}
-            ca_dict = {**ca_dict, 'version': args.sbd_ca_version, 'num_levels': num_levels}
-            ca_dict = {**ca_dict, 'num_heads': args.sbd_ca_num_heads, 'num_points': args.sbd_ca_num_points}
-            ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'value_size': args.sbd_ca_value_size}
-            ca_dict = {**ca_dict, 'val_with_pos': args.sbd_ca_val_with_pos}
+            ca_dict = {**ca_dict, 'version': args.sbd_ca_version, 'num_heads': args.sbd_ca_num_heads}
+            ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.sbd_ca_num_points}
+            ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'val_size': args.sbd_ca_val_size}
+            ca_dict = {**ca_dict, 'val_with_pos': args.sbd_ca_val_with_pos, 'norm_deltas': args.sbd_ca_norm_deltas}
 
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}

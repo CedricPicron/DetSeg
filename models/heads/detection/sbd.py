@@ -10,7 +10,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.modules.attention import DeformableAttn, SelfAttn1d
+from models.modules.attention import DeformableAttn, ParticleAttn, SelfAttn1d
 from models.modules.container import Sequential
 from models.modules.mlp import OneStepMLP, TwoStepMLP
 from structures.boxes import apply_box_deltas, Boxes, box_giou, box_iou, get_box_deltas
@@ -56,7 +56,7 @@ class SBD(nn.Module):
         nms_thr (float): IoU threshold used during NMS to remove duplicate detections.
         max_dets (int): Integer containing the maximum number of detections during prediction.
 
-        up_has_deformable (boolean): Boolean indicating whether update layers contain deformable attention layers.
+        up_ca_type (str): String containing the type of cross-attention used by the update layers.
         up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
         up_iters (int): Integer containing the number of iterations over all update layers.
 
@@ -169,12 +169,13 @@ class SBD(nn.Module):
                 - act_fn (str): string containing the type of activation function of the CA network;
                 - skip (bool): boolean indicating whether layers of the CA network contain skip connections;
                 - version (int): integer containing the version of the CA network;
-                - num_levels (int): integer containing the number of map levels for the CA network to sample from;
                 - num_heads (int): integer containing the number of attention heads of the CA network;
-                - num_points (int): integer containing the number of deformable points of the CA network;
+                - num_levels (int): integer containing the number of map levels for the CA network to sample from;
+                - num_points (int): integer containing the number of points of the CA network;
                 - qk_size (int): query and key feature size of the CA network;
-                - value_size (int): value feature size of the CA network;
-                - val_with_pos (bool): boolean indicating whether position info is added to CA value features.
+                - val_size (int): value feature size of the CA network;
+                - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
+                - norm_deltas (bool): boolean indicating whether PA sample deltas should be normalized.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -258,7 +259,7 @@ class SBD(nn.Module):
 
         # Initialization of update layers and attributes
         module_dict = OrderedDict()
-        self.up_has_deformable = False
+        self.up_ca_type = ''
 
         if update_dict['layers'] > 0:
             for module_type in update_dict['types']:
@@ -268,7 +269,7 @@ class SBD(nn.Module):
 
                 elif module_type == 'ca':
                     module_dict['ca'] = SBD.get_net(ca_dict)
-                    self.up_has_deformable = ca_dict['type'] == 'deformable_attn'
+                    self.up_ca_type = ca_dict['type']
 
                 elif module_type == 'sa':
                     module_dict['sa'] = SBD.get_net(sa_dict)
@@ -283,6 +284,15 @@ class SBD(nn.Module):
         up_layer = Sequential(module_dict)
         self.up_layers = nn.ModuleList([deepcopy(up_layer) for _ in range(update_dict['layers'])])
         self.up_iters = update_dict['iters']
+
+        if self.up_ca_type == 'particle_attn':
+            ca_id = update_dict['types'].index('ca')
+            last_pa_layer = self.up_layers[-1][ca_id][0].pa
+
+            last_pa_layer.update_sample_locations = False
+            delattr(last_pa_layer, 'delta_x')
+            delattr(last_pa_layer, 'delta_y')
+            delattr(last_pa_layer, 'norm_deltas')
 
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
@@ -306,12 +316,13 @@ class SBD(nn.Module):
                 - act_fn (str): string containing the type of activation function of the network;
                 - skip (bool): boolean indicating whether layers of the network contain skip connections;
                 - version (int): integer containing the version of the network;
-                - num_levels (int): integer containing the number of map levels for the network to sample from;
                 - num_heads (int): integer containing the number of attention heads of the network;
-                - num_points (int): integer containing the number of deformable points of the network;
+                - num_levels (int): integer containing the number of map levels for the network to sample from;
+                - num_points (int): integer containing the number of points of the network;
                 - qk_size (int): query and key feature size of the network;
-                - value_size (int): value feature size of the network;
-                - val_with_pos (bool): boolean indicating whether position info is added to value features.
+                - val_size (int): value feature size of the network;
+                - val_with_pos (bool): boolean indicating whether position info is added to value features;
+                - norm_deltas (bool): boolean indicating whether PA sample deltas should be normalized.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -323,8 +334,8 @@ class SBD(nn.Module):
 
         if net_dict['type'] == 'deformable_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
-            net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_levels', 'num_heads', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'value_size', 'val_with_pos')
+            net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = DeformableAttn(*net_args, **net_kwargs)
 
@@ -332,6 +343,13 @@ class SBD(nn.Module):
             net_args = (net_dict['in_size'], net_dict['out_size'])
             net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'skip')}
             net_layer = OneStepMLP(*net_args, **net_kwargs)
+
+        elif net_dict['type'] == 'particle_attn':
+            net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
+            net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'norm_deltas')
+            net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
+            net_layer = ParticleAttn(*net_args, **net_kwargs)
 
         elif net_dict['type'] == 'self_attn_1d':
             net_args = (net_dict['in_size'], net_dict['out_size'])
@@ -950,7 +968,7 @@ class SBD(nn.Module):
                 up_kwargs[i]['add_encs'] = anchor_encs[i]
                 up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
-        if self.up_has_deformable:
+        if self.up_ca_type in ('deformable_attn', 'particle_attn'):
             sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=feats.device)
             sample_map_start_ids = sample_map_shapes.prod(dim=1).cumsum(dim=0)[:-1]
             sample_map_start_ids = torch.cat([sample_map_shapes.new_zeros((1,)), sample_map_start_ids], dim=0)
@@ -962,6 +980,9 @@ class SBD(nn.Module):
                 up_kwargs[i]['sample_feats'] = feats[i]
                 up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
+
+                if self.up_ca_type == 'particle_attn':
+                    up_kwargs[i]['storage_dict'] = {}
 
         # Check whether the number of update iteration is greater than zero
         if self.up_iters < 1:
@@ -983,7 +1004,7 @@ class SBD(nn.Module):
                         scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in range(batch_size)]
 
                 # Get dynamic keyword arguments for update layers
-                if self.state_type == 'abs' and self.up_has_deformable:
+                if self.state_type == 'abs' and self.up_ca_type in ('deformable_attn', 'particle_attn'):
                     for i in range(batch_size):
                         up_kwargs[i]['sample_priors'] = box_preds[i]
 
@@ -992,7 +1013,7 @@ class SBD(nn.Module):
                         up_kwargs[i]['add_encs'] = anchor_encs[i]
                         up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
-                        if self.up_has_deformable:
+                        if self.up_ca_type in ('deformable_attn', 'particle_attn'):
                             up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
 
                 # Update object states

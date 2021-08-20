@@ -473,8 +473,10 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_pred_dup_removal = 'nms'
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
-    main_args.sbd_ca_version = 4
+    main_args.sbd_ca_type = 'particle_attn'
+    main_args.sbd_ca_version = 1
     main_args.sbd_ca_val_with_pos = False
+    main_args.sbd_ca_norm_deltas = False
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)['sbd'].to('cuda')
 
