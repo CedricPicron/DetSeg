@@ -175,7 +175,7 @@ class SBD(nn.Module):
                 - qk_size (int): query and key feature size of the CA network;
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
-                - step_size (int): integer containing the CA sample step size relative to the step normalization;
+                - step_size (float): size of the CA sample steps relative to the sample step normalization;
                 - step_norm (str): string containing the type of CA sample step normalization.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
@@ -319,7 +319,7 @@ class SBD(nn.Module):
                 - qk_size (int): query and key feature size of the network;
                 - val_size (int): value feature size of the network;
                 - val_with_pos (bool): boolean indicating whether position info is added to value features;
-                - step_size (int): integer containing the sample step size relative to the step normalization;
+                - step_size (float): size of the sample steps relative to the sample step normalization;
                 - step_norm (str): string containing the type of sample step normalization.
 
         Returns:

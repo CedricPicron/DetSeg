@@ -1213,7 +1213,7 @@ class ParticleAttn(nn.Module):
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
-            step_size (int): Integer containing the sample step size relative to the step normalization (default=-1).
+            step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
             step_norm (str): String containing the type of sample step normalization (default='map').
 
         Raises:
@@ -1337,7 +1337,7 @@ class PAv1(nn.Module):
         If update_sample_locations is True:
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
-            step_size (int): Integer containing the sample step size relative to the step normalization.
+            step_size (float): Size of the sample steps relative to the sample step normalization.
             step_norm (str): String containing the type of sample step normalization.
     """
 
@@ -1355,7 +1355,7 @@ class PAv1(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
-            step_size (int): Integer containing the sample step size relative to the step normalization (default=-1).
+            step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
             step_norm (str): String containing the type of sample step normalization (default='map').
 
         Raises:
