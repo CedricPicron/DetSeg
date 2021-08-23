@@ -1263,6 +1263,10 @@ class ParticleAttn(nn.Module):
             self.pa = PAv1(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
                            step_size, step_norm)
 
+        elif version == 2:
+            self.pa = PAv2(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
+                           step_size, step_norm)
+
         else:
             error_msg = f"Invalid PA version number '{version}'."
             raise ValueError(error_msg)
@@ -1559,6 +1563,254 @@ class PAv1(nn.Module):
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.view(batch_size * self.num_heads, -1, 2)
+            next_sample_locations = sample_locations + sample_steps
+            storage_dict['sample_locations'] = next_sample_locations
+
+        return out_feats
+
+
+class PAv2(nn.Module):
+    """
+    Class implementing the PAv2 module.
+
+    Attributes:
+        num_heads (int): Integer containing the number of attention heads.
+        num_levels (int): Integer containing the number of map levels to sample from.
+        num_points (int): Integer containing the number of sampling points per head and per level.
+
+        val_proj (nn.Linear): Module computing value features from sample features.
+        val_pos_encs (nn.Linear): Optional module computing the value position encodings.
+        attn_weights (nn.Linear): Module computing the attention weights from the input features.
+        out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        update_sample_locations (bool): Boolean indicating whether sample locations should be updated.
+
+        If update_sample_locations is True:
+            steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
+            steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
+            step_size (float): Size of the sample steps relative to the sample step normalization.
+            step_norm (str): String containing the type of sample step normalization.
+    """
+
+    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
+                 val_with_pos=False, step_size=-1, step_norm='map'):
+        """
+        Initializes the PAv2 module.
+
+        Args:
+            in_size (int): Size of input features.
+            sample_size (int): Size of sample features.
+            out_size (int): Size of output features (default=-1).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
+            num_points (int): Integer containing the number of sampling points per head and per level (default=4).
+            val_size (int): Size of value features (default=-1).
+            val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
+            step_norm (str): String containing the type of sample step normalization (default='map').
+
+        Raises:
+            ValueError: Error when the input feature size does not divide the number of heads.
+            ValueError: Error when the value feature size does not divide the number of heads.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes related to the number of heads, levels and points
+        self.num_heads = num_heads
+        self.num_levels = num_levels
+        self.num_points = num_points
+
+        # Check divisibility input size by number of heads
+        if in_size % num_heads != 0:
+            error_msg = f"The input feature size ({in_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Get and check size of value features
+        if val_size == -1:
+            val_size = in_size
+
+        elif val_size % num_heads != 0:
+            error_msg = f"The value feature size ({val_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the value features
+        self.val_proj = nn.Linear(sample_size, val_size)
+        nn.init.xavier_uniform_(self.val_proj.weight)
+        nn.init.zeros_(self.val_proj.bias)
+
+        # Initialize module computing the value position encodings if requested
+        if val_with_pos:
+            self.val_pos_encs = nn.Linear(3, val_size // num_heads)
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.out_proj = nn.Linear(val_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+        # Set attribute determining whether sample locations should be updated
+        self.update_sample_locations = True
+
+        # Initialize modules computing the unnormalized sample steps
+        self.steps_weight = nn.Parameter(torch.zeros(num_heads*num_levels*num_points*2, val_size // num_heads, 1))
+        self.steps_bias = nn.Parameter(torch.zeros(num_heads*num_levels*num_points*2, 1, 1))
+
+        # Set attributes related to the sizes of the sample steps
+        self.step_size = step_size
+        self.step_norm = step_norm
+
+    def no_sample_locations_update(self):
+        """
+        Method changing the module to not update the sample locations.
+        """
+
+        # Change attribute to remember that sample locations should not be updated
+        self.update_sample_locations = False
+
+        # Delete all attributes related to the update of sample locations
+        delattr(self, 'steps_weight')
+        delattr(self, 'steps_bias')
+        delattr(self, 'step_size')
+        delattr(self, 'step_norm')
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict):
+        """
+        Forward method of the PAv2 module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [batch_size, num_in_feats, in_size].
+            sample_priors (FloatTensor): Sample priors of shape [batch_size, num_in_feats, {2, 4}].
+            sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
+            sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
+            sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            storage_dict (Dict): Dictionary storing additional arguments such as the sample locations.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
+
+        Raises:
+            ValueError: Error when 'sample_locations' is missing and 'sample_priors' is not provided.
+            ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
+            ValueError: Error when invalid sample step normalization type is provided.
+        """
+
+        # Get shapes of input tensors
+        batch_size, num_in_feats = in_feats.shape[:2]
+        common_shape = (batch_size, num_in_feats, self.num_heads)
+
+        # Flip sample map shapes
+        sample_map_shapes = sample_map_shapes.fliplr()
+
+        # Get value features
+        val_feats = self.val_proj(sample_feats)
+        val_size = val_feats.shape[-1]
+        val_feats = val_feats.view(batch_size, -1, self.num_heads, val_size // self.num_heads)
+        val_feats = val_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, val_size // self.num_heads)
+
+        # Get sample locations
+        sample_locations = storage_dict.pop('sample_locations', None)
+
+        if sample_locations is None:
+            thetas = torch.arange(self.num_heads, dtype=torch.float, device=sample_feats.device)
+            thetas = thetas * (2.0 * math.pi / self.num_heads)
+
+            sample_offsets = torch.stack([thetas.cos(), thetas.sin()], dim=1)
+            sample_offsets = sample_offsets / sample_offsets.abs().max(dim=1, keepdim=True)[0]
+            sample_offsets = sample_offsets.view(self.num_heads, 1, 1, 2).repeat(1, self.num_levels, 1, 1)
+
+            sizes = torch.arange(1, self. num_points+1, dtype=torch.float, device=sample_feats.device)
+            sample_offsets = sizes[None, None, :, None] * sample_offsets
+            sample_offsets = sample_offsets[None, None, :, :, :, :]
+
+            if sample_priors is None:
+                error_msg = "Argument 'sample_priors' must be provided when argument 'sample_locations' is missing."
+                raise ValueError(error_msg)
+
+            if sample_priors.shape[-1] == 2:
+                offset_normalizers = sample_map_shapes[None, None, None, :, None, :]
+                sample_locations = sample_priors[:, :, None, None, None, :]
+                sample_locations = sample_locations + sample_offsets / offset_normalizers
+
+            elif sample_priors.shape[-1] == 4:
+                offset_factors = 0.5 * sample_priors[:, :, None, None, None, 2:] / self.num_points
+                sample_locations = sample_priors[:, :, None, None, None, :2]
+                sample_locations = sample_locations + sample_offsets * offset_factors
+
+            else:
+                error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
+                raise ValueError(error_msg)
+
+            sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 2)
+
+        # Get sampled value features and corresponding derivatives if needed
+        sample_map_ids = torch.arange(self.num_levels, device=sample_feats.device)
+        sample_map_ids = sample_map_ids[None, None, :, None]
+        sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
+        sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
+        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+
+        if self.update_sample_locations:
+            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+        else:
+            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+
+        sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
+        sampled_feats = sampled_feats.transpose(1, 2)
+
+        # Get and add position encodings to sampled value features if needed
+        if hasattr(self, 'val_pos_encs'):
+            sample_xy = 0.5 * sample_offsets / self.num_points
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
+            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
+
+        # Get attention weights
+        attn_weights = self.attn_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=3)
+
+        # Get weighted value features
+        weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
+        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, val_size)
+
+        # Get output features
+        out_feats = self.out_proj(weighted_feats)
+
+        # Update sample locations in storage dictionary if needed
+        if self.update_sample_locations:
+            derivatives = torch.stack([dx, dy], dim=2)
+            derivatives = derivatives.view(batch_size, self.num_heads, num_in_feats, -1, 2, val_size // self.num_heads)
+            derivatives = derivatives.permute(1, 3, 4, 0, 2, 5)
+            derivatives = derivatives.reshape(-1, batch_size * num_in_feats, val_size // self.num_heads)
+
+            sample_steps = torch.bmm(derivatives, self.steps_weight) + self.steps_bias
+            sample_steps = sample_steps.view(self.num_heads, self.num_levels, self.num_points, 2, batch_size, -1)
+            sample_steps = sample_steps.permute(4, 0, 5, 1, 2, 3)
+
+            if self.step_size > 0:
+                sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
+
+            if self.step_norm == 'map':
+                step_normalizers = sample_map_shapes[None, None, None, :, None, :]
+                sample_steps = sample_steps / step_normalizers
+
+            elif self.step_norm == 'anchor':
+                step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
+                sample_steps = sample_steps * step_factors
+
+            else:
+                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                raise ValueError(error_msg)
+
+            sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 2)
             next_sample_locations = sample_locations + sample_steps
             storage_dict['sample_locations'] = next_sample_locations
 
