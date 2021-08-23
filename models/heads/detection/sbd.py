@@ -175,7 +175,8 @@ class SBD(nn.Module):
                 - qk_size (int): query and key feature size of the CA network;
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
-                - norm_deltas (bool): boolean indicating whether PA sample deltas should be normalized.
+                - step_size (int): integer containing the CA sample step size relative to the step normalization;
+                - step_norm (str): string containing the type of CA sample step normalization.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -288,11 +289,7 @@ class SBD(nn.Module):
         if self.up_ca_type == 'particle_attn':
             ca_id = update_dict['types'].index('ca')
             last_pa_layer = self.up_layers[-1][ca_id][0].pa
-
-            last_pa_layer.update_sample_locations = False
-            delattr(last_pa_layer, 'delta_x')
-            delattr(last_pa_layer, 'delta_y')
-            delattr(last_pa_layer, 'norm_deltas')
+            last_pa_layer.no_sample_locations_update()
 
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
@@ -322,7 +319,8 @@ class SBD(nn.Module):
                 - qk_size (int): query and key feature size of the network;
                 - val_size (int): value feature size of the network;
                 - val_with_pos (bool): boolean indicating whether position info is added to value features;
-                - norm_deltas (bool): boolean indicating whether PA sample deltas should be normalized.
+                - step_size (int): integer containing the sample step size relative to the step normalization;
+                - step_norm (str): string containing the type of sample step normalization.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -347,7 +345,7 @@ class SBD(nn.Module):
         elif net_dict['type'] == 'particle_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'norm_deltas')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = ParticleAttn(*net_args, **net_kwargs)
 

@@ -1194,7 +1194,8 @@ class ParticleAttn(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=1, num_heads=8,
-                 num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False, norm_deltas=False):
+                 num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False, step_size=-1,
+                 step_norm='map'):
         """
         Initializes the ParticleAttn module.
 
@@ -1212,7 +1213,8 @@ class ParticleAttn(nn.Module):
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
-            norm_deltas (bool): Boolean indicating whether sample deltas should be normalized (default=False).
+            step_size (int): Integer containing the sample step size relative to the step normalization (default=-1).
+            step_norm (str): String containing the type of sample step normalization (default='map').
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.
@@ -1259,7 +1261,7 @@ class ParticleAttn(nn.Module):
         # Initialization of actual particle attention module
         if version == 1:
             self.pa = PAv1(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           norm_deltas)
+                           step_size, step_norm)
 
         else:
             error_msg = f"Invalid PA version number '{version}'."
@@ -1333,13 +1335,14 @@ class PAv1(nn.Module):
         update_sample_locations (bool): Boolean indicating whether sample locations should be updated.
 
         If update_sample_locations is True:
-            delta_x (nn.ModuleList): List [num_heads] with modules computing the unnormalized X-axis sample deltas.
-            delta_y (nn.ModuleList): List [num_heads] with modules computing the unnormalized Y-axis sample deltas.
-            norm_deltas (bool): Boolean indicating whether sample deltas should be normalized.
+            steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
+            steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
+            step_size (int): Integer containing the sample step size relative to the step normalization.
+            step_norm (str): String containing the type of sample step normalization.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, norm_deltas=False):
+                 val_with_pos=False, step_size=-1, step_norm='map'):
         """
         Initializes the PAv1 module.
 
@@ -1352,7 +1355,8 @@ class PAv1(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
-            norm_deltas (bool): Boolean indicating whether sample deltas should be normalized (default=False).
+            step_size (int): Integer containing the sample step size relative to the step normalization (default=-1).
+            step_norm (str): String containing the type of sample step normalization (default='map').
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1403,15 +1407,27 @@ class PAv1(nn.Module):
         # Set attribute determining whether sample locations should be updated
         self.update_sample_locations = True
 
-        # Initialize modules computing the unnormalized sample deltas
-        self.delta_x = nn.ModuleList([nn.Linear(val_size // num_heads, 1) for _ in range(num_heads)])
-        self.delta_y = nn.ModuleList([nn.Linear(val_size // num_heads, 1) for _ in range(num_heads)])
+        # Initialize modules computing the unnormalized sample steps
+        self.steps_weight = nn.Parameter(torch.zeros(num_heads*2, val_size // num_heads, 1))
+        self.steps_bias = nn.Parameter(torch.zeros(num_heads*2, 1, 1))
 
-        [nn.init.zeros_(module.bias) for module in self.delta_x]
-        [nn.init.zeros_(module.bias) for module in self.delta_y]
+        # Set attributes related to the sizes of the sample steps
+        self.step_size = step_size
+        self.step_norm = step_norm
 
-        # Set attribute determining whether sample deltas should be normalized
-        self.norm_deltas = norm_deltas
+    def no_sample_locations_update(self):
+        """
+        Method changing the module to not update the sample locations.
+        """
+
+        # Change attribute to remember that sample locations should not be updated
+        self.update_sample_locations = False
+
+        # Delete all attributes related to the update of sample locations
+        delattr(self, 'steps_weight')
+        delattr(self, 'steps_bias')
+        delattr(self, 'step_size')
+        delattr(self, 'step_norm')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict):
         """
@@ -1431,6 +1447,7 @@ class PAv1(nn.Module):
         Raises:
             ValueError: Error when 'sample_locations' is missing and 'sample_priors' is not provided.
             ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
+            ValueError: Error when invalid sample step normalization type is provided.
         """
 
         # Get shapes of input tensors
@@ -1518,22 +1535,31 @@ class PAv1(nn.Module):
 
         # Update sample locations in storage dictionary if needed
         if self.update_sample_locations:
-            dx = dx.view(batch_size, self.num_heads, -1, val_size // self.num_heads)
-            dy = dy.view(batch_size, self.num_heads, -1, val_size // self.num_heads)
+            derivatives = torch.stack([dx, dy], dim=1)
+            derivatives = derivatives.view(batch_size, self.num_heads, 2, -1, val_size // self.num_heads)
+            derivatives = derivatives.permute(1, 2, 0, 3, 4).view(self.num_heads*2, -1, val_size // self.num_heads)
 
-            delta_x = torch.stack([self.delta_x[i](dx[:, i, :, :]) for i in range(self.num_heads)], dim=1)
-            delta_y = torch.stack([self.delta_y[i](dy[:, i, :, :]) for i in range(self.num_heads)], dim=1)
-            deltas = torch.cat([delta_x, delta_y], dim=3)
+            sample_steps = torch.bmm(derivatives, self.steps_weight) + self.steps_bias
+            sample_steps = sample_steps.view(self.num_heads, 2, batch_size, -1, self.num_levels, self.num_points)
+            sample_steps = sample_steps.permute(2, 0, 3, 4, 5, 1)
 
-            if self.norm_deltas:
-                deltas = F.normalize(deltas, dim=3)
+            if self.step_size > 0:
+                sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            delta_normalizers = sample_map_shapes[None, None, None, :, None, :]
-            deltas = deltas.view(batch_size, self.num_heads, num_in_feats, self.num_levels, self.num_points, 2)
-            deltas = deltas / delta_normalizers
+            if self.step_norm == 'map':
+                step_normalizers = sample_map_shapes[None, None, None, :, None, :]
+                sample_steps = sample_steps / step_normalizers
 
-            deltas = deltas.view(batch_size * self.num_heads, -1, 2)
-            next_sample_locations = sample_locations + deltas
+            elif self.step_norm == 'anchor':
+                step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
+                sample_steps = sample_steps * step_factors
+
+            else:
+                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                raise ValueError(error_msg)
+
+            sample_steps = sample_steps.view(batch_size * self.num_heads, -1, 2)
+            next_sample_locations = sample_locations + sample_steps
             storage_dict['sample_locations'] = next_sample_locations
 
         return out_feats
