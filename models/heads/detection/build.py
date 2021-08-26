@@ -240,7 +240,7 @@ def build_det_heads(args):
             ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.sbd_ca_num_points}
             ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'val_size': args.sbd_ca_val_size}
             ca_dict = {**ca_dict, 'val_with_pos': args.sbd_ca_val_with_pos, 'step_size': args.sbd_ca_step_size}
-            ca_dict = {**ca_dict, 'step_norm': args.sbd_ca_step_norm}
+            ca_dict = {**ca_dict, 'step_norm': args.sbd_ca_step_norm, 'num_particles': args.sbd_ca_num_particles}
 
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}

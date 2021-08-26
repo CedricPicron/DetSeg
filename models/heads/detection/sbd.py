@@ -176,7 +176,8 @@ class SBD(nn.Module):
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
                 - step_size (float): size of the CA sample steps relative to the sample step normalization;
-                - step_norm (str): string containing the type of CA sample step normalization.
+                - step_norm (str): string containing the type of CA sample step normalization;
+                - num_particles (int): integer containing the number of particles per CA head.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
                 - type (str): string containing the type of SA network;
@@ -320,7 +321,8 @@ class SBD(nn.Module):
                 - val_size (int): value feature size of the network;
                 - val_with_pos (bool): boolean indicating whether position info is added to value features;
                 - step_size (float): size of the sample steps relative to the sample step normalization;
-                - step_norm (str): string containing the type of sample step normalization.
+                - step_norm (str): string containing the type of sample step normalization;
+                - num_particles (int): integer containing the number of particles per head.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -345,7 +347,7 @@ class SBD(nn.Module):
         elif net_dict['type'] == 'particle_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm', 'num_particles')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = ParticleAttn(*net_args, **net_kwargs)
 
@@ -980,6 +982,7 @@ class SBD(nn.Module):
                 up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
 
                 if self.up_ca_type == 'particle_attn':
+                    up_kwargs[i]['sample_feat_ids'] = feat_ids[i]
                     up_kwargs[i]['storage_dict'] = {}
 
         # Check whether the number of update iteration is greater than zero

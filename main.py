@@ -311,6 +311,7 @@ def get_parser():
     parser.add_argument('--sbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
     parser.add_argument('--sbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
     parser.add_argument('--sbd_ca_step_norm', default='map', type=str, help='normalization type of CA sample steps')
+    parser.add_argument('--sbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
 
     parser.add_argument('--sbd_sa_type', default='self_attn_1d', type=str, help='SA network type')
     parser.add_argument('--sbd_sa_layers', default=1, type=int, help='number of layers of SA network')
