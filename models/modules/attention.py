@@ -3123,7 +3123,8 @@ class PAv7(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xyz = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 3)
+            sample_xyz = sample_locations.clone()
+            sample_xyz = sample_xyz.view(batch_size, self.num_heads, num_in_feats, -1, 3)
 
             sample_xy = sample_xyz[:, :, :, :, :2]
             sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
@@ -3409,7 +3410,8 @@ class PAv8(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xyz = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 3)
+            sample_xyz = sample_locations.clone()
+            sample_xyz = sample_xyz.view(batch_size, self.num_heads, num_in_feats, -1, 3)
 
             sample_xy = sample_xyz[:, :, :, :, :2]
             sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
