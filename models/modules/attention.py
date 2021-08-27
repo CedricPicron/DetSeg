@@ -1546,11 +1546,16 @@ class PAv1(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -1796,11 +1801,16 @@ class PAv2(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -2064,11 +2074,16 @@ class PAv3(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -2338,11 +2353,16 @@ class PAv4(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -2576,11 +2596,16 @@ class PAv5(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -2812,11 +2837,16 @@ class PAv6(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets / self.num_points
-            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2) / (self.num_levels-1)
+            sample_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_z = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1, 1)
+            sample_z = sample_z / (self.num_levels-1)
+
+            sample_xyz = torch.cat([sample_xy, sample_z], dim=4).transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get query features
@@ -3093,12 +3123,16 @@ class PAv7(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets[:, :, :, :, :, :2] / self.num_points
-            sample_z = sample_locations[:, :, 2]
-            sample_z = sample_z.view(batch_size, self.num_heads, num_in_feats, self.num_levels, self.num_points, 1)
-            sample_z = sample_z.transpose(1, 2)
+            sample_xyz = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 3)
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
+            sample_xy = sample_xyz[:, :, :, :, :2]
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
+
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_xyz[:, :, :, :, :2] = sample_xy
+            sample_xyz = sample_xyz.transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
@@ -3375,12 +3409,16 @@ class PAv8(nn.Module):
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
-            sample_xy = 0.5 * sample_offsets[:, :, :, :, :2] / self.num_particles
-            sample_z = sample_locations[:, :, 2]
-            sample_z = sample_z.view(batch_size, self.num_heads, num_in_feats, self.num_particles, 1)
-            sample_z = sample_z.transpose(1, 2)
+            sample_xyz = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 3)
 
-            sample_xyz = torch.cat([sample_xy, sample_z], dim=4)
+            sample_xy = sample_xyz[:, :, :, :, :2]
+            sample_xy = sample_xy - sample_priors[:, None, :, None, :2]
+
+            if sample_priors.shape[-1] == 4:
+                sample_xy = sample_xy / sample_priors[:, None, :, None, 2:]
+
+            sample_xyz[:, :, :, :, :2] = sample_xy
+            sample_xyz = sample_xyz.transpose(1, 2)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
         # Get attention weights
