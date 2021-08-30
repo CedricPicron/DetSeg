@@ -209,6 +209,9 @@ def get_parser():
     parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive anchors per DOD target')
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
+    # *** Map-Based Detector (MBD) head
+    parser.add_argument('--mbd_train_sbd', action='store_true', help='whether underlying SBD module should be trained')
+
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')
@@ -229,7 +232,7 @@ def get_parser():
     parser.add_argument('--ret_nms_threshold', default=0.5, type=float, help='retina head NMS threshold')
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
-    # ** State-Based Detector (SBD) head
+    # *** State-Based Detector (SBD) head
     parser.add_argument('--sbd_state_size', default=256, type=int, help='size of SBD object states')
     parser.add_argument('--sbd_state_type', default='rel_static', type=str, help='type of SBD object states')
 
@@ -548,6 +551,12 @@ def main(args):
 
     for family_name in param_families:
         if len(param_dicts[family_name]['params']) == 0:
+            param_dicts.pop(family_name)
+
+        elif param_dicts[family_name]['lr'] <= 0:
+            for parameter in param_dicts[family_name]['params']:
+                parameter.requires_grad_(False)
+
             param_dicts.pop(family_name)
 
     optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)

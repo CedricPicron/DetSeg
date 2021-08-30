@@ -702,7 +702,7 @@ class SBD(nn.Module):
         return loss_dict, analysis_dict, pos_pred_ids, pos_tgt_ids
 
     @torch.no_grad()
-    def make_predictions(self, cls_preds, box_preds, pred_anchors=None):
+    def make_predictions(self, cls_preds, box_preds, pred_anchors=None, return_obj_ids=False):
         """
         Makes classified bounding box predictions.
 
@@ -718,6 +718,9 @@ class SBD(nn.Module):
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
 
+            If 'return_obj_ids' is True, the prediction dictionary additionally contains following key:
+                - obj_ids (List): list [batch_size] containing the object indices of predicitons of shape [num_preds].
+
         Raises:
             ValueError: Error when no prediction anchors are provided when using relative object states.
             ValueError: Error when invalid object state type is provided.
@@ -730,6 +733,9 @@ class SBD(nn.Module):
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
+
+        if return_obj_ids:
+            pred_dict['obj_ids'] = []
 
         # Get predictions for every batch entry
         for i in range(batch_size):
@@ -771,17 +777,17 @@ class SBD(nn.Module):
                 boxes_i = boxes_i[top_pred_ids].to_format('xyxy')
                 scores_i = scores_i[top_pred_ids]
                 labels_i = labels_i[top_pred_ids]
-                top_pred_ids = batched_nms(boxes_i.boxes, scores_i, labels_i, iou_threshold=self.nms_thr)
+                non_dup_ids = batched_nms(boxes_i.boxes, scores_i, labels_i, iou_threshold=self.nms_thr)
 
             else:
                 error_msg = f"Invalid duplicate removal mechanism '{self.dup_removal}'."
                 raise ValueError(error_msg)
 
             # Keep maximum number of allowed predictions
-            top_pred_ids = top_pred_ids[:self.max_dets]
-            labels_i = labels_i[top_pred_ids]
-            boxes_i = boxes_i[top_pred_ids]
-            scores_i = scores_i[top_pred_ids]
+            non_dup_ids = non_dup_ids[:self.max_dets]
+            labels_i = labels_i[non_dup_ids]
+            boxes_i = boxes_i[non_dup_ids]
+            scores_i = scores_i[non_dup_ids]
 
             # Append predictions to their respective lists
             pred_dict['labels'].append(labels_i)
@@ -789,13 +795,19 @@ class SBD(nn.Module):
             pred_dict['scores'].append(scores_i)
             pred_dict['batch_ids'].append(torch.full_like(labels_i, i))
 
+            if return_obj_ids:
+                num_preds_i = len(cls_preds_i)
+                obj_ids_i = torch.arange(num_preds_i, device=cls_preds_i.device)
+                obj_ids_i = obj_ids_i[well_defined][top_pred_ids][non_dup_ids]
+                pred_dict['obj_ids'].append(obj_ids_i)
+
         # Concatenate predictions of different batch entries
-        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k not in ['boxes', 'obj_ids']})
         pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
 
         return pred_dict
 
-    def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, images=None, stand_alone=True, visualize=False, **kwargs):
         """
         Forward method of the SBD head.
 
@@ -808,6 +820,7 @@ class SBD(nn.Module):
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
             images (Images): Images structure containing the batched images (default=None).
+            stand_alone (bool): Boolean indicating whether the SBD module operates as stand-alone (default=True).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this module, but passed to some sub-modules.
 
@@ -816,14 +829,27 @@ class SBD(nn.Module):
                 loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
+                If SBD module is not stand-alone:
+                    pred_dict (Dict): SBD prediction dictionary containing the final SBD predictions.
+                    obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
+
             * If SBD module not in training mode and tgt_dict is not None (i.e. during validation):
-                pred_dicts (List): List of size [num_layers+1] with SBD prediction dictionaries.
+                pred_dicts (List): List with SBD prediction dictionaries.
                 loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
+                If SBD module is not stand-alone:
+                    obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
+
             * If SBD module not in training mode and tgt_dict is None (i.e. during testing):
-                pred_dicts (List): List of size [up_iters*num_up_layers + 1] with SBD prediction dictionaries.
+                pred_dicts (List): List with SBD prediction dictionaries.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
+
+                If SBD module is not stand-alone:
+                    obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
 
         Raises:
             NotImplementedError: Error when visualizations are requested.
@@ -957,7 +983,8 @@ class SBD(nn.Module):
 
         # Get initial prediction dictionary if desired
         if not self.training and compute_loss_preds:
-            pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
+            return_obj_ids = len(self.up_layers) == 0 and not stand_alone
+            pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors, return_obj_ids=return_obj_ids)
             pred_dicts.append(pred_dict)
 
         # Get static keyword arguments for update layers
@@ -1046,7 +1073,8 @@ class SBD(nn.Module):
 
                 # Get prediction dictionary if desired
                 if not self.training and compute_loss_preds:
-                    pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors)
+                    return_obj_ids = last_iter and last_layer and not stand_alone
+                    pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors, return_obj_ids=return_obj_ids)
                     pred_dicts.append(pred_dict)
 
         # Get DOD losses if in trainval and in DOD external dynamic target mode
@@ -1072,10 +1100,25 @@ class SBD(nn.Module):
             loss_dict.update(dod_loss_dict)
             analysis_dict.update(dod_analysis_dict)
 
-        # Return desired dictionaries
+        # Return desired dictionaries if SBD module is stand-alone
+        if stand_alone:
+            if self.training:
+                return loss_dict, analysis_dict
+            elif tgt_dict is not None:
+                return pred_dicts, loss_dict, analysis_dict
+            else:
+                return pred_dicts, analysis_dict
+
+        # Return additional items if SBD module is not stand-alone
         if self.training:
-            return loss_dict, analysis_dict
+            pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors, return_obj_ids=True)
+
+        obj_ids = pred_dict.pop('obj_ids')
+        obj_states = [obj_states[i][obj_ids[i]] for i in range(batch_size)]
+
+        if self.training:
+            return loss_dict, analysis_dict, pred_dict, obj_states, feats
         elif tgt_dict is not None:
-            return pred_dicts, loss_dict, analysis_dict
+            return pred_dicts, loss_dict, analysis_dict, obj_states, feats
         else:
-            return pred_dicts, analysis_dict
+            return pred_dicts, analysis_dict, obj_states, feats

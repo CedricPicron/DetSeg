@@ -6,6 +6,7 @@ from copy import deepcopy
 from .brd import BRD
 from .dfd import DFD
 from .dod import DOD
+from .mbd import MBD
 from .retina import RetinaHead
 from .sbd import SBD
 
@@ -144,6 +145,16 @@ def build_det_heads(args):
 
             dod_head = DOD(in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata)
             det_heads[det_head_type] = dod_head
+
+        elif det_head_type == 'mbd':
+            args_copy = deepcopy(args)
+            args_copy.det_heads = ['sbd']
+            sbd = build_det_heads(args_copy)['sbd']
+
+            sbd_dict = {'sbd': sbd, 'train_sbd': args.mbd_train_sbd}
+
+            mbd_head = MBD(sbd_dict, metadata)
+            det_heads[det_head_type] = mbd_head
 
         elif det_head_type == 'ret':
             num_classes = args.num_classes

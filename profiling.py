@@ -24,8 +24,8 @@ from structures.images import Images
 
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr', 'dfd']
-model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'resnet', 'ret', 'sample_decoder']
-model_choices = [*model_choices, 'sbd', 'sem']
+model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet', 'ret']
+model_choices = [*model_choices, 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -393,6 +393,56 @@ elif profiling_args.model == 'global_decoder':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)['slots'].sum().backward()"
+
+elif profiling_args.model == 'mbd':
+    main_args.num_classes = 80
+    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.det_heads = ['mbd']
+    main_args.dod_anchor_num_sizes = 3
+    main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
+    main_args.dod_sel_mode = 'rel'
+    main_args.dod_tgt_decision = 'rel'
+    main_args.sbd_state_type = 'rel_static'
+    main_args.sbd_osi_type = 'one_step_mlp'
+    main_args.sbd_se = False
+    main_args.sbd_match_mode = 'static'
+    main_args.sbd_match_static_mode = 'rel'
+    main_args.sbd_loss_apply_freq = 'layers'
+    main_args.sbd_loss_freeze_inter = False
+    main_args.sbd_loss_box_types = 'smooth_l1'
+    main_args.sbd_loss_box_weights = 1.0
+    main_args.sbd_pred_dup_removal = 'nms'
+    main_args.sbd_update_types = ['ca', 'sa', 'ffn']
+    main_args.sbd_update_layers = 6
+    main_args.sbd_ca_type = 'deformable_attn'
+    main_args.sbd_ca_version = 2
+    main_args.sbd_ca_val_with_pos = False
+    main_args.sbd_ca_step_size = -1
+    main_args.sbd_ca_step_norm = 'map'
+    main_args.mbd_train_sbd = False
+    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
+    model = build_det_heads(main_args)['mbd'].to('cuda')
+
+    feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 256, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
+    feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'resnet':
     main_args.backbone_map_ids = list(range(3, 8))
