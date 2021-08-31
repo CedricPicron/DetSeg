@@ -212,6 +212,34 @@ def get_parser():
     # *** Map-Based Detector (MBD) head
     parser.add_argument('--mbd_train_sbd', action='store_true', help='whether underlying SBD module should be trained')
 
+    parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
+    parser.add_argument('--mbd_hrae_layers', default=1, type=int, help='number of layers of HRAE network')
+    parser.add_argument('--mbd_hrae_hidden_size', default=1024, type=int, help='hidden feature size of HRAE network')
+    parser.add_argument('--mbd_hrae_norm', default='layer', type=str, help='normalization type of HRAE network')
+    parser.add_argument('--mbd_hrae_act_fn', default='relu', type=str, help='activation function of HRAE network')
+    parser.add_argument('--mbd_hrae_no_skip', action='store_true', help='remove skip connection of HRAE network')
+
+    parser.add_argument('--mbd_haae_type', default='one_step_mlp', type=str, help='HAAE network type')
+    parser.add_argument('--mbd_haae_layers', default=1, type=int, help='number of layers of HAAE network')
+    parser.add_argument('--mbd_haae_hidden_size', default=1024, type=int, help='hidden feature size of HAAE network')
+    parser.add_argument('--mbd_haae_norm', default='layer', type=str, help='normalization type of HAAE network')
+    parser.add_argument('--mbd_haae_act_fn', default='relu', type=str, help='activation function of HAAE network')
+    parser.add_argument('--mbd_haae_no_skip', action='store_true', help='remove skip connection of HAAE network')
+
+    parser.add_argument('--mbd_ca_type', default='deformable_attn', type=str, help='CA network type')
+    parser.add_argument('--mbd_ca_layers', default=6, type=int, help='number of layers of CA network')
+    parser.add_argument('--mbd_ca_norm', default='layer', type=str, help='normalization type of CA network')
+    parser.add_argument('--mbd_ca_act_fn', default='', type=str, help='activation function of CA network')
+    parser.add_argument('--mbd_ca_version', default=2, type=int, help='version of CA network')
+    parser.add_argument('--mbd_ca_num_heads', default=8, type=int, help='number of CA attention heads')
+    parser.add_argument('--mbd_ca_num_points', default=4, type=int, help='number of CA points')
+    parser.add_argument('--mbd_ca_qk_size', default=256, type=int, help='size of CA query and key features')
+    parser.add_argument('--mbd_ca_val_size', default=256, type=int, help='size of CA value features')
+    parser.add_argument('--mbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
+    parser.add_argument('--mbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
+    parser.add_argument('--mbd_ca_step_norm', default='map', type=str, help='normalization type of CA sample steps')
+    parser.add_argument('--mbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
+
     # *** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')

@@ -147,13 +147,36 @@ def build_det_heads(args):
             det_heads[det_head_type] = dod_head
 
         elif det_head_type == 'mbd':
+            in_feat_size = args.core_feat_sizes[0]
+            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            num_levels = len(args.core_feat_sizes)
+
             args_copy = deepcopy(args)
             args_copy.det_heads = ['sbd']
             sbd = build_det_heads(args_copy)['sbd']
 
             sbd_dict = {'sbd': sbd, 'train_sbd': args.mbd_train_sbd}
 
-            mbd_head = MBD(sbd_dict, metadata)
+            rae_dict = {'type': args.mbd_hrae_type, 'layers': args.mbd_hrae_layers, 'in_size': args.sbd_state_size}
+            rae_dict = {**rae_dict, 'hidden_size': args.mbd_hrae_hidden_size, 'out_size': args.sbd_state_size}
+            rae_dict = {**rae_dict, 'norm': args.mbd_hrae_norm, 'act_fn': args.mbd_hrae_act_fn}
+            rae_dict = {**rae_dict, 'skip': not args.mbd_hrae_no_skip}
+
+            aae_dict = {'type': args.mbd_haae_type, 'layers': args.mbd_haae_layers, 'in_size': args.sbd_state_size}
+            aae_dict = {**aae_dict, 'hidden_size': args.mbd_haae_hidden_size, 'out_size': args.sbd_state_size}
+            aae_dict = {**aae_dict, 'norm': args.mbd_haae_norm, 'act_fn': args.mbd_haae_act_fn}
+            aae_dict = {**aae_dict, 'skip': not args.mbd_haae_no_skip}
+
+            ca_dict = {'type': args.mbd_ca_type, 'layers': args.mbd_ca_layers, 'in_size': args.sbd_state_size}
+            ca_dict = {**ca_dict, 'sample_size': in_feat_size, 'out_size': args.sbd_state_size}
+            ca_dict = {**ca_dict, 'norm': args.mbd_ca_norm, 'act_fn': args.mbd_ca_act_fn, 'skip': True}
+            ca_dict = {**ca_dict, 'version': args.mbd_ca_version, 'num_heads': args.mbd_ca_num_heads}
+            ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.mbd_ca_num_points}
+            ca_dict = {**ca_dict, 'qk_size': args.mbd_ca_qk_size, 'val_size': args.mbd_ca_val_size}
+            ca_dict = {**ca_dict, 'val_with_pos': args.mbd_ca_val_with_pos, 'step_size': args.mbd_ca_step_size}
+            ca_dict = {**ca_dict, 'step_norm': args.mbd_ca_step_norm, 'num_particles': args.mbd_ca_num_particles}
+
+            mbd_head = MBD(sbd_dict, rae_dict, aae_dict, ca_dict, metadata)
             det_heads[det_head_type] = mbd_head
 
         elif det_head_type == 'ret':

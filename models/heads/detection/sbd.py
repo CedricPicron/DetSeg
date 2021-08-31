@@ -832,7 +832,9 @@ class SBD(nn.Module):
                 If SBD module is not stand-alone:
                     pred_dict (Dict): SBD prediction dictionary containing the final SBD predictions.
                     obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    obj_anchors (List): List [batch_size] with anchors corresponding to each object prediction.
                     feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
+                    feat_ids (List): List [batch_size] with feature indices corresponding to each object prediction.
 
             * If SBD module not in training mode and tgt_dict is not None (i.e. during validation):
                 pred_dicts (List): List with SBD prediction dictionaries.
@@ -841,7 +843,9 @@ class SBD(nn.Module):
 
                 If SBD module is not stand-alone:
                     obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    obj_anchors (List): List [batch_size] with anchors corresponding to each object prediction.
                     feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
+                    feat_ids (List): List [batch_size] with feature indices corresponding to each object prediction.
 
             * If SBD module not in training mode and tgt_dict is None (i.e. during testing):
                 pred_dicts (List): List with SBD prediction dictionaries.
@@ -849,7 +853,9 @@ class SBD(nn.Module):
 
                 If SBD module is not stand-alone:
                     obj_states (List): List [batch_size] with state features corresponding to each object prediction.
+                    obj_anchors (List): List [batch_size] with anchors corresponding to each object prediction.
                     feats (FloatTensor): Concatenated input features of shape [batch_size, num_feats, feat_size].
+                    feat_ids (List): List [batch_size] with feature indices corresponding to each object prediction.
 
         Raises:
             NotImplementedError: Error when visualizations are requested.
@@ -1115,10 +1121,12 @@ class SBD(nn.Module):
 
         obj_ids = pred_dict.pop('obj_ids')
         obj_states = [obj_states[i][obj_ids[i]] for i in range(batch_size)]
+        obj_anchors = [obj_anchors[i][obj_ids[i]] for i in range(batch_size)]
+        feat_ids = [feat_ids[i][obj_ids[i]] for i in range(batch_size)]
 
         if self.training:
-            return loss_dict, analysis_dict, pred_dict, obj_states, feats
+            return loss_dict, analysis_dict, pred_dict, obj_states, obj_anchors, feats, feat_ids
         elif tgt_dict is not None:
-            return pred_dicts, loss_dict, analysis_dict, obj_states, feats
+            return pred_dicts, loss_dict, analysis_dict, obj_states, obj_anchors, feats, feat_ids
         else:
-            return pred_dicts, analysis_dict, obj_states, feats
+            return pred_dicts, analysis_dict, obj_states, obj_anchors, feats, feat_ids
