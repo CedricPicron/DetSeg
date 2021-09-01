@@ -528,7 +528,7 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
     main_args.sbd_ca_type = 'particle_attn'
-    main_args.sbd_ca_version = 8
+    main_args.sbd_ca_version = 9
     main_args.sbd_ca_val_with_pos = False
     main_args.sbd_ca_step_size = -1
     main_args.sbd_ca_step_norm_xy = 'map'
