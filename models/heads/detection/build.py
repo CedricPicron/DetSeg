@@ -174,7 +174,8 @@ def build_det_heads(args):
             ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.mbd_ca_num_points}
             ca_dict = {**ca_dict, 'qk_size': args.mbd_ca_qk_size, 'val_size': args.mbd_ca_val_size}
             ca_dict = {**ca_dict, 'val_with_pos': args.mbd_ca_val_with_pos, 'step_size': args.mbd_ca_step_size}
-            ca_dict = {**ca_dict, 'step_norm': args.mbd_ca_step_norm, 'num_particles': args.mbd_ca_num_particles}
+            ca_dict = {**ca_dict, 'step_norm_xy': args.mbd_ca_step_norm_xy, 'step_norm_z': args.mbd_ca_step_norm_z}
+            ca_dict = {**ca_dict, 'num_particles': args.mbd_ca_num_particles}
 
             mbd_head = MBD(sbd_dict, rae_dict, aae_dict, ca_dict, metadata)
             det_heads[det_head_type] = mbd_head
@@ -274,7 +275,8 @@ def build_det_heads(args):
             ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.sbd_ca_num_points}
             ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'val_size': args.sbd_ca_val_size}
             ca_dict = {**ca_dict, 'val_with_pos': args.sbd_ca_val_with_pos, 'step_size': args.sbd_ca_step_size}
-            ca_dict = {**ca_dict, 'step_norm': args.sbd_ca_step_norm, 'num_particles': args.sbd_ca_num_particles}
+            ca_dict = {**ca_dict, 'step_norm_xy': args.sbd_ca_step_norm_xy, 'step_norm_z': args.sbd_ca_step_norm_z}
+            ca_dict = {**ca_dict, 'num_particles': args.sbd_ca_num_particles}
 
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}

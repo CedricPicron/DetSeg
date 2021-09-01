@@ -1195,7 +1195,7 @@ class ParticleAttn(nn.Module):
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=1, num_heads=8,
                  num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False, step_size=-1,
-                 step_norm='map', num_particles=20):
+                 step_norm_xy='map', step_norm_z=1.0, num_particles=20):
         """
         Initializes the ParticleAttn module.
 
@@ -1214,7 +1214,8 @@ class ParticleAttn(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
+            step_norm_z (float): Value normalizing the sample steps in the Z-direction (default=1.0).
             num_particles (int): Integer containing the number of particles per head (default=20).
 
         Raises:
@@ -1262,34 +1263,34 @@ class ParticleAttn(nn.Module):
         # Initialization of actual particle attention module
         if version == 1:
             self.pa = PAv1(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           step_size, step_norm)
+                           step_size, step_norm_xy)
 
         elif version == 2:
             self.pa = PAv2(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           step_size, step_norm)
+                           step_size, step_norm_xy)
 
         elif version == 3:
             self.pa = PAv3(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           qk_size, step_size, step_norm)
+                           qk_size, step_size, step_norm_xy)
 
         elif version == 4:
             self.pa = PAv4(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           qk_size, step_size, step_norm)
+                           qk_size, step_size, step_norm_xy)
 
         elif version == 5:
             self.pa = PAv5(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos)
 
         elif version == 6:
             self.pa = PAv6(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           qk_size, step_size, step_norm)
+                           qk_size, step_size, step_norm_xy)
 
         elif version == 7:
             self.pa = PAv7(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size, val_with_pos,
-                           qk_size, step_size, step_norm)
+                           qk_size, step_size, step_norm_xy, step_norm_z)
 
         elif version == 8:
             self.pa = PAv8(in_size, sample_size, out_size, num_heads, val_size, val_with_pos, qk_size, step_size,
-                           step_norm, num_particles)
+                           step_norm_xy, step_norm_z, num_particles)
 
         else:
             error_msg = f"Invalid PA version number '{version}'."
@@ -1371,11 +1372,11 @@ class PAv1(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, step_size=-1, step_norm='map'):
+                 val_with_pos=False, step_size=-1, step_norm_xy='map'):
         """
         Initializes the PAv1 module.
 
@@ -1389,7 +1390,7 @@ class PAv1(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1446,7 +1447,7 @@ class PAv1(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
 
     def no_sample_locations_update(self):
         """
@@ -1460,7 +1461,7 @@ class PAv1(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -1582,11 +1583,11 @@ class PAv1(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps = sample_steps / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps = sample_steps * step_factors
@@ -1596,7 +1597,7 @@ class PAv1(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.view(batch_size * self.num_heads, -1, 2)
@@ -1626,11 +1627,11 @@ class PAv2(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, step_size=-1, step_norm='map'):
+                 val_with_pos=False, step_size=-1, step_norm_xy='map'):
         """
         Initializes the PAv2 module.
 
@@ -1644,7 +1645,7 @@ class PAv2(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1701,7 +1702,7 @@ class PAv2(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
 
     def no_sample_locations_update(self):
         """
@@ -1715,7 +1716,7 @@ class PAv2(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -1838,11 +1839,11 @@ class PAv2(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps = sample_steps / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps = sample_steps * step_factors
@@ -1852,7 +1853,7 @@ class PAv2(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 2)
@@ -1883,11 +1884,11 @@ class PAv3(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm='map'):
+                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm_xy='map'):
         """
         Initializes the PAv3 module.
 
@@ -1902,7 +1903,7 @@ class PAv3(nn.Module):
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             qry_size (int): Size of query features (default=-1).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1973,7 +1974,7 @@ class PAv3(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
 
     def no_sample_locations_update(self):
         """
@@ -1988,7 +1989,7 @@ class PAv3(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -2116,11 +2117,11 @@ class PAv3(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps = sample_steps / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps = sample_steps * step_factors
@@ -2130,7 +2131,7 @@ class PAv3(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 2)
@@ -2161,11 +2162,11 @@ class PAv4(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm='map'):
+                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm_xy='map'):
         """
         Initializes the PAv4 module.
 
@@ -2180,7 +2181,7 @@ class PAv4(nn.Module):
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             qry_size (int): Size of query features (default=-1).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -2252,7 +2253,7 @@ class PAv4(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
 
     def no_sample_locations_update(self):
         """
@@ -2267,7 +2268,7 @@ class PAv4(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -2396,11 +2397,11 @@ class PAv4(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps = sample_steps / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps = sample_steps * step_factors
@@ -2410,7 +2411,7 @@ class PAv4(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 2)
@@ -2648,11 +2649,11 @@ class PAv6(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm='map'):
+                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm_xy='map'):
         """
         Initializes the PAv6 module.
 
@@ -2667,7 +2668,7 @@ class PAv6(nn.Module):
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             qry_size (int): Size of query features (default=-1).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -2737,7 +2738,7 @@ class PAv6(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
 
     def no_sample_locations_update(self):
         """
@@ -2751,7 +2752,7 @@ class PAv6(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -2887,11 +2888,11 @@ class PAv6(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps = sample_steps / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps = sample_steps * step_factors
@@ -2901,7 +2902,7 @@ class PAv6(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 2)
@@ -2932,11 +2933,12 @@ class PAv7(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
+            step_norm_z (float): Value normalizing the sample steps in the Z-direction.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm='map'):
+                 val_with_pos=False, qry_size=-1, step_size=-1, step_norm_xy='map', step_norm_z=1.0):
         """
         Initializes the PAv7 module.
 
@@ -2951,7 +2953,8 @@ class PAv7(nn.Module):
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             qry_size (int): Size of query features (default=-1).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
+            step_norm_z (float): Value normalizing the sample steps in the Z-direction (default=1.0).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -3022,7 +3025,8 @@ class PAv7(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
+        self.step_norm_z = step_norm_z
 
     def no_sample_locations_update(self):
         """
@@ -3037,7 +3041,8 @@ class PAv7(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
+        delattr(self, 'step_norm_z')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 **kwargs):
@@ -3166,11 +3171,11 @@ class PAv7(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=5)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 step_normalizers = sample_map_shapes[None, None, None, :, None, :]
                 sample_steps[:, :, :, :, :, :2] = sample_steps[:, :, :, :, :, :2] / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = 0.5 * sample_priors[:, None, :, None, None, 2:] / self.num_points
                     sample_steps[:, :, :, :, :, :2] = sample_steps[:, :, :, :, :, :2] * step_factors
@@ -3180,9 +3185,10 @@ class PAv7(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
+            sample_steps[:, :, :, :, :, 2] = sample_steps[:, :, :, :, :, 2] / self.step_norm_z
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 3)
             next_sample_locations = sample_locations + sample_steps
             storage_dict['sample_locations'] = next_sample_locations
@@ -3210,11 +3216,12 @@ class PAv8(nn.Module):
             steps_weight (nn.Parameter): Parameter containing the weight matrix used during sample step computation.
             steps_bias (nn.Parameter): Parameter containing the bias vector used during sample step computation.
             step_size (float): Size of the sample steps relative to the sample step normalization.
-            step_norm (str): String containing the type of sample step normalization.
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps.
+            step_norm_z (float): Value normalizing the sample steps in the Z-direction.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, val_size=-1, val_with_pos=False, qry_size=-1,
-                 step_size=-1, step_norm='map', num_particles=20):
+                 step_size=-1, step_norm_xy='map', step_norm_z=1.0, num_particles=20):
         """
         Initializes the PAv8 module.
 
@@ -3227,7 +3234,8 @@ class PAv8(nn.Module):
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             qry_size (int): Size of query features (default=-1).
             step_size (float): Size of the sample steps relative to the sample step normalization (default=-1).
-            step_norm (str): String containing the type of sample step normalization (default='map').
+            step_norm_xy (str): String containing the normalization type of XY-direction sample steps (default=map).
+            step_norm_z (float): Value normalizing the sample steps in the Z-direction (default=1.0).
             num_particles (int): Integer containing the number of particles per head (default=20).
 
         Raises:
@@ -3298,7 +3306,8 @@ class PAv8(nn.Module):
 
         # Set attributes related to the sizes of the sample steps
         self.step_size = step_size
-        self.step_norm = step_norm
+        self.step_norm_xy = step_norm_xy
+        self.step_norm_z = step_norm_z
 
     def no_sample_locations_update(self):
         """
@@ -3313,7 +3322,8 @@ class PAv8(nn.Module):
         delattr(self, 'steps_weight')
         delattr(self, 'steps_bias')
         delattr(self, 'step_size')
-        delattr(self, 'step_norm')
+        delattr(self, 'step_norm_xy')
+        delattr(self, 'step_norm_z')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
                 sample_feat_ids=None, **kwargs):
@@ -3453,7 +3463,7 @@ class PAv8(nn.Module):
             if self.step_size > 0:
                 sample_steps = self.step_size * F.normalize(sample_steps, dim=4)
 
-            if self.step_norm == 'map':
+            if self.step_norm_xy == 'map':
                 with torch.no_grad():
                     num_levels = len(sample_map_start_ids)
                     level_ids = sample_locations[:, :, 2] * (num_levels-1)
@@ -3470,7 +3480,7 @@ class PAv8(nn.Module):
 
                 sample_steps[:, :, :, :, :2] = sample_steps[:, :, :, :, :2] / step_normalizers
 
-            elif self.step_norm == 'anchor':
+            elif self.step_norm_xy == 'anchor':
                 if sample_priors.shape[-1] == 4:
                     step_factors = sample_priors[:, None, :, None, 2:] / 8
                     sample_steps[:, :, :, :, :2] = sample_steps[:, :, :, :, :2] * step_factors
@@ -3480,9 +3490,10 @@ class PAv8(nn.Module):
                     raise ValueError(error_msg)
 
             else:
-                error_msg = f"Invalid sample step normalization type '{self.step_norm}'."
+                error_msg = f"Invalid sample step normalization type '{self.step_norm_xy}'."
                 raise ValueError(error_msg)
 
+            sample_steps[:, :, :, :, 2] = sample_steps[:, :, :, :, 2] / self.step_norm_z
             sample_steps = sample_steps.reshape(batch_size * self.num_heads, -1, 3)
             next_sample_locations = sample_locations + sample_steps
             storage_dict['sample_locations'] = next_sample_locations

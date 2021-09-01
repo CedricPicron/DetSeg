@@ -237,7 +237,8 @@ def get_parser():
     parser.add_argument('--mbd_ca_val_size', default=256, type=int, help='size of CA value features')
     parser.add_argument('--mbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
     parser.add_argument('--mbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
-    parser.add_argument('--mbd_ca_step_norm', default='map', type=str, help='normalization type of CA sample steps')
+    parser.add_argument('--mbd_ca_step_norm_xy', default='map', type=str, help='XY-normalizer of CA sample steps')
+    parser.add_argument('--mbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
     parser.add_argument('--mbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
 
     # *** Retina head
@@ -341,7 +342,8 @@ def get_parser():
     parser.add_argument('--sbd_ca_val_size', default=256, type=int, help='size of CA value features')
     parser.add_argument('--sbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
     parser.add_argument('--sbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
-    parser.add_argument('--sbd_ca_step_norm', default='map', type=str, help='normalization type of CA sample steps')
+    parser.add_argument('--sbd_ca_step_norm_xy', default='map', type=str, help='XY-normalizer of CA sample steps')
+    parser.add_argument('--sbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
     parser.add_argument('--sbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
 
     parser.add_argument('--sbd_sa_type', default='self_attn_1d', type=str, help='SA network type')

@@ -418,7 +418,8 @@ elif profiling_args.model == 'mbd':
     main_args.sbd_ca_version = 0
     main_args.sbd_ca_val_with_pos = False
     main_args.sbd_ca_step_size = -1
-    main_args.sbd_ca_step_norm = 'map'
+    main_args.sbd_ca_step_norm_xy = 'map'
+    main_args.sbd_ca_step_norm_z = 1.0
     main_args.mbd_train_sbd = False
     main_args.mbd_ca_type = 'deformable_attn'
     main_args.mbd_ca_layers = 6
@@ -530,7 +531,8 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_ca_version = 8
     main_args.sbd_ca_val_with_pos = False
     main_args.sbd_ca_step_size = -1
-    main_args.sbd_ca_step_norm = 'map'
+    main_args.sbd_ca_step_norm_xy = 'map'
+    main_args.sbd_ca_step_norm_z = 1.0
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_det_heads(main_args)['sbd'].to('cuda')
 

@@ -176,7 +176,8 @@ class SBD(nn.Module):
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
                 - step_size (float): size of the CA sample steps relative to the sample step normalization;
-                - step_norm (str): string containing the type of CA sample step normalization;
+                - step_norm_xy (str): string containing the normalization type of CA sample steps in the XY-direction;
+                - step_norm_z (float): value normalizing the CA sample steps in the Z-direction;
                 - num_particles (int): integer containing the number of particles per CA head.
 
             sa_dict: Self-attention (SA) network dictionary containing following keys:
@@ -321,7 +322,8 @@ class SBD(nn.Module):
                 - val_size (int): value feature size of the network;
                 - val_with_pos (bool): boolean indicating whether position info is added to value features;
                 - step_size (float): size of the sample steps relative to the sample step normalization;
-                - step_norm (str): string containing the type of sample step normalization;
+                - step_norm_xy (str): string containing the normalization type of sample steps in the XY-direction;
+                - step_norm_z (float): value normalizing the sample steps in the Z-direction;
                 - num_particles (int): integer containing the number of particles per head.
 
         Returns:
@@ -347,7 +349,8 @@ class SBD(nn.Module):
         elif net_dict['type'] == 'particle_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm', 'num_particles')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm_xy', 'step_norm_z')
+            net_keys = (*net_keys, 'num_particles')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = ParticleAttn(*net_args, **net_kwargs)
 

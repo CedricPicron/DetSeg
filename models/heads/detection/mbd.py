@@ -74,7 +74,8 @@ class MBD (nn.Module):
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
                 - step_size (float): size of the CA sample steps relative to the sample step normalization;
-                - step_norm (str): string containing the type of CA sample step normalization;
+                - step_norm_xy (str): string containing the normalization type of CA sample steps in the XY-direction;
+                - step_norm_z (float): value normalizing the CA sample steps in the Z-direction;
                 - num_particles (int): integer containing the number of particles per CA head.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
