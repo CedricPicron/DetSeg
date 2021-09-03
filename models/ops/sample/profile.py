@@ -5,7 +5,7 @@ Script profiling the sampler functions.
 import torch
 import torch.autograd.profiler as profiler
 
-from functional import pytorch_maps_sampler_2d, pytorch_maps_sampler_3d
+from functional import pytorch_maps_sample_2d, pytorch_maps_sample_3d
 
 
 # Profile 2D PyTorch maps sampler
@@ -26,7 +26,7 @@ sample_map_ids = torch.randint(high=num_maps, size=(batch_size, num_samples), de
 return_derivatives = True
 
 with profiler.profile(use_cuda=True) as prof:
-    function = pytorch_maps_sampler_2d
+    function = pytorch_maps_sample_2d
     exec("function(feats, feat_map_wh, feat_map_offs, sample_xy, sample_map_ids, return_derivatives)")
 
 print(prof.table(sort_by='cuda_time', row_limit=100))
@@ -52,7 +52,7 @@ sample_xy = torch.rand(batch_size, num_samples, 3, device='cuda')
 return_derivatives = True
 
 with profiler.profile(use_cuda=True) as prof:
-    function = pytorch_maps_sampler_3d
+    function = pytorch_maps_sample_3d
     exec("function(feats, feat_map_wh, feat_map_offs, sample_xy, return_derivatives)")
 
 print(prof.table(sort_by='cuda_time', row_limit=100))

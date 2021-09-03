@@ -184,7 +184,7 @@ def build_heads(args):
             ca_dict = {**ca_dict, 'qk_size': args.mbd_ca_qk_size, 'val_size': args.mbd_ca_val_size}
             ca_dict = {**ca_dict, 'val_with_pos': args.mbd_ca_val_with_pos, 'step_size': args.mbd_ca_step_size}
             ca_dict = {**ca_dict, 'step_norm_xy': args.mbd_ca_step_norm_xy, 'step_norm_z': args.mbd_ca_step_norm_z}
-            ca_dict = {**ca_dict, 'num_particles': args.mbd_ca_num_particles}
+            ca_dict = {**ca_dict, 'num_particles': args.mbd_ca_num_particles, 'sample_insert': True, 'insert_size': 2}
 
             if args.mbd_use_gt_seg:
                 args.requires_masks = True

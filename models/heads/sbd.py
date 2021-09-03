@@ -324,7 +324,9 @@ class SBD(nn.Module):
                 - step_size (float): size of the sample steps relative to the sample step normalization;
                 - step_norm_xy (str): string containing the normalization type of sample steps in the XY-direction;
                 - step_norm_z (float): value normalizing the sample steps in the Z-direction;
-                - num_particles (int): integer containing the number of particles per head.
+                - num_particles (int): integer containing the number of particles per head;
+                - sample_insert (bool): boolean indicating whether to insert sample information in a maps structure;
+                - insert_size (int): integer containing the size of features to be inserted during sample insertion.
 
         Returns:
             net (Sequential): Module implementing the network specified by the given network dictionary.
@@ -337,7 +339,7 @@ class SBD(nn.Module):
         if net_dict['type'] == 'deformable_attn':
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
-            net_keys = (*net_keys, 'val_size', 'val_with_pos')
+            net_keys = (*net_keys, 'val_size', 'val_with_pos', 'sample_insert', 'insert_size')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = DeformableAttn(*net_args, **net_kwargs)
 
@@ -350,7 +352,7 @@ class SBD(nn.Module):
             net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
             net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'qk_size')
             net_keys = (*net_keys, 'val_size', 'val_with_pos', 'step_size', 'step_norm_xy', 'step_norm_z')
-            net_keys = (*net_keys, 'num_particles')
+            net_keys = (*net_keys, 'num_particles', 'sample_insert', 'insert_size')
             net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
             net_layer = ParticleAttn(*net_args, **net_kwargs)
 

@@ -76,7 +76,9 @@ class MBD (nn.Module):
                 - step_size (float): size of the CA sample steps relative to the sample step normalization;
                 - step_norm_xy (str): string containing the normalization type of CA sample steps in the XY-direction;
                 - step_norm_z (float): value normalizing the CA sample steps in the Z-direction;
-                - num_particles (int): integer containing the number of particles per CA head.
+                - num_particles (int): integer containing the number of particles per CA head;
+                - sample_insert (bool): boolean indicating whether to insert CA sample information in a maps structure;
+                - insert_size (int): integer containing the size of features to be inserted during CA sample insertion.
 
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
@@ -102,6 +104,10 @@ class MBD (nn.Module):
         # Set CA-related attributes
         self.ca = SBD.get_net(ca_dict)
         self.ca_type = ca_dict['type']
+
+        if self.ca_type == 'particle_attn':
+            last_pa_layer = self.ca[-1].pa
+            last_pa_layer.no_sample_locations_update()
 
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
@@ -190,20 +196,25 @@ class MBD (nn.Module):
         abs_anchor_encs = [self.aae(norm_boxes[i].boxes) for i in range(batch_size)]
 
         # Get keyword arguments for cross-attention layers
-        ca_kwargs = [{'map_processing': True} for _ in range(batch_size)]
+        ca_kwargs = [{} for _ in range(batch_size)]
 
         if self.ca_type in ('deformable_attn', 'particle_attn'):
             device = sample_feats.device
+            num_map_feats = sample_feats.shape[1]
+
             sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=device)
             sample_map_start_ids = sample_map_shapes.prod(dim=1).cumsum(dim=0)[:-1]
             sample_map_start_ids = torch.cat([sample_map_shapes.new_zeros((1,)), sample_map_start_ids], dim=0)
 
             for i in range(batch_size):
+                num_objs = len(obj_feats[i])
+                map_feats = torch.zeros(num_objs, num_map_feats, 2, device=device)
+
                 ca_kwargs[i]['sample_priors'] = norm_boxes[i].boxes
                 ca_kwargs[i]['sample_feats'] = sample_feats[i]
                 ca_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 ca_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
-                ca_kwargs[i]['storage_dict'] = {}
+                ca_kwargs[i]['storage_dict'] = {'map_feats': map_feats}
                 ca_kwargs[i]['add_encs'] = abs_anchor_encs[i]
 
                 if self.ca_type == 'particle_attn':

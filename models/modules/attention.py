@@ -10,7 +10,8 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from models.ops.sampler.functional import pytorch_maps_sampler_2d, pytorch_maps_sampler_3d
+from models.ops.insert.functional import pytorch_maps_insert_2d, pytorch_maps_insert_3d
+from models.ops.sample.functional import pytorch_maps_sample_2d, pytorch_maps_sample_3d
 
 
 class Attn2d(nn.Module):
@@ -227,7 +228,8 @@ class DeformableAttn(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
-                 num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False):
+                 num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False, sample_insert=False,
+                 insert_size=2):
         """
         Initializes the DeformableAttn module.
 
@@ -245,6 +247,8 @@ class DeformableAttn(nn.Module):
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.
@@ -300,15 +304,15 @@ class DeformableAttn(nn.Module):
 
         elif version == 2:
             self.msda = MSDAv2(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size,
-                               val_with_pos)
+                               val_with_pos, sample_insert, insert_size)
 
         elif version == 3:
             self.msda = MSDAv3(in_size, sample_size, out_size, num_heads, num_levels, num_points, qk_size, val_size,
-                               val_with_pos)
+                               val_with_pos, sample_insert, insert_size)
 
         elif version == 4:
             self.msda = MSDAv4(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size,
-                               val_with_pos)
+                               val_with_pos, sample_insert, insert_size)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -318,7 +322,7 @@ class DeformableAttn(nn.Module):
         self.skip = skip
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids,
-                add_encs=None, mul_encs=None, sample_mask=None, **kwargs):
+                add_encs=None, mul_encs=None, sample_mask=None, storage_dict=None, **kwargs):
         """
         Forward method of the DeformableAttn module.
 
@@ -331,6 +335,7 @@ class DeformableAttn(nn.Module):
             add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
             mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
             sample_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
+            storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -358,7 +363,7 @@ class DeformableAttn(nn.Module):
         sample_feats = sample_feats.view(-1, *sample_feats.shape[-2:])
 
         msda_args = (delta_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids)
-        msda_kwargs = {'input_padding_mask': sample_mask}
+        msda_kwargs = {'input_padding_mask': sample_mask, 'storage_dict': storage_dict}
         delta_feats = self.msda(*msda_args, **msda_kwargs).view(*orig_shape[:-1], -1)
 
         # Get output features
@@ -641,10 +646,16 @@ class MSDAv2(nn.Module):
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
+
+        If sample_insert is True:
+            insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
+            insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False):
+                 val_with_pos=False, sample_insert=False, insert_size=2):
         """
         Initializes the MSDAv2 module.
 
@@ -657,6 +668,8 @@ class MSDAv2(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -717,7 +730,15 @@ class MSDAv2(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        # Set attributes related to sample insertion
+        self.sample_insert = sample_insert
+
+        if sample_insert:
+            self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
+            self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
+                **kwargs):
         """
         Forward method of the MSDAv2 module.
 
@@ -727,6 +748,7 @@ class MSDAv2(nn.Module):
             sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -778,8 +800,8 @@ class MSDAv2(nn.Module):
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
 
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
-        sampled_feats = pytorch_maps_sampler_2d(*sampler_args)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sampled_feats = pytorch_maps_sample_2d(*sample_args)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -800,6 +822,28 @@ class MSDAv2(nn.Module):
         # Get output features
         out_feats = self.out_proj(weighted_feats)
 
+        # Perform sample insertion if needed
+        if self.sample_insert:
+            sampled_feats = sampled_feats.permute(2, 0, 1, 3, 4)
+            sampled_feats = sampled_feats.view(self.num_heads, -1, val_size // self.num_heads)
+            insert_feats = torch.bmm(sampled_feats, self.insert_weight) + self.insert_bias
+
+            insert_size = insert_feats.shape[2]
+            insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
+            insert_feats = insert_feats.transpose(0, 1).reshape(batch_size*num_in_feats, -1, insert_size)
+
+            insert_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            insert_xy = insert_xy.transpose(1, 2).reshape(batch_size*num_in_feats, -1, 2)
+
+            insert_map_ids = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1)
+            insert_map_ids = insert_map_ids.transpose(1, 2).reshape(batch_size*num_in_feats, -1)
+
+            insert_args = (storage_dict['map_feats'], sample_map_shapes, sample_map_start_ids)
+            insert_args = (*insert_args, insert_feats, insert_xy, insert_map_ids)
+
+            map_feats = pytorch_maps_insert_2d(*insert_args)
+            storage_dict['map_feats'] = map_feats
+
         return out_feats
 
 
@@ -818,10 +862,16 @@ class MSDAv3(nn.Module):
         point_encs (nn.Parameter): Parameter tensor containing the point encodings.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
+
+        If sample_insert is True:
+            insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
+            insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, qk_size=-1,
-                 val_size=-1, val_with_pos=False):
+                 val_size=-1, val_with_pos=False, sample_insert=False, insert_size=2):
         """
         Initializes the MSDAv3 module.
 
@@ -835,6 +885,8 @@ class MSDAv3(nn.Module):
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -908,7 +960,15 @@ class MSDAv3(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        # Set attributes related to sample insertion
+        self.sample_insert = sample_insert
+
+        if sample_insert:
+            self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
+            self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
+                **kwargs):
         """
         Forward method of the MSDAv3 module.
 
@@ -918,6 +978,7 @@ class MSDAv3(nn.Module):
             sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -966,8 +1027,8 @@ class MSDAv3(nn.Module):
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
 
-        sampler_args = (kv_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
-        sampled_feats = pytorch_maps_sampler_2d(*sampler_args)
+        sample_args = (kv_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sampled_feats = pytorch_maps_sample_2d(*sample_args)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, kv_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -1001,6 +1062,29 @@ class MSDAv3(nn.Module):
         # Get output features
         out_feats = self.out_proj(weighted_feats)
 
+        # Perform sample insertion if needed
+        if self.sample_insert:
+            head_val_size = sampled_val_feats.shape[4]
+            sampled_val_feats = sampled_val_feats.permute(2, 0, 1, 3, 4)
+            sampled_val_feats = sampled_val_feats.view(self.num_heads, -1, head_val_size)
+            insert_feats = torch.bmm(sampled_val_feats, self.insert_weight) + self.insert_bias
+
+            insert_size = insert_feats.shape[2]
+            insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
+            insert_feats = insert_feats.transpose(0, 1).reshape(batch_size*num_in_feats, -1, insert_size)
+
+            insert_xy = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 2)
+            insert_xy = insert_xy.transpose(1, 2).reshape(batch_size*num_in_feats, -1, 2)
+
+            insert_map_ids = sample_map_ids.view(batch_size, self.num_heads, num_in_feats, -1)
+            insert_map_ids = insert_map_ids.transpose(1, 2).reshape(batch_size*num_in_feats, -1)
+
+            insert_args = (storage_dict['map_feats'], sample_map_shapes, sample_map_start_ids)
+            insert_args = (*insert_args, insert_feats, insert_xy, insert_map_ids)
+
+            map_feats = pytorch_maps_insert_2d(*insert_args)
+            storage_dict['map_feats'] = map_feats
+
         return out_feats
 
 
@@ -1018,10 +1102,16 @@ class MSDAv4(nn.Module):
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
         out_proj (nn.Linear): Module computing output features from weighted value features.
+
+        sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
+
+        If sample_insert is True:
+            insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
+            insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False):
+                 val_with_pos=False, sample_insert=False, insert_size=2):
         """
         Initializes the MSDAv4 module.
 
@@ -1034,6 +1124,8 @@ class MSDAv4(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and per level (default=4).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1094,7 +1186,15 @@ class MSDAv4(nn.Module):
         nn.init.xavier_uniform_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
 
-    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, **kwargs):
+        # Set attributes related to sample insertion
+        self.sample_insert = sample_insert
+
+        if sample_insert:
+            self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
+            self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
+                **kwargs):
         """
         Forward method of the MSDAv4 module.
 
@@ -1104,6 +1204,7 @@ class MSDAv4(nn.Module):
             sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
+            storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -1158,7 +1259,7 @@ class MSDAv4(nn.Module):
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
 
-        sampled_feats = pytorch_maps_sampler_3d(val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
+        sampled_feats = pytorch_maps_sample_3d(val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 
@@ -1178,6 +1279,25 @@ class MSDAv4(nn.Module):
 
         # Get output features
         out_feats = self.out_proj(weighted_feats)
+
+        # Perform sample insertion if needed
+        if self.sample_insert:
+            sampled_feats = sampled_feats.permute(2, 0, 1, 3, 4)
+            sampled_feats = sampled_feats.view(self.num_heads, -1, val_size // self.num_heads)
+            insert_feats = torch.bmm(sampled_feats, self.insert_weight) + self.insert_bias
+
+            insert_size = insert_feats.shape[2]
+            insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
+            insert_feats = insert_feats.transpose(0, 1).reshape(batch_size*num_in_feats, -1, insert_size)
+
+            insert_xyz = sample_locations.view(batch_size, self.num_heads, num_in_feats, -1, 3)
+            insert_xyz = insert_xyz.transpose(1, 2).reshape(batch_size*num_in_feats, -1, 3)
+
+            insert_args = (storage_dict['map_feats'], sample_map_shapes, sample_map_start_ids)
+            insert_args = (*insert_args, insert_feats, insert_xyz)
+
+            map_feats = pytorch_maps_insert_3d(*insert_args)
+            storage_dict['map_feats'] = map_feats
 
         return out_feats
 
@@ -1539,12 +1659,12 @@ class PAv1(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy = pytorch_maps_sample_2d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -1794,12 +1914,12 @@ class PAv2(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy = pytorch_maps_sample_2d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -2067,12 +2187,12 @@ class PAv3(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy = pytorch_maps_sample_2d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -2346,12 +2466,12 @@ class PAv4(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy = pytorch_maps_sample_2d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -2593,9 +2713,9 @@ class PAv5(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
-        sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+        sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 
@@ -2830,12 +2950,12 @@ class PAv6(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy = pytorch_maps_sample_2d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -3120,12 +3240,12 @@ class PAv7(nn.Module):
             sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
 
         # Get sampled value features and corresponding derivatives if needed
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy, dz = pytorch_maps_sampler_3d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy, dz = pytorch_maps_sample_3d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_3d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_3d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -3412,12 +3532,12 @@ class PAv8(nn.Module):
             sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
 
         # Get sampled value features and corresponding derivatives if needed
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations)
 
         if self.update_sample_locations:
-            sampled_feats, dx, dy, dz = pytorch_maps_sampler_3d(*sampler_args, return_derivatives=True)
+            sampled_feats, dx, dy, dz = pytorch_maps_sample_3d(*sample_args, return_derivatives=True)
         else:
-            sampled_feats = pytorch_maps_sampler_3d(*sampler_args, return_derivatives=False)
+            sampled_feats = pytorch_maps_sample_3d(*sample_args, return_derivatives=False)
 
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
@@ -3705,9 +3825,9 @@ class PAv9(nn.Module):
         sample_map_ids = sample_map_ids[None, None, :, None]
         sample_map_ids = sample_map_ids.expand(batch_size * self.num_heads, num_in_feats, -1, self.num_points)
         sample_map_ids = sample_map_ids.reshape(batch_size * self.num_heads, -1)
-        sampler_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
+        sample_args = (val_feats, sample_map_shapes, sample_map_start_ids, sample_locations, sample_map_ids)
 
-        sampled_feats = pytorch_maps_sampler_2d(*sampler_args, return_derivatives=False)
+        sampled_feats = pytorch_maps_sample_2d(*sample_args, return_derivatives=False)
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, val_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 

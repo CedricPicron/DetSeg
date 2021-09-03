@@ -1,11 +1,11 @@
 """
-Collection of sampler functions.
+Collection of sample functions.
 """
 
 import torch
 
 
-def pytorch_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample_map_ids, return_derivatives=False):
+def pytorch_maps_sample_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample_map_ids, return_derivatives=False):
     """
     Function sampling 2D locations from collection of 2D feature maps using PyTorch functions.
 
@@ -78,7 +78,7 @@ def pytorch_maps_sampler_2d(feats, feat_map_wh, feat_map_offs, sample_xy, sample
     return sampled_feats, dx, dy
 
 
-def pytorch_maps_sampler_3d(feats, feat_map_wh, feat_map_offs, sample_xyz, return_derivatives=False):
+def pytorch_maps_sample_3d(feats, feat_map_wh, feat_map_offs, sample_xyz, return_derivatives=False):
     """
     Function sampling 3D locations from collection of 2D feature maps using PyTorch functions.
 
