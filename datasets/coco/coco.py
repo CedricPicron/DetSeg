@@ -27,11 +27,11 @@ class CocoDataset(VisionDataset):
     Attributes:
         coco (COCO): Object containing the COCO dataset annotations.
         image_ids (List): List of image indices, sorted in ascending order.
-        requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+        requires_masks (bool): Boolean indicating whether target dictionaries require masks.
     """
 
-    def __init__(self, image_folder, annotation_file, transforms, metadata, requires_masks):
+    def __init__(self, image_folder, annotation_file, transforms, metadata, requires_masks=False):
         """
         Initializes the CocoDataset dataset.
 
@@ -39,8 +39,8 @@ class CocoDataset(VisionDataset):
             image_folder (Path): Path to image folder containing COCO images.
             annotation_file (Path): Path to annotation file with COCO annotations.
             transforms (object): The transforms to be applied on both image and its bounding boxes.
-            requires_masks (bool): Bool indicating whether target dictionaries require segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            requires_masks (bool): Boolean indicating whether target dictionaries require masks (default=False).
         """
 
         with open(os.devnull, 'w') as devnull:
@@ -48,8 +48,8 @@ class CocoDataset(VisionDataset):
                 super().__init__(image_folder, transforms=transforms)
                 self.coco = COCO(annotation_file)
                 self.image_ids = list(sorted(self.coco.imgs.keys()))
-                self.requires_masks = requires_masks
                 self.metadata = metadata
+                self.requires_masks = requires_masks
 
     @staticmethod
     def get_masks(annotations, iH, iW):
@@ -427,11 +427,8 @@ def build_coco(args):
     train_transforms, val_transforms = get_coco_transforms()
     train_metadata, val_metadata = (args.train_metadata, args.val_metadata)
 
-    requires_masks = bool(args.seg_heads)
-    kwargs = {'requires_masks': requires_masks}
-
-    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, train_metadata, **kwargs)
-    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, val_metadata, **kwargs)
+    train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, train_metadata)
+    val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, val_metadata)
 
     if args.evaluator == 'detection':
         evaluator = CocoEvaluator(val_dataset.coco, val_metadata)

@@ -78,10 +78,14 @@ def get_parser():
     parser.add_argument('--gc_yaml', default='', type=str, help='path to yaml-file with GC specification')
 
     # * Heads
-    # ** Detection heads
-    parser.add_argument('--det_heads', nargs='*', default='', type=str, help='names of desired detection heads')
+    parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
 
-    # *** BRD (Base Reinforced Detector) head
+    # ** Binary segmentation head
+    parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
+    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
+    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
+
+    # ** BRD (Base Reinforced Detector) head
     parser.add_argument('--brd_feat_size', default=256, type=int, help='internal feature size of the BRD head')
 
     parser.add_argument('--brd_num_groups', default=8, type=int, help='number of group normalization groups')
@@ -119,7 +123,7 @@ def get_parser():
     parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')
 
-    # *** Duplicate-Free Detector (DFD) head
+    # ** Duplicate-Free Detector (DFD) head
     parser.add_argument('--dfd_cls_feat_size', default=256, type=int, help='classification hidden feature size')
     parser.add_argument('--dfd_cls_norm', default='group', type=str, help='normalization type of classification head')
     parser.add_argument('--dfd_cls_prior_prob', default=0.01, type=float, help='prior class probability')
@@ -175,7 +179,7 @@ def get_parser():
     parser.add_argument('--dfd_inf_ins_threshold', default=0.5, type=float, help='instance threshold during inference')
     parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
 
-    # *** Dense Object Discovery (DOD) head
+    # ** Dense Object Discovery (DOD) head
     parser.add_argument('--dod_feat_size', default=256, type=int, help='DOD hidden feature size')
     parser.add_argument('--dod_norm', default='group', type=str, help='normalization type of DOD head')
     parser.add_argument('--dod_kernel_size', default=3, type=int, help='DOD hidden layer kernel size')
@@ -209,7 +213,7 @@ def get_parser():
     parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive anchors per DOD target')
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
-    # *** Map-Based Detector (MBD) head
+    # ** Map-Based Detector (MBD) head
     parser.add_argument('--mbd_train_sbd', action='store_true', help='whether underlying SBD module should be trained')
 
     parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
@@ -241,7 +245,9 @@ def get_parser():
     parser.add_argument('--mbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
     parser.add_argument('--mbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
 
-    # *** Retina head
+    parser.add_argument('--mbd_use_gt_seg', action='store_true', help='use ground-truth segmentation during training')
+
+    # ** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')
     parser.add_argument('--ret_pred_type', default='conv1', choices=['conv1', 'conv3'], help='last prediction module')
@@ -261,7 +267,7 @@ def get_parser():
     parser.add_argument('--ret_nms_threshold', default=0.5, type=float, help='retina head NMS threshold')
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
-    # *** State-Based Detector (SBD) head
+    # ** State-Based Detector (SBD) head
     parser.add_argument('--sbd_state_size', default=256, type=int, help='size of SBD object states')
     parser.add_argument('--sbd_state_type', default='rel_static', type=str, help='type of SBD object states')
 
@@ -358,15 +364,7 @@ def get_parser():
     parser.add_argument('--sbd_ffn_norm', default='layer', type=str, help='normalization type of FFN network')
     parser.add_argument('--sbd_ffn_act_fn', default='relu', type=str, help='activation function of FFN network')
 
-    # ** Segmentation heads
-    parser.add_argument('--seg_heads', nargs='*', default='', type=str, help='names of desired segmentation heads')
-
-    # *** Binary segmentation head
-    parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
-    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
-    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
-
-    # *** Semantic segmentation head
+    # ** Semantic segmentation head
     parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
     parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
@@ -471,21 +469,6 @@ def main(args):
     # Get training/validation datasets and evaluator
     train_dataset, val_dataset, evaluator = build_dataset(args)
 
-    # Get training and validation samplers
-    if args.distributed:
-        train_sampler = DistributedSampler(train_dataset)
-        val_sampler = DistributedSampler(val_dataset, shuffle=False)
-    else:
-        train_sampler = RandomSampler(train_dataset)
-        val_sampler = SequentialSampler(val_dataset)
-
-    # Get training and validation dataloaders
-    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
-    dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
-
-    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
-    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
-
     # Build model and place it on correct device
     device = torch.device(args.device)
     model = build_arch(args)
@@ -518,6 +501,25 @@ def main(args):
     # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
         model = distributed.DistributedDataParallel(model, device_id=args.gpu)
+
+    # Set 'requires_masks' attributes of datasets
+    train_dataset.requires_masks = args.requires_masks
+    val_dataset.requires_masks = args.requires_masks
+
+    # Get training and validation samplers
+    if args.distributed:
+        train_sampler = DistributedSampler(train_dataset)
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    else:
+        train_sampler = RandomSampler(train_dataset)
+        val_sampler = SequentialSampler(val_dataset)
+
+    # Get training and validation dataloaders
+    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+    dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
+
+    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
+    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
 
     # If requested, evaluate model from checkpoint and return
     if args.eval:
