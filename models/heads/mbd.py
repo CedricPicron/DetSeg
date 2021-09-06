@@ -5,9 +5,10 @@ from collections import OrderedDict
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
+from models.functional.net import get_net
 from models.modules.container import Sequential
-from .sbd import SBD
 from structures.boxes import get_box_deltas
 
 
@@ -93,20 +94,25 @@ class MBD (nn.Module):
 
         # Initialization of relative anchor encoding (RAE) network
         irae = nn.Linear(4, rae_dict['in_size'])
-        hrae = SBD.get_net(rae_dict)
+        hrae = get_net(rae_dict)
         self.rae = Sequential(OrderedDict([('in', irae), ('hidden', hrae)]))
 
         # Initialization of absolute anchor encoding (AAE) network
         iaae = nn.Linear(4, aae_dict['in_size'])
-        haae = SBD.get_net(aae_dict)
+        haae = get_net(aae_dict)
         self.aae = Sequential(OrderedDict([('in', iaae), ('hidden', haae)]))
 
         # Set CA-related attributes
-        self.ca = SBD.get_net(ca_dict)
+        self.ca = get_net(ca_dict)
         self.ca_type = ca_dict['type']
 
-        if self.ca_type == 'particle_attn':
+        if self.ca_type == 'deformable_attn':
+            last_msda_layer = self.ca[-1].msda
+            last_msda_layer.no_out_feats_computation()
+
+        elif self.ca_type == 'particle_attn':
             last_pa_layer = self.ca[-1].pa
+            last_pa_layer.no_out_feats_computation()
             last_pa_layer.no_sample_locations_update()
 
         # Set metadata attribute
@@ -208,7 +214,7 @@ class MBD (nn.Module):
 
             for i in range(batch_size):
                 num_objs = len(obj_feats[i])
-                map_feats = torch.zeros(num_objs, num_map_feats, 2, device=device)
+                map_feats = torch.zeros(num_objs, num_map_feats, 1, device=device)
 
                 ca_kwargs[i]['sample_priors'] = norm_boxes[i].boxes
                 ca_kwargs[i]['sample_feats'] = sample_feats[i]
@@ -222,6 +228,21 @@ class MBD (nn.Module):
 
         # Apply cross-attention (CA) module
         [self.ca(obj_feats[i], **ca_kwargs[i]) for i in range(batch_size)]
+
+        # Get single-scale segmentation maps
+        ms_seg_maps = torch.cat([ca_kwargs[i]['storage_dict']['map_feats'] for i in range(batch_size)], dim=0)
+
+        map_sizes = sample_map_shapes.prod(dim=1).tolist()
+        ms_seg_maps = ms_seg_maps.transpose(1, 2).split(map_sizes, dim=2)
+
+        num_levels = len(sample_map_shapes)
+        seg_maps = ms_seg_maps[-1].view(-1, 1, *sample_map_shapes[-1])
+        kernel = torch.tensor([[[[1/16, 1/8, 1/16], [1/8, 1/4, 1/8], [1/16, 1/8, 1/16]]]], device=device)
+
+        for i in range(num_levels-2, -1, -1):
+            output_padding = ((sample_map_shapes[i] + 1) % 2).tolist()
+            seg_maps = F.conv_transpose2d(seg_maps, kernel, stride=2, padding=1, output_padding=output_padding)
+            seg_maps = seg_maps + ms_seg_maps[i].view(-1, 1, *sample_map_shapes[i])
 
         # Return desired dictionaries
         if self.training:

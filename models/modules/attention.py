@@ -229,7 +229,7 @@ class DeformableAttn(nn.Module):
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
                  num_levels=5, num_points=4, qk_size=-1, val_size=-1, val_with_pos=False, sample_insert=False,
-                 insert_size=2):
+                 insert_size=1):
         """
         Initializes the DeformableAttn module.
 
@@ -248,7 +248,7 @@ class DeformableAttn(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
-            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
         Raises:
             ValueError: Error when unsupported type of normalization is provided.
@@ -642,20 +642,24 @@ class MSDAv2(nn.Module):
         num_points (int): Integer containing the number of sampling points per head and per level.
 
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
-        attn_weights (nn.Linear): Module computing the attention weights from the input features.
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
-        out_proj (nn.Linear): Module computing output features from weighted value features.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
         If sample_insert is True:
             insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
             insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
+
+        compute_out_feats (bool): Boolean indicating whether output features should be computed.
+
+        If compute_out_feats is True:
+            attn_weights (nn.Linear): Module computing the attention weights from the input features.
+            out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, sample_insert=False, insert_size=2):
+                 val_with_pos=False, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv2 module.
 
@@ -669,7 +673,7 @@ class MSDAv2(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
-            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -702,11 +706,6 @@ class MSDAv2(nn.Module):
         grid_init = sizes * grid_init
         self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
 
-        # Initialize module computing the unnormalized attention weights
-        self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
-        nn.init.zeros_(self.attn_weights.weight)
-        nn.init.zeros_(self.attn_weights.bias)
-
         # Get and check size of value features
         if val_size == -1:
             val_size = in_size
@@ -724,18 +723,48 @@ class MSDAv2(nn.Module):
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
 
-        # Initialize module computing the output features
-        out_size = in_size if out_size == -1 else out_size
-        self.out_proj = nn.Linear(val_size, out_size)
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
-
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
 
         if sample_insert:
             self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
             self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+        # Set attribute determining whether output features should be computed
+        self.compute_out_feats = True
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.out_proj = nn.Linear(val_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def no_out_feats_computation(self):
+        """
+        Method changing the module to not compute output features.
+
+        Raises:
+            RuntimeError: Error when sample insertion is False.
+        """
+
+        # Check whether sample insertion is True
+        if self.sample_insert:
+
+            # Change attribute that no output features should be computed
+            self.compute_out_feats = False
+
+            # Delete all attributes related to the computation of output features
+            delattr(self, 'attn_weights')
+            delattr(self, 'out_proj')
+
+        else:
+            error_msg = "Sample insertion should be True when not computing output features."
+            raise RuntimeError(error_msg)
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
                 **kwargs):
@@ -780,10 +809,6 @@ class MSDAv2(nn.Module):
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
 
-        # Get attention weights
-        attn_weights = self.attn_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
-        attn_weights = F.softmax(attn_weights, dim=3)
-
         # Get value features
         val_feats = self.val_proj(sample_feats)
 
@@ -815,18 +840,11 @@ class MSDAv2(nn.Module):
             sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
-        # Get weighted value features
-        weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
-        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, val_size)
-
-        # Get output features
-        out_feats = self.out_proj(weighted_feats)
-
         # Perform sample insertion if needed
         if self.sample_insert:
-            sampled_feats = sampled_feats.permute(2, 0, 1, 3, 4)
-            sampled_feats = sampled_feats.view(self.num_heads, -1, val_size // self.num_heads)
-            insert_feats = torch.bmm(sampled_feats, self.insert_weight) + self.insert_bias
+            insert_feats = sampled_feats.permute(2, 0, 1, 3, 4)
+            insert_feats = insert_feats.view(self.num_heads, -1, val_size // self.num_heads)
+            insert_feats = torch.bmm(insert_feats, self.insert_weight) + self.insert_bias
 
             insert_size = insert_feats.shape[2]
             insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
@@ -844,6 +862,23 @@ class MSDAv2(nn.Module):
             map_feats = pytorch_maps_insert_2d(*insert_args)
             storage_dict['map_feats'] = map_feats
 
+        # Get output features
+        if self.compute_out_feats:
+
+            # Get attention weights
+            attn_weights = self.attn_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+            attn_weights = F.softmax(attn_weights, dim=3)
+
+            # Get weighted value features
+            weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
+            weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, val_size)
+
+            # Get non-zero output features
+            out_feats = self.out_proj(weighted_feats)
+
+        else:
+            out_feats = torch.zeros_like(in_feats)
+
         return out_feats
 
 
@@ -857,21 +892,25 @@ class MSDAv3(nn.Module):
         num_points (int): Integer containing the number of sampling points per head and per level.
 
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
-        query_proj (nn.Linear): Module computing query features from input features.
         kv_proj (nn.Linear): Module computing key-value features from sample features.
-        point_encs (nn.Parameter): Parameter tensor containing the point encodings.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
-        out_proj (nn.Linear): Module computing output features from weighted value features.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
         If sample_insert is True:
             insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
             insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
+
+        compute_out_feats (bool): Boolean indicating whether output features should be computed.
+
+        If compute_out_feats is True:
+            query_proj (nn.Linear): Module computing query features from input features.
+            point_encs (nn.Parameter): Parameter tensor containing the point encodings.
+            out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, qk_size=-1,
-                 val_size=-1, val_with_pos=False, sample_insert=False, insert_size=2):
+                 val_size=-1, val_with_pos=False, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv3 module.
 
@@ -886,12 +925,12 @@ class MSDAv3(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
-            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
-            ValueError: Error when the query and key feature size does not divide the number of heads.
             ValueError: Error when the value feature size does not divide the number of heads.
+            ValueError: Error when the query and key feature size does not divide the number of heads.
         """
 
         # Initialization of default nn.Module
@@ -920,19 +959,6 @@ class MSDAv3(nn.Module):
         grid_init = sizes * grid_init
         self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
 
-        # Get and check size of query and key features
-        if qk_size == -1:
-            qk_size = in_size
-
-        elif qk_size % num_heads != 0:
-            error_msg = f"The query and key feature size ({qk_size}) must divide the number of heads ({num_heads})."
-            raise ValueError(error_msg)
-
-        # Initialize module computing the query features
-        self.query_proj = nn.Linear(in_size, qk_size)
-        nn.init.xavier_uniform_(self.query_proj.weight)
-        nn.init.zeros_(self.query_proj.bias)
-
         # Get and check size of value features
         if val_size == -1:
             val_size = in_size
@@ -947,18 +973,9 @@ class MSDAv3(nn.Module):
         nn.init.xavier_uniform_(self.kv_proj.weight)
         nn.init.zeros_(self.kv_proj.bias)
 
-        # Initialize point encodings
-        self.point_encs = nn.Parameter(torch.zeros(num_heads, num_levels * num_points, qk_size // num_heads))
-
         # Initialize module computing the value position encodings if requested
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
-
-        # Initialize module computing the output features
-        out_size = in_size if out_size == -1 else out_size
-        self.out_proj = nn.Linear(val_size, out_size)
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
 
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
@@ -966,6 +983,63 @@ class MSDAv3(nn.Module):
         if sample_insert:
             self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
             self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+        # Set attribute determining whether output features should be computed
+        self.compute_out_feats = True
+
+        # Get and check size of query and key features
+        if qk_size == -1:
+            qk_size = in_size
+
+        elif qk_size % num_heads != 0:
+            error_msg = f"The query and key feature size ({qk_size}) must divide the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the query features
+        self.query_proj = nn.Linear(in_size, qk_size)
+        nn.init.xavier_uniform_(self.query_proj.weight)
+        nn.init.zeros_(self.query_proj.bias)
+
+        # Initialize point encodings
+        self.point_encs = nn.Parameter(torch.zeros(num_heads, num_levels * num_points, qk_size // num_heads))
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.out_proj = nn.Linear(val_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def no_out_feats_computation(self):
+        """
+        Method changing the module to not compute output features.
+
+        Raises:
+            RuntimeError: Error when sample insertion is False.
+        """
+
+        # Check whether sample insertion is True
+        if self.sample_insert:
+
+            # Change attribute that no output features should be computed
+            self.compute_out_feats = False
+
+            # Change key-value projection module to only compute value features
+            kv_size, sample_size = self.kv_proj.weight.shape
+            qk_size = self.query_proj.bias.shape[0]
+            val_size = kv_size - qk_size
+
+            self.kv_proj = nn.Linear(sample_size, val_size)
+            nn.init.xavier_uniform_(self.kv_proj.weight)
+            nn.init.zeros_(self.kv_proj.bias)
+
+            # Delete all attributes related to the computation of output features
+            delattr(self, 'query_proj')
+            delattr(self, 'point_encs')
+            delattr(self, 'out_proj')
+
+        else:
+            error_msg = "Sample insertion should be True when not computing output features."
+            raise RuntimeError(error_msg)
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
                 **kwargs):
@@ -1010,8 +1084,7 @@ class MSDAv3(nn.Module):
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
 
-        # Get query and key-value features
-        query_feats = self.query_proj(in_feats).view(*common_shape, 1, -1)
+        # Get key-value features
         kv_feats = self.kv_proj(sample_feats)
 
         # Get sampled key-value features
@@ -1033,18 +1106,19 @@ class MSDAv3(nn.Module):
         sampled_feats = sampled_feats.view(batch_size, self.num_heads, num_in_feats, -1, kv_size // self.num_heads)
         sampled_feats = sampled_feats.transpose(1, 2)
 
-        # Get sampled key and value features
-        head_qk_size = query_feats.shape[-1]
-        sampled_key_feats = sampled_feats[:, :, :, :, :head_qk_size]
-        sampled_val_feats = sampled_feats[:, :, :, :, head_qk_size:]
+        # Get query and sampled key features if needed
+        if self.compute_out_feats:
 
-        # Add point encodings to sampled key features
-        sampled_key_feats = sampled_key_feats + self.point_encs
+            # Get query features
+            query_feats = self.query_proj(in_feats).view(*common_shape, 1, -1)
 
-        # Get attention weights
-        query_feats = query_feats / math.sqrt(head_qk_size)
-        attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
-        attn_weights = F.softmax(attn_weights, dim=3)
+            # Get sampled key features
+            head_qk_size = query_feats.shape[-1]
+            sampled_key_feats = sampled_feats[:, :, :, :, :head_qk_size]
+            sampled_key_feats = sampled_key_feats + self.point_encs
+
+        # Get sampled value features
+        sampled_val_feats = sampled_feats[:, :, :, :, head_qk_size:] if self.compute_out_feats else sampled_feats
 
         # Get and add position encodings to sampled value features if needed
         if hasattr(self, 'val_pos_encs'):
@@ -1055,19 +1129,12 @@ class MSDAv3(nn.Module):
             sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
             sampled_val_feats = sampled_val_feats + self.val_pos_encs(sample_xyz)
 
-        # Get weighted value features
-        weighted_feats = attn_weights[:, :, :, :, None] * sampled_val_feats
-        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, -1)
-
-        # Get output features
-        out_feats = self.out_proj(weighted_feats)
-
         # Perform sample insertion if needed
         if self.sample_insert:
             head_val_size = sampled_val_feats.shape[4]
-            sampled_val_feats = sampled_val_feats.permute(2, 0, 1, 3, 4)
-            sampled_val_feats = sampled_val_feats.view(self.num_heads, -1, head_val_size)
-            insert_feats = torch.bmm(sampled_val_feats, self.insert_weight) + self.insert_bias
+            insert_feats = sampled_val_feats.permute(2, 0, 1, 3, 4)
+            insert_feats = insert_feats.view(self.num_heads, -1, head_val_size)
+            insert_feats = torch.bmm(insert_feats, self.insert_weight) + self.insert_bias
 
             insert_size = insert_feats.shape[2]
             insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
@@ -1085,6 +1152,24 @@ class MSDAv3(nn.Module):
             map_feats = pytorch_maps_insert_2d(*insert_args)
             storage_dict['map_feats'] = map_feats
 
+        # Get output features
+        if self.compute_out_feats:
+
+            # Get attention weights
+            query_feats = query_feats / math.sqrt(head_qk_size)
+            attn_weights = torch.matmul(query_feats, sampled_key_feats.transpose(3, 4)).squeeze(dim=3)
+            attn_weights = F.softmax(attn_weights, dim=3)
+
+            # Get weighted value features
+            weighted_feats = attn_weights[:, :, :, :, None] * sampled_val_feats
+            weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, -1)
+
+            # Get non-zero output features
+            out_feats = self.out_proj(weighted_feats)
+
+        else:
+            out_feats = torch.zeros_like(in_feats)
+
         return out_feats
 
 
@@ -1098,20 +1183,24 @@ class MSDAv4(nn.Module):
         num_points (int): Integer containing the number of sampling points per head and per level.
 
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
-        attn_weights (nn.Linear): Module computing the attention weights from the input features.
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
-        out_proj (nn.Linear): Module computing output features from weighted value features.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
         If sample_insert is True:
             insert_weight (nn.Parameter): Parameter containing the weight matrix used during sample insertion.
             insert_bias (nn.Parameter): Parameter containing the bias vector used during sample insertion.
+
+        compute_out_feats (bool): Boolean indicating whether output features should be computed.
+
+        If compute_out_feats is True:
+            attn_weights (nn.Linear): Module computing the attention weights from the input features.
+            out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, sample_insert=False, insert_size=2):
+                 val_with_pos=False, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv4 module.
 
@@ -1125,7 +1214,7 @@ class MSDAv4(nn.Module):
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
-            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=2).
+            insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
         Raises:
             ValueError: Error when the input feature size does not divide the number of heads.
@@ -1158,11 +1247,6 @@ class MSDAv4(nn.Module):
         grid_init = sizes * grid_init
         self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
 
-        # Initialize module computing the unnormalized attention weights
-        self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
-        nn.init.zeros_(self.attn_weights.weight)
-        nn.init.zeros_(self.attn_weights.bias)
-
         # Get and check size of value features
         if val_size == -1:
             val_size = in_size
@@ -1180,18 +1264,48 @@ class MSDAv4(nn.Module):
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
 
-        # Initialize module computing the output features
-        out_size = in_size if out_size == -1 else out_size
-        self.out_proj = nn.Linear(val_size, out_size)
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
-
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
 
         if sample_insert:
             self.insert_weight = nn.Parameter(torch.zeros(num_heads, val_size // num_heads, insert_size))
             self.insert_bias = nn.Parameter(torch.zeros(num_heads, 1, insert_size))
+
+        # Set attribute determining whether output features should be computed
+        self.compute_out_feats = True
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Initialize module computing the output features
+        out_size = in_size if out_size == -1 else out_size
+        self.out_proj = nn.Linear(val_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def no_out_feats_computation(self):
+        """
+        Method changing the module to not compute output features.
+
+        Raises:
+            RuntimeError: Error when sample insertion is False.
+        """
+
+        # Check whether sample insertion is True
+        if self.sample_insert:
+
+            # Change attribute that no output features should be computed
+            self.compute_out_feats = False
+
+            # Delete all attributes related to the computation of output features
+            delattr(self, 'attn_weights')
+            delattr(self, 'out_proj')
+
+        else:
+            error_msg = "Sample insertion should be True when not computing output features."
+            raise RuntimeError(error_msg)
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict=None,
                 **kwargs):
@@ -1244,10 +1358,6 @@ class MSDAv4(nn.Module):
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
 
-        # Get attention weights
-        attn_weights = self.attn_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
-        attn_weights = F.softmax(attn_weights, dim=3)
-
         # Get value features
         val_feats = self.val_proj(sample_feats)
 
@@ -1273,18 +1383,11 @@ class MSDAv4(nn.Module):
             sample_xyz = torch.cat([sample_xy, sample_z], dim=5).flatten(3, 4)
             sampled_feats = sampled_feats + self.val_pos_encs(sample_xyz)
 
-        # Get weighted value features
-        weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
-        weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, val_size)
-
-        # Get output features
-        out_feats = self.out_proj(weighted_feats)
-
         # Perform sample insertion if needed
         if self.sample_insert:
-            sampled_feats = sampled_feats.permute(2, 0, 1, 3, 4)
-            sampled_feats = sampled_feats.view(self.num_heads, -1, val_size // self.num_heads)
-            insert_feats = torch.bmm(sampled_feats, self.insert_weight) + self.insert_bias
+            insert_feats = sampled_feats.permute(2, 0, 1, 3, 4)
+            insert_feats = insert_feats.view(self.num_heads, -1, val_size // self.num_heads)
+            insert_feats = torch.bmm(insert_feats, self.insert_weight) + self.insert_bias
 
             insert_size = insert_feats.shape[2]
             insert_feats = insert_feats.view(self.num_heads, batch_size*num_in_feats, -1, insert_size)
@@ -1298,6 +1401,23 @@ class MSDAv4(nn.Module):
 
             map_feats = pytorch_maps_insert_3d(*insert_args)
             storage_dict['map_feats'] = map_feats
+
+        # Get output features
+        if self.compute_out_feats:
+
+            # Get attention weights
+            attn_weights = self.attn_weights(in_feats).view(*common_shape, self.num_levels * self.num_points)
+            attn_weights = F.softmax(attn_weights, dim=3)
+
+            # Get weighted value features
+            weighted_feats = attn_weights[:, :, :, :, None] * sampled_feats
+            weighted_feats = weighted_feats.sum(dim=3).view(batch_size, num_in_feats, val_size)
+
+            # Get non-zero output features
+            out_feats = self.out_proj(weighted_feats)
+
+        else:
+            out_feats = torch.zeros_like(in_feats)
 
         return out_feats
 
