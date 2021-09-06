@@ -3,13 +3,15 @@ Map-Based Detector (MBD) head.
 """
 from collections import OrderedDict
 
+from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.functional.loss import dice_loss
 from models.functional.net import get_net
 from models.modules.container import Sequential
-from structures.boxes import get_box_deltas
+from structures.boxes import box_iou, get_box_deltas
 
 
 class MBD (nn.Module):
@@ -120,6 +122,107 @@ class MBD (nn.Module):
         metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
+    def get_loss(self, pred_maps, tgt_dict, sbd_boxes):
+        """
+        Compute segmentation loss from prediction maps and perform additional accuracy-related analyses.
+
+        Args:
+            pred_maps (FloatTensor): Maps with prediction logits of shape [num_objs_total, 1, sH, sW].
+
+            tgt_dict (Dict): Target dictionary potentially containing following keys:
+                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets];
+                - masks (ByteTensor): optional padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+
+            sbd_boxes (List): List [batch_size] of Boxes structures predicted by the SBD module of size [num_objs].
+
+        Returns:
+            loss_dict (Dict): Loss dictionary containing following key:
+                - mbd_seg_loss (FloatTensor): tensor containing the segmentation loss of shape [1].
+
+            analysis_dict (Dict): Analysis dictionary containing following keys:
+                - mbd_box_acc (FloatTensor): tensor containing the box accuracy (in percentage) of shape [1];
+                - mbd_seg_acc (FloatTensor): tensor containing the segmentation accuracy (in percentage) of shape [1].
+
+        Raises:
+            NotImplementedError: Error when target masks should be obtained without using ground-truth segmentations.
+            ValueError: Error when the number of segmentation loss types and corresponding loss weights is different.
+            ValueError: Error when invalid segmentation loss type is provided.
+        """
+
+        # Initialize loss and analysis dictionaries
+        dtype = pred_maps.dtype
+        device = pred_maps.device
+
+        loss_dict = {k: torch.zeros(1, dtype=dtype, device=device) for k in ['mbd_seg_loss']}
+        analysis_dict = {k: torch.zeros(1, dtype=dtype, device=device) for k in ['mbd_box_acc', 'mbd_seg_acc']}
+
+        # Perform prediction-target matching
+        pred_ids = []
+        tgt_ids = []
+        offset = 0
+
+        for sbd_boxes_i, tgt_boxes_i in zip(sbd_boxes, tgt_dict['boxes']):
+            pred_ids_i = torch.arange(len(sbd_boxes_i), device=device)
+
+            iou_matrix = box_iou(sbd_boxes_i, tgt_boxes_i)
+            max_ious, tgt_ids_i = torch.max(iou_matrix, dim=1)
+
+            pred_mask = max_ious >= self.match.thr
+            pred_ids_i = pred_ids_i[pred_mask]
+            tgt_ids_i = tgt_ids_i[pred_mask] + offset
+
+            pred_ids.append(pred_ids_i)
+            tgt_ids.append(tgt_ids_i)
+            offset += len(tgt_boxes_i)
+
+        pred_ids = torch.cat(pred_ids, dim=0)
+        tgt_ids = torch.cat(tgt_ids, dim=0)
+
+        # Handle case where there are no matches
+        if len(pred_ids) == 0:
+            loss_dict['mbd_seg_loss'] = 0.0 * pred_maps.sum()
+            loss_dict['mbd_box_acc'] = 100.0
+            loss_dict['mbd_seg_acc'] = 100.0
+
+        # Get target masks
+        if self.use_gt_seg:
+            tgt_masks = tgt_dict['masks']
+
+        else:
+            raise NotImplementedError
+
+        # Match prediction maps with target masks
+        pred_maps = pred_maps[pred_ids]
+        tgt_masks = tgt_masks[tgt_ids].to(dtype=pred_maps.dtype)
+
+        # Upsample prediction maps to size of target masks
+        upsample_size = tgt_masks.shape[-2:]
+        pred_maps = F.interpolate(pred_maps, size=upsample_size, mode='bilinear', align_corners=False)
+        pred_maps = pred_maps.squeeze(dim=1)
+
+        # Get segmentation loss
+        if len(self.seg_types) != len(self.seg_weights):
+            error_msg = "The number of segmentation loss types and corresponding loss weights must be equal."
+            raise ValueError(error_msg)
+
+        for seg_type, seg_weight in zip(self.seg_types, self.seg_weights):
+            if seg_type == 'dice':
+                seg_loss = dice_loss(pred_maps, tgt_masks, reduction='sum')
+                loss_dict['mbd_seg_loss'] += seg_weight * seg_loss
+
+            elif seg_type == 'sigmoid_focal':
+                focal_kwargs = {'alpha': self.seg_alpha, 'gamma': self.seg_gamma, 'reduction': 'none'}
+                seg_losses = sigmoid_focal_loss(pred_maps, tgt_masks, **focal_kwargs)
+
+                seg_loss = seg_losses.flatten(start_dim=1).mean(dim=1).sum()
+                loss_dict['mbd_seg_loss'] += seg_weight * seg_loss
+
+            else:
+                error_msg = f"Invalid segmentation loss type '{seg_type}'."
+                raise ValueError(error_msg)
+
+        return loss_dict, analysis_dict
+
     def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
         """
         Forward method of the MBD head.
@@ -229,20 +332,30 @@ class MBD (nn.Module):
         # Apply cross-attention (CA) module
         [self.ca(obj_feats[i], **ca_kwargs[i]) for i in range(batch_size)]
 
-        # Get single-scale segmentation maps
-        ms_seg_maps = torch.cat([ca_kwargs[i]['storage_dict']['map_feats'] for i in range(batch_size)], dim=0)
+        # Concatenate map features across batch entries
+        map_feats = torch.cat([ca_kwargs[i]['storage_dict']['map_feats'] for i in range(batch_size)], dim=0)
 
+        # Get multi-scale prediction maps
         map_sizes = sample_map_shapes.prod(dim=1).tolist()
-        ms_seg_maps = ms_seg_maps.transpose(1, 2).split(map_sizes, dim=2)
+        ms_pred_maps = map_feats.transpose(1, 2).split(map_sizes, dim=2)
 
+        # Get single-scale prediction maps
         num_levels = len(sample_map_shapes)
-        seg_maps = ms_seg_maps[-1].view(-1, 1, *sample_map_shapes[-1])
+        pred_maps = ms_pred_maps[-1].view(-1, 1, *sample_map_shapes[-1])
         kernel = torch.tensor([[[[1/16, 1/8, 1/16], [1/8, 1/4, 1/8], [1/16, 1/8, 1/16]]]], device=device)
 
         for i in range(num_levels-2, -1, -1):
             output_padding = ((sample_map_shapes[i] + 1) % 2).tolist()
-            seg_maps = F.conv_transpose2d(seg_maps, kernel, stride=2, padding=1, output_padding=output_padding)
-            seg_maps = seg_maps + ms_seg_maps[i].view(-1, 1, *sample_map_shapes[i])
+            pred_maps = F.conv_transpose2d(pred_maps, kernel, stride=2, padding=1, output_padding=output_padding)
+            pred_maps = pred_maps + ms_pred_maps[i].view(-1, 1, *sample_map_shapes[i])
+
+        # Get MBD losses and corresponding analyses if desired
+        if tgt_dict is not None:
+            sbd_boxes = [sbd_boxes[i].to_img_scale(images[i]) for i in range(batch_size)]
+            local_loss_dict, local_analysis_dict = self.get_loss(pred_maps, tgt_dict, sbd_boxes)
+
+            loss_dict.update(local_loss_dict)
+            analysis_dict.update(local_analysis_dict)
 
         # Return desired dictionaries
         if self.training:
