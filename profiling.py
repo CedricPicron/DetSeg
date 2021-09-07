@@ -420,10 +420,12 @@ elif profiling_args.model == 'mbd':
     main_args.sbd_ca_step_size = -1
     main_args.sbd_ca_step_norm_xy = 'map'
     main_args.sbd_ca_step_norm_z = 1.0
-    main_args.mbd_train_sbd = False
     main_args.mbd_ca_type = 'deformable_attn'
     main_args.mbd_ca_layers = 6
     main_args.mbd_ca_version = 2
+    main_args.mbd_match_thr = 0.0
+    main_args.mbd_loss_gt_seg = True
+    main_args.mbd_loss_seg_types = 'sigmoid_focal'
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['mbd'].to('cuda')
 
@@ -439,7 +441,8 @@ elif profiling_args.model == 'mbd':
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes, 'masks': masks}
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 

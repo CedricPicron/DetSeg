@@ -2,6 +2,7 @@
 Map-Based Detector (MBD) head.
 """
 from collections import OrderedDict
+from copy import deepcopy
 
 from fvcore.nn import sigmoid_focal_loss
 import torch
@@ -11,7 +12,7 @@ import torch.nn.functional as F
 from models.functional.loss import dice_loss
 from models.functional.net import get_net
 from models.modules.container import Sequential
-from structures.boxes import box_iou, get_box_deltas
+from structures.boxes import box_iou, get_box_deltas, mask_to_box
 
 
 class MBD (nn.Module):
@@ -20,7 +21,6 @@ class MBD (nn.Module):
 
     Attributes:
         sbd (SBD): State-based detector (SBD) module computing the object features.
-        train_sbd (bool): Boolean indicating whether underlying SBD module should be trained.
 
         rae (Sequential): Relative anchor encoding (RAE) module computing encodings from anchor differences.
         aae (Sequential): Absolute anchor encoding (AAE) module computing encodings from normalized anchors.
@@ -28,17 +28,25 @@ class MBD (nn.Module):
         ca (Sequential): Cross-attention (CA) module sampling from feature maps with object features as context.
         ca_type (str): String containing the type of cross-attention used by the MBD head.
 
+        match_thr (float): Threshold determining the minimum box IoU for positive matching.
+
+        use_gt_seg (bool): Boolean indicating whether to use ground-truth segmentation masks during training.
+        seg_types (List): List with strings containing the types of segmentation loss functions.
+        seg_alpha (float): Alpha value used by the segmentation sigmoid focal loss.
+        seg_gamma (float): Gamma value used by the segmentation sigmoid focal loss.
+        seg_weights (List): List with factors weighting the different segmentation losses.
+
+        pred_thr (float): Threshold determining the minimum probability for a positive pixel prediction.
+
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, sbd_dict, rae_dict, aae_dict, ca_dict, metadata):
+    def __init__(self, sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict, metadata):
         """
         Initializes the MBD module.
 
         Args:
-            sbd_dict (Dict): State-based detector (SBD) dictionary containing following keys:
-                - sbd (SBD): state-based detector (SBD) module computing the object features;
-                - train_sbd (bool): boolean indicating whether underlying SBD module should be trained.
+            sbd (SBD): State-based detector (SBD) module computing the object features.
 
             rae_dict (Dict): Relative anchor encoding (RAE) network dictionary containing following keys:
                 - type (str): string containing the type of hidden RAE (HRAE) network;
@@ -83,16 +91,27 @@ class MBD (nn.Module):
                 - sample_insert (bool): boolean indicating whether to insert CA sample information in a maps structure;
                 - insert_size (int): integer containing the size of features to be inserted during CA sample insertion.
 
+            match_dict (Dict): Matching dictionary containing following key:
+                - match_thr (float): threshold determining the minimum box IoU for positive matching.
+
+            loss_dict (Dict): Loss dictionary containing following keys:
+                - use_gt_seg (bool): boolean indicating whether to use ground-truth segmentation masks during training;
+                - seg_types (List): list with strings containing the types of segmentation loss functions;
+                - seg_alpha (float): alpha value used by the segmentation sigmoid focal loss;
+                - seg_gamma (float): gamma value used by the segmentation sigmoid focal loss;
+                - seg_weights (List): list with factors weighting the different segmentation losses.
+
+            pred_dict (Dict): Prediction dictionary containing following key:
+                - pred_thr (float): threshold determining the minimum probability for a positive pixel prediction.
+
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set SBD-related attributes
-        self.sbd = sbd_dict['sbd']
-        self.train_sbd = sbd_dict['train_sbd']
-        self.sbd.requires_grad_(self.train_sbd)
+        # Set SBD attribute
+        self.sbd = sbd
 
         # Initialization of relative anchor encoding (RAE) network
         irae = nn.Linear(4, rae_dict['in_size'])
@@ -117,12 +136,24 @@ class MBD (nn.Module):
             last_pa_layer.no_out_feats_computation()
             last_pa_layer.no_sample_locations_update()
 
+        # Set matching attributes
+        for k, v in match_dict.items():
+            setattr(self, k, v)
+
+        # Set loss attributes
+        for k, v in loss_dict.items():
+            setattr(self, k, v)
+
+        # Set prediction attributes
+        for k, v in pred_dict.items():
+            setattr(self, k, v)
+
         # Set metadata attribute
         metadata.stuff_classes = metadata.thing_classes
         metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
-    def get_loss(self, pred_maps, tgt_dict, sbd_boxes):
+    def get_loss(self, pred_maps, tgt_dict, sbd_boxes, images):
         """
         Compute segmentation loss from prediction maps and perform additional accuracy-related analyses.
 
@@ -130,10 +161,12 @@ class MBD (nn.Module):
             pred_maps (FloatTensor): Maps with prediction logits of shape [num_objs_total, 1, sH, sW].
 
             tgt_dict (Dict): Target dictionary potentially containing following keys:
-                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): optional padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             sbd_boxes (List): List [batch_size] of Boxes structures predicted by the SBD module of size [num_objs].
+            images (Images): Images structure containing the batched images.
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following key:
@@ -156,18 +189,34 @@ class MBD (nn.Module):
         loss_dict = {k: torch.zeros(1, dtype=dtype, device=device) for k in ['mbd_seg_loss']}
         analysis_dict = {k: torch.zeros(1, dtype=dtype, device=device) for k in ['mbd_box_acc', 'mbd_seg_acc']}
 
+        # Get number of targets
+        num_tgts = len(tgt_dict['boxes'])
+
+        # Handle case where there are no targets
+        if num_tgts == 0:
+            loss_dict['mbd_seg_loss'] += 0.0 * pred_maps.sum()
+            analysis_dict['mbd_box_acc'] += 100.0
+            analysis_dict['mbd_seg_acc'] += 100.0
+
+        # Get target boxes per image
+        tgt_sizes = tgt_dict['sizes']
+        tgt_boxes = [tgt_dict['boxes'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
+
         # Perform prediction-target matching
         pred_ids = []
         tgt_ids = []
         offset = 0
 
-        for sbd_boxes_i, tgt_boxes_i in zip(sbd_boxes, tgt_dict['boxes']):
+        for sbd_boxes_i, tgt_boxes_i in zip(sbd_boxes, tgt_boxes):
+            if len(tgt_boxes_i) == 0:
+                continue
+
             pred_ids_i = torch.arange(len(sbd_boxes_i), device=device)
 
             iou_matrix = box_iou(sbd_boxes_i, tgt_boxes_i)
             max_ious, tgt_ids_i = torch.max(iou_matrix, dim=1)
 
-            pred_mask = max_ious >= self.match.thr
+            pred_mask = max_ious >= self.match_thr
             pred_ids_i = pred_ids_i[pred_mask]
             tgt_ids_i = tgt_ids_i[pred_mask] + offset
 
@@ -180,9 +229,9 @@ class MBD (nn.Module):
 
         # Handle case where there are no matches
         if len(pred_ids) == 0:
-            loss_dict['mbd_seg_loss'] = 0.0 * pred_maps.sum()
-            loss_dict['mbd_box_acc'] = 100.0
-            loss_dict['mbd_seg_acc'] = 100.0
+            loss_dict['mbd_seg_loss'] += 0.0 * pred_maps.sum()
+
+            return loss_dict, analysis_dict
 
         # Get target masks
         if self.use_gt_seg:
@@ -193,12 +242,17 @@ class MBD (nn.Module):
 
         # Match prediction maps with target masks
         pred_maps = pred_maps[pred_ids]
-        tgt_masks = tgt_masks[tgt_ids].to(dtype=pred_maps.dtype)
+        tgt_masks = tgt_masks[tgt_ids]
 
-        # Upsample prediction maps to size of target masks
-        upsample_size = tgt_masks.shape[-2:]
-        pred_maps = F.interpolate(pred_maps, size=upsample_size, mode='bilinear', align_corners=False)
+        # Downsample target masks to size of prediction masps
+        downsample_size = pred_maps.shape[-2:]
+        tgt_maps = tgt_masks.unsqueeze(dim=1).to(dtype=torch.float)
+        tgt_masks = F.interpolate(tgt_maps, size=downsample_size, mode='bilinear', align_corners=False) >= 0.5
+        tgt_masks = tgt_masks.squeeze(dim=1)
+
+        # Get prediction and target maps
         pred_maps = pred_maps.squeeze(dim=1)
+        tgt_maps = tgt_masks.to(dtype=pred_maps.dtype)
 
         # Get segmentation loss
         if len(self.seg_types) != len(self.seg_weights):
@@ -207,12 +261,12 @@ class MBD (nn.Module):
 
         for seg_type, seg_weight in zip(self.seg_types, self.seg_weights):
             if seg_type == 'dice':
-                seg_loss = dice_loss(pred_maps, tgt_masks, reduction='sum')
+                seg_loss = dice_loss(pred_maps, tgt_maps, reduction='sum')
                 loss_dict['mbd_seg_loss'] += seg_weight * seg_loss
 
             elif seg_type == 'sigmoid_focal':
                 focal_kwargs = {'alpha': self.seg_alpha, 'gamma': self.seg_gamma, 'reduction': 'none'}
-                seg_losses = sigmoid_focal_loss(pred_maps, tgt_masks, **focal_kwargs)
+                seg_losses = sigmoid_focal_loss(pred_maps, tgt_maps, **focal_kwargs)
 
                 seg_loss = seg_losses.flatten(start_dim=1).mean(dim=1).sum()
                 loss_dict['mbd_seg_loss'] += seg_weight * seg_loss
@@ -220,6 +274,24 @@ class MBD (nn.Module):
             else:
                 error_msg = f"Invalid segmentation loss type '{seg_type}'."
                 raise ValueError(error_msg)
+
+        # Get bounding box and segmenation accuracies
+        with torch.no_grad():
+
+            # Get prediction masks
+            pred_masks = pred_maps.sigmoid() >= self.pred_thr
+
+            # Get bounding box accuracy
+            pred_boxes = mask_to_box(pred_masks)
+            tgt_boxes = tgt_dict['boxes'].clone().normalize(images)
+            tgt_boxes = tgt_boxes[tgt_ids]
+
+            box_acc = box_iou(pred_boxes, tgt_boxes).diag().mean()
+            analysis_dict['mbd_box_acc'] += 100.0 * box_acc
+
+            # Get segmentation accuracy
+            seg_acc = torch.eq(pred_masks, tgt_masks).sum() / pred_masks.numel()
+            analysis_dict['mbd_seg_acc'] += 100.0 * seg_acc
 
         return loss_dict, analysis_dict
 
@@ -230,10 +302,10 @@ class MBD (nn.Module):
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
-            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
-                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+            tgt_dict (Dict): Target dictionary potentially containing following keys:
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - masks (ByteTensor): optional padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             images (Images): Images structure containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
@@ -284,9 +356,6 @@ class MBD (nn.Module):
         # Get desired prediction, loss and analysis dictionaries
         if not self.training:
             pred_dict = pred_dicts[-1]
-
-        elif not self.train_sbd:
-            loss_dict = {}
 
         analysis_dict = {f'sbd_{k}': v for k, v in sbd_analysis_dict.items() if 'dod_' not in k}
         analysis_dict.update({k: v for k, v in sbd_analysis_dict.items() if 'dod_' in k})
@@ -352,10 +421,23 @@ class MBD (nn.Module):
         # Get MBD losses and corresponding analyses if desired
         if tgt_dict is not None:
             sbd_boxes = [sbd_boxes[i].to_img_scale(images[i]) for i in range(batch_size)]
-            local_loss_dict, local_analysis_dict = self.get_loss(pred_maps, tgt_dict, sbd_boxes)
+            local_loss_dict, local_analysis_dict = self.get_loss(pred_maps, tgt_dict, sbd_boxes, images)
 
             loss_dict.update(local_loss_dict)
             analysis_dict.update(local_analysis_dict)
+
+        # Get and append prediction dictionary if desired
+        if not self.training:
+
+            # Get prediction boxes
+            pred_masks = pred_maps.sigmoid() >= self.pred_thr
+            boxes_per_img = pred_dicts[-1]['boxes'].boxes_per_img
+            pred_boxes = mask_to_box(pred_masks, boxes_per_img=boxes_per_img)
+
+            # Get prediction dictionary and append to SBD prediction dictionaries
+            pred_dict = deepcopy(pred_dicts[-1])
+            pred_dict['boxes'] = pred_boxes
+            pred_dicts.append(pred_dict)
 
         # Return desired dictionaries
         if self.training:

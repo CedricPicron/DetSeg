@@ -662,6 +662,11 @@ def box_giou(boxes1, boxes2):
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
     assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
 
+    # Check whether normalized attributes are consistent
+    check = boxes1.normalized == boxes2.normalized
+    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
+    assert check, assert_msg
+
     # Compute 2D IoU's and union areas
     ious, unions = box_iou(boxes1, boxes2, return_unions=True)
 
@@ -696,6 +701,11 @@ def box_intersection(boxes1, boxes2):
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
     assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+
+    # Check whether normalized attributes are consistent
+    check = boxes1.normalized == boxes2.normalized
+    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
+    assert check, assert_msg
 
     # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
     boxes1 = boxes1.clone().to_format('xyxy').boxes
@@ -733,6 +743,11 @@ def box_iou(boxes1, boxes2, return_inters=False, return_unions=False):
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
     assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
     assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+
+    # Check whether normalized attributes are consistent
+    check = boxes1.normalized == boxes2.normalized
+    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
+    assert check, assert_msg
 
     # Compute bounding box areas
     areas1 = boxes1.area()
@@ -861,6 +876,44 @@ def get_edge_dists(pts, boxes, scales=None):
     edge_dists = torch.cat([left_top_dists, right_bottom_dists], dim=1)
 
     return edge_dists
+
+
+def mask_to_box(masks, boxes_per_img=None):
+    """
+    Function converting binary masks into smallest axis-aligned bounding boxes containing the masks.
+
+    Args:
+        masks (BoolTensor): Tensor containing the binary masks of shape [num_masks, mH, mW].
+        boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
+
+    Returns:
+        boxes (Boxes): Boxes structure with smallest bounding boxes containing the masks of size [num_masks].
+    """
+
+    # Add positive pixel in top-left corner of masks without positive pixels
+    mask_sizes = masks.flatten(start_dim=1).sum(dim=1)
+    masks[mask_sizes == 0, 0, 0] = True
+
+    # Get indices of positive mask pixels
+    mask_sizes = masks.flatten(start_dim=1).sum(dim=1)
+    pos_ids = torch.nonzero(masks, as_tuple=False)
+    pos_ids = torch.split(pos_ids, mask_sizes.tolist(), dim=0)
+
+    # Get left, top, right and bottom indices
+    left_ids = torch.cat([pos_ids_i[:, 2].min()[None] for pos_ids_i in pos_ids], dim=0)
+    top_ids = torch.cat([pos_ids_i[:, 1].min()[None] for pos_ids_i in pos_ids], dim=0)
+    right_ids = torch.cat([pos_ids_i[:, 2].max()[None] for pos_ids_i in pos_ids], dim=0) + 1
+    bot_ids = torch.cat([pos_ids_i[:, 1].max()[None] for pos_ids_i in pos_ids], dim=0) + 1
+
+    # Construct bounding boxes
+    mH, mW = masks.shape[-2:]
+    scales = torch.tensor([mW, mH, mW, mH], dtype=torch.float, device=masks.device)
+
+    boxes = torch.stack([left_ids, top_ids, right_ids, bot_ids], dim=1)
+    boxes = boxes.to(dtype=torch.float) / scales
+    boxes = Boxes(boxes, format='xyxy', normalized='img_with_padding', boxes_per_img=boxes_per_img)
+
+    return boxes
 
 
 def pts_inside_boxes(pts, boxes):

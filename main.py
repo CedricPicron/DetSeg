@@ -214,8 +214,6 @@ def get_parser():
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
     # ** Map-Based Detector (MBD) head
-    parser.add_argument('--mbd_train_sbd', action='store_true', help='whether underlying SBD module should be trained')
-
     parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
     parser.add_argument('--mbd_hrae_layers', default=1, type=int, help='number of layers of HRAE network')
     parser.add_argument('--mbd_hrae_hidden_size', default=1024, type=int, help='hidden feature size of HRAE network')
@@ -245,7 +243,15 @@ def get_parser():
     parser.add_argument('--mbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
     parser.add_argument('--mbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
 
-    parser.add_argument('--mbd_use_gt_seg', action='store_true', help='use ground-truth segmentation during training')
+    parser.add_argument('--mbd_match_thr', default=0.5, type=float, help='minimum box IoU for positive matching')
+
+    parser.add_argument('--mbd_loss_gt_seg', action='store_true', help='use ground-truth segmentation during training')
+    parser.add_argument('--mbd_loss_seg_types', nargs='*', default='sigmoid_focal', help='segmentation loss types')
+    parser.add_argument('--mbd_loss_seg_alpha', default=0.25, type=float, help='segmentation focal alpha value')
+    parser.add_argument('--mbd_loss_seg_gamma', default=2.0, type=float, help='segmentation focal gamma value')
+    parser.add_argument('--mbd_loss_seg_weights', nargs='*', default=1.0, type=float, help='segmentation loss weights')
+
+    parser.add_argument('--mbd_pred_thr', default=0.6, type=float, help='minimum probability for positive prediction')
 
     # ** Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')

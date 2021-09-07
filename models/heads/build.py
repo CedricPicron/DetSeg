@@ -160,11 +160,15 @@ def build_heads(args):
             assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
             num_levels = len(args.core_feat_sizes)
 
+            if not isinstance(args.mbd_loss_seg_types, list):
+                args.mbd_loss_seg_types = [args.mbd_loss_seg_types]
+
+            if not isinstance(args.mbd_loss_seg_weights, list):
+                args.mbd_loss_seg_weights = [args.mbd_loss_seg_weights]
+
             args_copy = deepcopy(args)
             args_copy.heads = ['sbd']
             sbd = build_heads(args_copy)['sbd']
-
-            sbd_dict = {'sbd': sbd, 'train_sbd': args.mbd_train_sbd}
 
             rae_dict = {'type': args.mbd_hrae_type, 'layers': args.mbd_hrae_layers, 'in_size': args.sbd_state_size}
             rae_dict = {**rae_dict, 'hidden_size': args.mbd_hrae_hidden_size, 'out_size': args.sbd_state_size}
@@ -186,10 +190,18 @@ def build_heads(args):
             ca_dict = {**ca_dict, 'step_norm_xy': args.mbd_ca_step_norm_xy, 'step_norm_z': args.mbd_ca_step_norm_z}
             ca_dict = {**ca_dict, 'num_particles': args.mbd_ca_num_particles, 'sample_insert': True, 'insert_size': 1}
 
-            if args.mbd_use_gt_seg:
+            match_dict = {'match_thr': args.mbd_match_thr}
+
+            if args.mbd_loss_gt_seg:
                 args.requires_masks = True
 
-            mbd_head = MBD(sbd_dict, rae_dict, aae_dict, ca_dict, metadata)
+            loss_dict = {'use_gt_seg': args.mbd_loss_gt_seg, 'seg_types': args.mbd_loss_seg_types}
+            loss_dict = {**loss_dict, 'seg_alpha': args.mbd_loss_seg_alpha, 'seg_gamma': args.mbd_loss_seg_gamma}
+            loss_dict = {**loss_dict, 'seg_weights': args.mbd_loss_seg_weights}
+
+            pred_dict = {'pred_thr': args.mbd_pred_thr}
+
+            mbd_head = MBD(sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict, metadata)
             heads[head_type] = mbd_head
 
         elif head_type == 'ret':
