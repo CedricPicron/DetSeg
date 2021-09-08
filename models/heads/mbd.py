@@ -198,6 +198,8 @@ class MBD (nn.Module):
             analysis_dict['mbd_box_acc'] += 100.0
             analysis_dict['mbd_seg_acc'] += 100.0
 
+            return loss_dict, analysis_dict
+
         # Get target boxes per image
         tgt_sizes = tgt_dict['sizes']
         tgt_boxes = [tgt_dict['boxes'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
