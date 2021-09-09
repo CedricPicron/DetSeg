@@ -205,26 +205,29 @@ class MBD (nn.Module):
         tgt_boxes = [tgt_dict['boxes'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
 
         # Perform prediction-target matching
+        pred_offset = 0
+        tgt_offset = 0
+
         pred_ids = []
         tgt_ids = []
-        offset = 0
 
         for sbd_boxes_i, tgt_boxes_i in zip(sbd_boxes, tgt_boxes):
             if len(tgt_boxes_i) == 0:
                 continue
 
-            pred_ids_i = torch.arange(len(sbd_boxes_i), device=device)
-
             iou_matrix = box_iou(sbd_boxes_i, tgt_boxes_i)
             max_ious, tgt_ids_i = torch.max(iou_matrix, dim=1)
-
             pred_mask = max_ious >= self.match_thr
-            pred_ids_i = pred_ids_i[pred_mask]
-            tgt_ids_i = tgt_ids_i[pred_mask] + offset
+
+            pred_ids_i = torch.arange(len(sbd_boxes_i), device=device)
+            pred_ids_i = pred_ids_i[pred_mask] + pred_offset
+            tgt_ids_i = tgt_ids_i[pred_mask] + tgt_offset
+
+            pred_offset += len(sbd_boxes_i)
+            tgt_offset += len(tgt_boxes_i)
 
             pred_ids.append(pred_ids_i)
             tgt_ids.append(tgt_ids_i)
-            offset += len(tgt_boxes_i)
 
         pred_ids = torch.cat(pred_ids, dim=0)
         tgt_ids = torch.cat(tgt_ids, dim=0)
