@@ -435,7 +435,7 @@ class MBD (nn.Module):
         if not self.training:
 
             # Get prediction boxes
-            pred_masks = pred_maps.sigmoid() >= self.pred_thr
+            pred_masks = pred_maps.squeeze(dim=1).sigmoid() >= self.pred_thr
             boxes_per_img = pred_dicts[-1]['boxes'].boxes_per_img
             pred_boxes = mask_to_box(pred_masks, boxes_per_img=boxes_per_img)
 
