@@ -941,8 +941,11 @@ class SBD(nn.Module):
                 up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
 
+                level_mask = (feat_ids[i][:, None] - sample_map_start_ids) >= 0
+                level_ids = level_mask.sum(dim=1) - 1
+                up_kwargs[i]['level_ids'] = level_ids
+
                 if self.up_ca_type == 'particle_attn':
-                    up_kwargs[i]['sample_feat_ids'] = feat_ids[i]
                     up_kwargs[i]['storage_dict'] = {}
 
         # Check whether the number of update iteration is greater than zero

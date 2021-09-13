@@ -400,11 +400,12 @@ class MBD (nn.Module):
                 ca_kwargs[i]['sample_feats'] = sample_feats[i]
                 ca_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 ca_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
-                ca_kwargs[i]['storage_dict'] = {'map_feats': map_feats}
                 ca_kwargs[i]['add_encs'] = abs_anchor_encs[i]
+                ca_kwargs[i]['storage_dict'] = {'map_feats': map_feats}
 
-                if self.ca_type == 'particle_attn':
-                    ca_kwargs[i]['sample_feat_ids'] = sample_feat_ids[i]
+                level_mask = (sample_feat_ids[i][:, None] - sample_map_start_ids) >= 0
+                level_ids = level_mask.sum(dim=1) - 1
+                ca_kwargs[i]['level_ids'] = level_ids
 
         # Apply cross-attention (CA) module
         [self.ca(obj_feats[i], **ca_kwargs[i]) for i in range(batch_size)]
