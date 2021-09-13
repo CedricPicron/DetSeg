@@ -185,10 +185,12 @@ def build_heads(args):
             ca_dict = {**ca_dict, 'norm': args.mbd_ca_norm, 'act_fn': args.mbd_ca_act_fn, 'skip': True}
             ca_dict = {**ca_dict, 'version': args.mbd_ca_version, 'num_heads': args.mbd_ca_num_heads}
             ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.mbd_ca_num_points}
-            ca_dict = {**ca_dict, 'qk_size': args.mbd_ca_qk_size, 'val_size': args.mbd_ca_val_size}
-            ca_dict = {**ca_dict, 'val_with_pos': args.mbd_ca_val_with_pos, 'step_size': args.mbd_ca_step_size}
-            ca_dict = {**ca_dict, 'step_norm_xy': args.mbd_ca_step_norm_xy, 'step_norm_z': args.mbd_ca_step_norm_z}
-            ca_dict = {**ca_dict, 'num_particles': args.mbd_ca_num_particles, 'sample_insert': True, 'insert_size': 1}
+            ca_dict = {**ca_dict, 'rad_pts': args.mbd_ca_rad_pts, 'ang_pts': args.mbd_ca_ang_pts}
+            ca_dict = {**ca_dict, 'dup_pts': args.mbd_ca_dup_pts, 'qk_size': args.mbd_ca_qk_size}
+            ca_dict = {**ca_dict, 'val_size': args.mbd_ca_val_size, 'val_with_pos': args.mbd_ca_val_with_pos}
+            ca_dict = {**ca_dict, 'step_size': args.mbd_ca_step_size, 'step_norm_xy': args.mbd_ca_step_norm_xy}
+            ca_dict = {**ca_dict, 'step_norm_z': args.mbd_ca_step_norm_z, 'num_particles': args.mbd_ca_num_particles}
+            ca_dict = {**ca_dict, 'sample_insert': True, 'insert_size': 1}
 
             match_dict = {'match_thr': args.mbd_match_thr}
 
@@ -297,10 +299,11 @@ def build_heads(args):
             ca_dict = {**ca_dict, 'norm': args.sbd_ca_norm, 'act_fn': args.sbd_ca_act_fn, 'skip': True}
             ca_dict = {**ca_dict, 'version': args.sbd_ca_version, 'num_heads': args.sbd_ca_num_heads}
             ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.sbd_ca_num_points}
-            ca_dict = {**ca_dict, 'qk_size': args.sbd_ca_qk_size, 'val_size': args.sbd_ca_val_size}
-            ca_dict = {**ca_dict, 'val_with_pos': args.sbd_ca_val_with_pos, 'step_size': args.sbd_ca_step_size}
-            ca_dict = {**ca_dict, 'step_norm_xy': args.sbd_ca_step_norm_xy, 'step_norm_z': args.sbd_ca_step_norm_z}
-            ca_dict = {**ca_dict, 'num_particles': args.sbd_ca_num_particles}
+            ca_dict = {**ca_dict, 'rad_pts': args.sbd_ca_rad_pts, 'ang_pts': args.sbd_ca_ang_pts}
+            ca_dict = {**ca_dict, 'dup_pts': args.sbd_ca_dup_pts, 'qk_size': args.sbd_ca_qk_size}
+            ca_dict = {**ca_dict, 'val_size': args.sbd_ca_val_size, 'val_with_pos': args.sbd_ca_val_with_pos}
+            ca_dict = {**ca_dict, 'step_size': args.sbd_ca_step_size, 'step_norm_xy': args.sbd_ca_step_norm_xy}
+            ca_dict = {**ca_dict, 'step_norm_z': args.sbd_ca_step_norm_z, 'num_particles': args.sbd_ca_num_particles}
 
             sa_dict = {'type': args.sbd_sa_type, 'layers': args.sbd_sa_layers, 'in_size': args.sbd_state_size}
             sa_dict = {**sa_dict, 'out_size': args.sbd_state_size, 'norm': args.sbd_sa_norm}
