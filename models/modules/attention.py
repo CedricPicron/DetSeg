@@ -1550,7 +1550,14 @@ class MSDAv5(nn.Module):
         # Initialize module computing the unnormalized attention weights
         self.attn_weights = nn.Linear(in_size, num_heads * num_levels * num_points)
         nn.init.zeros_(self.attn_weights.weight)
-        nn.init.zeros_(self.attn_weights.bias)
+
+        if dup_pts == 1:
+            nn.init.zeros_(self.attn_weights.bias)
+
+        else:
+            attn_bias = torch.arange(dup_pts) / (dup_pts-1) - 0.5
+            attn_bias = attn_bias[None, :].expand(num_heads * num_levels * rad_pts * ang_pts, -1)
+            self.attn_weights.bias = nn.Parameter(attn_bias.reshape(-1))
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
@@ -1805,7 +1812,14 @@ class MSDAv6(nn.Module):
         # Initialize module computing the unnormalized attention weights
         self.attn_weights = nn.Linear(in_size, num_heads * num_points)
         nn.init.zeros_(self.attn_weights.weight)
-        nn.init.zeros_(self.attn_weights.bias)
+
+        if dup_pts == 1:
+            nn.init.zeros_(self.attn_weights.bias)
+
+        else:
+            attn_bias = torch.arange(dup_pts) / (dup_pts-1) - 0.5
+            attn_bias = attn_bias[None, :].expand(num_heads * rad_pts * ang_pts, -1)
+            self.attn_weights.bias = nn.Parameter(attn_bias.reshape(-1))
 
         # Initialize module computing the output features
         out_size = in_size if out_size == -1 else out_size
