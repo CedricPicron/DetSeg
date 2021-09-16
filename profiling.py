@@ -192,6 +192,9 @@ elif profiling_args.model == 'bvn_ret':
     main_args.arch_type = 'bvn'
     main_args.bvn_step_mode = 'single'
     main_args.bvn_sync_heads = False
+    main_args.resnet_name = 'resnet50'
+    main_args.core_type = 'gc'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_2b3_gn.yaml'
     main_args.heads = ['ret']
     main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
@@ -384,7 +387,7 @@ elif profiling_args.model == 'gc':
     main_args.core_type = 'gc'
     main_args.core_min_map_id = 3
     main_args.core_max_map_id = 7
-    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_5b1_gn_sep.yaml'
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
