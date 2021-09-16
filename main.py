@@ -66,9 +66,14 @@ def get_parser():
     parser.add_argument('--resnet_dilation', action='store_true', help='use dilation for ResNet layer block')
 
     # Core
-    parser.add_argument('--core_type', default='fpn', choices=['fpn', 'gc'], help='type of core module')
+    parser.add_argument('--core_type', default='fpn', type=str, help='type of core module')
     parser.add_argument('--core_min_map_id', default=3, type=int, help='minimum map id of core feature maps')
     parser.add_argument('--core_max_map_id', default=7, type=int, help='maximum map id of core feature maps')
+
+    # * BiFPN (Bidirectional FPN)
+    parser.add_argument('--bifpn_feat_size', default=256, type=int, help='feature size of BiFPN output maps')
+    parser.add_argument('--bifpn_num_layers', default=2, type=int, help='number of consecutive BiFPN layers')
+    parser.add_argument('--bifpn_separable_conv', action='store_true', help='whether to use separable convolutions')
 
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')

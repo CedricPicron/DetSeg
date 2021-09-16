@@ -22,8 +22,8 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bch_sbd', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr', 'dfd']
-model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet', 'ret']
+model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr']
+model_choices = [*model_choices, 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet', 'ret']
 model_choices = [*model_choices, 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
@@ -91,6 +91,25 @@ elif profiling_args.model == 'bch_sbd':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)"
+
+elif profiling_args.model == 'bifpn':
+    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.core_type = 'bifpn'
+    main_args.core_min_map_id = 3
+    main_args.core_max_map_id = 7
+    main_args.bifpn_num_layers = 7
+    main_args.bifpn_separable_conv = True
+    model = build_core(main_args).to('cuda')
+
+    feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5]
+
+    inputs = {'in_feat_maps': feat_maps}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'bin':
     main_args.heads = ['bin']

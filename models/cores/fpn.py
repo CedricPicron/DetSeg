@@ -1,5 +1,5 @@
 """
-FPN module and build function.
+FPN (Feature Pyramid Network) core.
 """
 
 from torch import nn
@@ -10,7 +10,7 @@ from models.modules.projector import Projector
 
 class FPN(nn.Module):
     """
-    Class implementing the FPN (Feature Pyriamid Network) module.
+    Class implementing the FPN (Feature Pyramid Network) module.
 
     Attributes:
         lat_proj (Projector): Module computing lateral feature maps from input feature maps.

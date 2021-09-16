@@ -1,5 +1,5 @@
 """
-GC module and build function.
+GC (Generalized Core) core.
 """
 
 from pathlib import Path
