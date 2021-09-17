@@ -830,7 +830,7 @@ class MSDAv2(nn.Module):
         # Get sampled value features
         val_size = val_feats.shape[-1]
         val_feats = val_feats.view(batch_size, -1, self.num_heads, val_size // self.num_heads)
-        val_feats = val_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, val_size // self.num_heads)
+        val_feats = val_feats.transpose(1, 2).reshape(batch_size * self.num_heads, -1, val_size // self.num_heads)
 
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 2)
@@ -1105,7 +1105,7 @@ class MSDAv3(nn.Module):
         # Get sampled key-value features
         kv_size = kv_feats.shape[-1]
         kv_feats = kv_feats.view(batch_size, -1, self.num_heads, kv_size // self.num_heads)
-        kv_feats = kv_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, kv_size // self.num_heads)
+        kv_feats = kv_feats.transpose(1, 2).reshape(batch_size * self.num_heads, -1, kv_size // self.num_heads)
 
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 2)
@@ -1379,7 +1379,7 @@ class MSDAv4(nn.Module):
         # Get sampled value features
         val_size = val_feats.shape[-1]
         val_feats = val_feats.view(batch_size, -1, self.num_heads, val_size // self.num_heads)
-        val_feats = val_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, val_size // self.num_heads)
+        val_feats = val_feats.transpose(1, 2).reshape(batch_size * self.num_heads, -1, val_size // self.num_heads)
 
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
@@ -1644,7 +1644,7 @@ class MSDAv5(nn.Module):
         # Get sampled value features
         val_size = val_feats.shape[-1]
         val_feats = val_feats.view(batch_size, -1, self.num_heads, val_size // self.num_heads)
-        val_feats = val_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, val_size // self.num_heads)
+        val_feats = val_feats.transpose(1, 2).reshape(batch_size * self.num_heads, -1, val_size // self.num_heads)
 
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)
@@ -1914,7 +1914,7 @@ class MSDAv6(nn.Module):
         # Get sampled value features
         val_size = val_feats.shape[-1]
         val_feats = val_feats.view(batch_size, -1, self.num_heads, val_size // self.num_heads)
-        val_feats = val_feats.transpose(1, 2).view(batch_size * self.num_heads, -1, val_size // self.num_heads)
+        val_feats = val_feats.transpose(1, 2).reshape(batch_size * self.num_heads, -1, val_size // self.num_heads)
 
         sample_map_shapes = sample_map_shapes.fliplr()
         sample_locations = sample_locations.transpose(1, 2).reshape(batch_size * self.num_heads, -1, 3)

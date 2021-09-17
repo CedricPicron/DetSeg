@@ -81,7 +81,7 @@ class BCH(nn.Module):
         backbone_feat_maps = self.backbone(images)
 
         # Apply core
-        core_feat_maps = self.core(backbone_feat_maps)
+        core_feat_maps = self.core(backbone_feat_maps, images=images)
 
         # Apply heads and merge non-prediction dictionaries originating from different heads
         head_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'visualize': visualize, **kwargs}

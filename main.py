@@ -72,8 +72,28 @@ def get_parser():
 
     # * BiFPN (Bidirectional FPN)
     parser.add_argument('--bifpn_feat_size', default=256, type=int, help='feature size of BiFPN output maps')
-    parser.add_argument('--bifpn_num_layers', default=2, type=int, help='number of consecutive BiFPN layers')
+    parser.add_argument('--bifpn_num_layers', default=7, type=int, help='number of consecutive BiFPN layers')
     parser.add_argument('--bifpn_separable_conv', action='store_true', help='whether to use separable convolutions')
+
+    # * DC (Deformable Core)
+    parser.add_argument('--dc_feat_size', default=256, type=int, help='feature size of DC output maps')
+    parser.add_argument('--dc_num_layers', default=6, type=int, help='number of consecutive DC layers')
+
+    parser.add_argument('--dc_da_norm', default='layer', type=str, help='normalization type of DA network')
+    parser.add_argument('--dc_da_act_fn', default='', type=str, help='activation function of DA network')
+    parser.add_argument('--dc_da_version', default=0, type=int, help='version of DA network')
+    parser.add_argument('--dc_da_num_heads', default=8, type=int, help='number of DA attention heads')
+    parser.add_argument('--dc_da_num_points', default=4, type=int, help='number of DA points')
+    parser.add_argument('--dc_da_rad_pts', default=1, type=int, help='number of DA radial points')
+    parser.add_argument('--dc_da_ang_pts', default=1, type=int, help='number of DA angular points')
+    parser.add_argument('--dc_da_dup_pts', default=1, type=int, help='number of DA duplicate points')
+    parser.add_argument('--dc_da_qk_size', default=256, type=int, help='size of DA query and key features')
+    parser.add_argument('--dc_da_val_size', default=256, type=int, help='size of DA value features')
+    parser.add_argument('--dc_da_val_with_pos', action='store_true', help='adds position info to DA value features')
+
+    parser.add_argument('--dc_prior_type', default='location', type=str, help='type of used sample priors')
+    parser.add_argument('--dc_prior_factor', default=2.0, type=float, help='factor scaling box-type sample priors')
+    parser.add_argument('--dc_scale_encs', action='store_true', help='whether to use scale encodings')
 
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')

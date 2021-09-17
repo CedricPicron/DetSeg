@@ -22,9 +22,9 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'detr']
-model_choices = [*model_choices, 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet', 'ret']
-model_choices = [*model_choices, 'sample_decoder', 'sbd', 'sem']
+model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'dc']
+model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet']
+model_choices = [*model_choices, 'ret', 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -266,6 +266,29 @@ elif profiling_args.model == 'criterion':
     globals_dict = {'model': model, 'generate_out_list': generate_out_list, 'inputs': inputs}
     forward_stmt = "model(generate_out_list(), **inputs)"
     backward_stmt = "torch.stack([v for v in model(generate_out_list(), **inputs)[0].values()]).sum().backward()"
+
+elif profiling_args.model == 'dc':
+    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.core_type = 'dc'
+    main_args.core_min_map_id = 3
+    main_args.core_max_map_id = 7
+    main_args.dc_num_layers = 6
+    main_args.dc_da_version = 0
+    main_args.dc_prior_type = 'location'
+    main_args.dc_scale_encs = False
+    model = build_core(main_args).to('cuda')
+
+    feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5]
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    inputs = {'in_feat_maps': feat_maps, 'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'detr':
     main_args.arch_type = 'detr'

@@ -3,6 +3,7 @@ General build function for core modules.
 """
 
 from .bifpn import BiFPN
+from .dc import DeformableCore
 from .fpn import FPN
 from .gc import GC
 
@@ -30,6 +31,24 @@ def build_core(args):
         num_layers = args.bifpn_num_layers
         separable_conv = args.bifpn_separable_conv
         core = BiFPN(in_feat_sizes, in_bot_layers, feat_size, num_layers, separable_conv)
+
+    elif args.core_type == 'dc':
+        in_feat_sizes = args.backbone_feat_sizes
+        in_bot_layers = args.core_max_map_id - args.core_min_map_id - len(in_feat_sizes) + 1
+        map_ids = list(range(args.core_min_map_id, args.core_max_map_id + 1))
+
+        feat_size = args.dc_feat_size
+        num_layers = args.dc_num_layers
+
+        da_dict = {'norm': args.dc_da_norm, 'act_fn': args.dc_da_act_fn, 'skip': True, 'version': args.dc_da_version}
+        da_dict = {**da_dict, 'num_heads': args.dc_da_num_heads, 'num_points': args.dc_da_num_points}
+        da_dict = {**da_dict, 'rad_pts': args.dc_da_rad_pts, 'ang_pts': args.dc_da_ang_pts}
+        da_dict = {**da_dict, 'dup_pts': args.dc_da_dup_pts, 'qk_size': args.dc_da_qk_size}
+        da_dict = {**da_dict, 'val_size': args.dc_da_val_size, 'val_with_pos': args.dc_da_val_with_pos}
+
+        core_kwargs = {'prior_type': args.dc_prior_type, 'prior_factor': args.dc_prior_factor}
+        core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs}
+        core = DeformableCore(in_feat_sizes, in_bot_layers, map_ids, feat_size, num_layers, da_dict, **core_kwargs)
 
     elif args.core_type == 'fpn':
         in_feat_sizes = args.backbone_feat_sizes
