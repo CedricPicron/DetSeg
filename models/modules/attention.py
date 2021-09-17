@@ -1825,7 +1825,7 @@ class MSDAv6(nn.Module):
 
         else:
             attn_bias = torch.arange(dup_pts) / (dup_pts-1) - 0.5
-            attn_bias = attn_bias[None, :].expand(num_heads * rad_pts * ang_pts, -1)
+            attn_bias = attn_bias[None, :].expand(num_heads * rad_pts * ang_pts * lvl_pts, -1)
             self.attn_weights.bias = nn.Parameter(attn_bias.reshape(-1))
 
         # Initialize module computing the output features
