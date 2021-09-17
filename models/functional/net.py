@@ -34,6 +34,7 @@ def get_net(net_dict):
             - qk_size (int): query and key feature size of the network;
             - val_size (int): value feature size of the network;
             - val_with_pos (bool): boolean indicating whether position info is added to value features;
+            - norm_z (float): factor normalizing the sample offsets in the Z-direction;
             - step_size (float): size of the sample steps relative to the sample step normalization;
             - step_norm_xy (str): string containing the normalization type of sample steps in the XY-direction;
             - step_norm_z (float): value normalizing the sample steps in the Z-direction;
@@ -52,7 +53,7 @@ def get_net(net_dict):
     if net_dict['type'] == 'deformable_attn':
         net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
         net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'rad_pts', 'ang_pts')
-        net_keys = (*net_keys, 'lvl_pts', 'dup_pts', 'qk_size', 'val_size', 'val_with_pos', 'sample_insert')
+        net_keys = (*net_keys, 'lvl_pts', 'dup_pts', 'qk_size', 'val_size', 'val_with_pos', 'norm_z', 'sample_insert')
         net_keys = (*net_keys, 'insert_size')
         net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
         net_layer = DeformableAttn(*net_args, **net_kwargs)

@@ -91,6 +91,7 @@ def get_parser():
     parser.add_argument('--dc_da_qk_size', default=256, type=int, help='size of DA query and key features')
     parser.add_argument('--dc_da_val_size', default=256, type=int, help='size of DA value features')
     parser.add_argument('--dc_da_val_with_pos', action='store_true', help='adds position info to DA value features')
+    parser.add_argument('--dc_da_norm_z', default=1.0, type=float, help='Z-normalizer of DA sample offsets')
 
     parser.add_argument('--dc_prior_type', default='location', type=str, help='type of used sample priors')
     parser.add_argument('--dc_prior_factor', default=2.0, type=float, help='factor scaling box-type sample priors')
@@ -268,6 +269,7 @@ def get_parser():
     parser.add_argument('--mbd_ca_qk_size', default=256, type=int, help='size of CA query and key features')
     parser.add_argument('--mbd_ca_val_size', default=256, type=int, help='size of CA value features')
     parser.add_argument('--mbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
+    parser.add_argument('--mbd_ca_norm_z', default=1.0, type=float, help='Z-normalizer of CA sample offsets')
     parser.add_argument('--mbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
     parser.add_argument('--mbd_ca_step_norm_xy', default='map', type=str, help='XY-normalizer of CA sample steps')
     parser.add_argument('--mbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
@@ -387,6 +389,7 @@ def get_parser():
     parser.add_argument('--sbd_ca_qk_size', default=256, type=int, help='size of CA query and key features')
     parser.add_argument('--sbd_ca_val_size', default=256, type=int, help='size of CA value features')
     parser.add_argument('--sbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
+    parser.add_argument('--sbd_ca_norm_z', default=1.0, type=float, help='Z-normalizer of CA sample offsets')
     parser.add_argument('--sbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
     parser.add_argument('--sbd_ca_step_norm_xy', default='map', type=str, help='XY-normalizer of CA sample steps')
     parser.add_argument('--sbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')

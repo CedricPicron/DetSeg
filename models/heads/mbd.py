@@ -88,6 +88,7 @@ class MBD (nn.Module):
                 - qk_size (int): query and key feature size of the CA network;
                 - val_size (int): value feature size of the CA network;
                 - val_with_pos (bool): boolean indicating whether position info is added to CA value features;
+                - norm_z (float): factor normalizing the CA sample offsets in the Z-direction;
                 - step_size (float): size of the CA sample steps relative to the sample step normalization;
                 - step_norm_xy (str): string containing the normalization type of CA sample steps in the XY-direction;
                 - step_norm_z (float): value normalizing the CA sample steps in the Z-direction;

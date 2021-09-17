@@ -229,7 +229,7 @@ class DeformableAttn(nn.Module):
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
                  num_levels=5, num_points=4, rad_pts=1, ang_pts=1, lvl_pts=1, dup_pts=1, qk_size=-1, val_size=-1,
-                 val_with_pos=False, sample_insert=False, insert_size=1):
+                 val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the DeformableAttn module.
 
@@ -251,6 +251,7 @@ class DeformableAttn(nn.Module):
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            norm_z (float): Factor normalizing the sample offsets in the Z-direction (default=1.0).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
             insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
@@ -316,15 +317,15 @@ class DeformableAttn(nn.Module):
 
         elif version == 4:
             self.msda = MSDAv4(in_size, sample_size, out_size, num_heads, num_levels, num_points, val_size,
-                               val_with_pos, sample_insert, insert_size)
+                               val_with_pos, norm_z, sample_insert, insert_size)
 
         elif version == 5:
             self.msda = MSDAv5(in_size, sample_size, out_size, num_heads, num_levels, rad_pts, ang_pts, dup_pts,
-                               val_size, val_with_pos, sample_insert, insert_size)
+                               val_size, val_with_pos, norm_z, sample_insert, insert_size)
 
         elif version == 6:
             self.msda = MSDAv6(in_size, sample_size, out_size, num_heads, num_levels, rad_pts, ang_pts, lvl_pts,
-                               dup_pts, val_size, val_with_pos, sample_insert, insert_size)
+                               dup_pts, val_size, val_with_pos, norm_z, sample_insert, insert_size)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -1201,6 +1202,7 @@ class MSDAv4(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
+        norm_z (float): Factor normalizing the sample offsets in the Z-direction.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
@@ -1216,7 +1218,7 @@ class MSDAv4(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, num_points=4, val_size=-1,
-                 val_with_pos=False, sample_insert=False, insert_size=1):
+                 val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv4 module.
 
@@ -1229,6 +1231,7 @@ class MSDAv4(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and level (default=4).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            norm_z (float): Factor normalizing the sample offsets in the Z-direction (default=1.0).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
             insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
@@ -1279,6 +1282,9 @@ class MSDAv4(nn.Module):
         # Initialize module computing the value position encodings if requested
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
+
+        # Set attribute with Z-normalizer
+        self.norm_z = norm_z
 
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
@@ -1359,6 +1365,7 @@ class MSDAv4(nn.Module):
         if sample_priors.shape[-1] == 2:
             offset_normalizers = sample_map_shapes.fliplr()[None, None, None, :, None, :]
             sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] / offset_normalizers
+            sample_offsets[:, :, :, :, :, 2] = sample_offsets[:, :, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, :, None, :], sample_z], dim=5)
             sample_locations = sample_locations + sample_offsets
@@ -1366,6 +1373,7 @@ class MSDAv4(nn.Module):
         elif sample_priors.shape[-1] == 4:
             offset_factors = 0.5 * sample_priors[:, :, None, :, None, 2:] / self.num_points
             sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] * offset_factors
+            sample_offsets[:, :, :, :, :, 2] = sample_offsets[:, :, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, :, None, :2], sample_z], dim=5)
             sample_locations = sample_locations + sample_offsets
@@ -1451,6 +1459,7 @@ class MSDAv5(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
+        norm_z (float): Factor normalizing the sample offsets in the Z-direction.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
@@ -1466,7 +1475,7 @@ class MSDAv5(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=1, ang_pts=1, dup_pts=1,
-                 val_size=-1, val_with_pos=False, sample_insert=False, insert_size=1):
+                 val_size=-1, val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv5 module.
 
@@ -1481,6 +1490,7 @@ class MSDAv5(nn.Module):
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            norm_z (float): Factor normalizing the sample offsets in the Z-direction (default=1.0).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
             insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
@@ -1537,6 +1547,9 @@ class MSDAv5(nn.Module):
         # Initialize module computing the value position encodings if requested
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
+
+        # Set attribute with Z-normalizer
+        self.norm_z = norm_z
 
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
@@ -1624,6 +1637,7 @@ class MSDAv5(nn.Module):
         if sample_priors.shape[-1] == 2:
             offset_normalizers = sample_map_shapes.fliplr()[None, None, None, :, None, :]
             sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] / offset_normalizers
+            sample_offsets[:, :, :, :, :, 2] = sample_offsets[:, :, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, :, None, :], sample_z], dim=5)
             sample_locations = sample_locations + sample_offsets
@@ -1631,6 +1645,7 @@ class MSDAv5(nn.Module):
         elif sample_priors.shape[-1] == 4:
             offset_factors = 0.5 * sample_priors[:, :, None, :, None, 2:] / self.rad_pts
             sample_offsets[:, :, :, :, :, :2] = sample_offsets[:, :, :, :, :, :2] * offset_factors
+            sample_offsets[:, :, :, :, :, 2] = sample_offsets[:, :, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, :, None, :2], sample_z], dim=5)
             sample_locations = sample_locations + sample_offsets
@@ -1715,6 +1730,7 @@ class MSDAv6(nn.Module):
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
         val_proj (nn.Linear): Module computing value features from sample features.
         val_pos_encs (nn.Linear): Optional module computing the value position encodings.
+        norm_z (float): Factor normalizing the sample offsets in the Z-direction.
 
         sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure.
 
@@ -1730,7 +1746,7 @@ class MSDAv6(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=1, ang_pts=1, lvl_pts=1,
-                 dup_pts=1, val_size=-1, val_with_pos=False, sample_insert=False, insert_size=1):
+                 dup_pts=1, val_size=-1, val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv6 module.
 
@@ -1746,6 +1762,7 @@ class MSDAv6(nn.Module):
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
+            norm_z (float): Factor normalizing the sample offsets in the Z-direction (default=1.0).
             sample_insert (bool): Boolean indicating whether to insert sample info in a maps structure (default=False).
             insert_size (int): Integer containing size of features to be inserted during sample insertion (default=1).
 
@@ -1782,7 +1799,7 @@ class MSDAv6(nn.Module):
 
         grid_init = grid_init[:, None, :].repeat(1, lvl_pts, 1)
         level_offsets = torch.arange(lvl_pts, dtype=torch.float) - 0.5*(lvl_pts-1)
-        grid_init[:, :, 2] = grid_init[:, :, 2] + level_offsets[None, :] / (num_levels-1)
+        grid_init[:, :, 2] = grid_init[:, :, 2] + level_offsets[None, :] * norm_z / (num_levels-1)
         grid_init = grid_init.view(num_heads, 1, ang_pts, lvl_pts, 1, 3).repeat(1, rad_pts, 1, 1, dup_pts, 1)
 
         sizes = torch.arange(1, rad_pts+1, dtype=torch.float).view(1, rad_pts, 1, 1, 1, 1)
@@ -1805,6 +1822,9 @@ class MSDAv6(nn.Module):
         # Initialize module computing the value position encodings if requested
         if val_with_pos:
             self.val_pos_encs = nn.Linear(3, val_size // num_heads)
+
+        # Set attribute with Z-normalizer
+        self.norm_z = norm_z
 
         # Set attributes related to sample insertion
         self.sample_insert = sample_insert
@@ -1900,6 +1920,7 @@ class MSDAv6(nn.Module):
         if sample_priors.shape[-1] == 2:
             offset_normalizers = sample_map_shapes.fliplr()[level_ids, None, None, :]
             sample_offsets[:, :, :, :, :2] = sample_offsets[:, :, :, :, :2] / offset_normalizers
+            sample_offsets[:, :, :, :, 2] = sample_offsets[:, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, None, :], sample_z], dim=4)
             sample_locations = sample_locations + sample_offsets
@@ -1907,6 +1928,7 @@ class MSDAv6(nn.Module):
         elif sample_priors.shape[-1] == 4:
             offset_factors = 0.5 * sample_priors[:, :, None, None, 2:] / self.rad_pts
             sample_offsets[:, :, :, :, :2] = sample_offsets[:, :, :, :, :2] * offset_factors
+            sample_offsets[:, :, :, :, 2] = sample_offsets[:, :, :, :, 2] / self.norm_z
 
             sample_locations = torch.cat([sample_priors[:, :, None, None, :2], sample_z], dim=4)
             sample_locations = sample_locations + sample_offsets

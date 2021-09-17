@@ -49,7 +49,8 @@ class DeformableCore(nn.Module):
                 - dup_pts (int): integer containing the number of duplicate points of the DA network;
                 - qk_size (int): query and key feature size of the DA network;
                 - val_size (int): value feature size of the DA network;
-                - val_with_pos (bool): boolean indicating whether position info is added to DA value features.
+                - val_with_pos (bool): boolean indicating whether position info is added to DA value features;
+                - norm_z (float): factor normalizing the DA sample offsets in the Z-direction.
 
             num_groups (int): Integer with the number of group normalization groups of bottom-up layers (default=8).
             prior_type (str): String containing the type of used sample priors (default='location').

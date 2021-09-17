@@ -45,7 +45,7 @@ def build_core(args):
         da_dict = {**da_dict, 'rad_pts': args.dc_da_rad_pts, 'ang_pts': args.dc_da_ang_pts}
         da_dict = {**da_dict, 'lvl_pts': args.dc_da_lvl_pts, 'dup_pts': args.dc_da_dup_pts}
         da_dict = {**da_dict, 'qk_size': args.dc_da_qk_size, 'val_size': args.dc_da_val_size}
-        da_dict = {**da_dict, 'val_with_pos': args.dc_da_val_with_pos}
+        da_dict = {**da_dict, 'val_with_pos': args.dc_da_val_with_pos, 'norm_z': args.dc_da_norm_z}
 
         core_kwargs = {'prior_type': args.dc_prior_type, 'prior_factor': args.dc_prior_factor}
         core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs}
