@@ -29,6 +29,7 @@ def get_net(net_dict):
             - num_points (int): integer containing the number of points of the network;
             - rad_pts (int): integer containing the number of radial points of the network;
             - ang_pts (int): integer containing the number of angular points of the network;
+            - lvl_pts (int): integer containing the number of level points of the network;
             - dup_pts (int): integer containing the number of duplicate points of the network;
             - qk_size (int): query and key feature size of the network;
             - val_size (int): value feature size of the network;
@@ -51,7 +52,8 @@ def get_net(net_dict):
     if net_dict['type'] == 'deformable_attn':
         net_args = (net_dict['in_size'], net_dict['sample_size'], net_dict['out_size'])
         net_keys = ('norm', 'act_fn', 'skip', 'version', 'num_heads', 'num_levels', 'num_points', 'rad_pts', 'ang_pts')
-        net_keys = (*net_keys, 'dup_pts', 'qk_size', 'val_size', 'val_with_pos', 'sample_insert', 'insert_size')
+        net_keys = (*net_keys, 'lvl_pts', 'dup_pts', 'qk_size', 'val_size', 'val_with_pos', 'sample_insert')
+        net_keys = (*net_keys, 'insert_size')
         net_kwargs = {k: v for k, v in net_dict.items() if k in net_keys}
         net_layer = DeformableAttn(*net_args, **net_kwargs)
 

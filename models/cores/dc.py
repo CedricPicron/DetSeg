@@ -45,6 +45,7 @@ class DeformableCore(nn.Module):
                 - num_points (int): integer containing the number of points of the DA network;
                 - rad_pts (int): integer containing the number of radial points of the DA network;
                 - ang_pts (int): integer containing the number of angular points of the DA network;
+                - lvl_pts (int): integer containing the number of level points of the DA network;
                 - dup_pts (int): integer containing the number of duplicate points of the DA network;
                 - qk_size (int): query and key feature size of the DA network;
                 - val_size (int): value feature size of the DA network;

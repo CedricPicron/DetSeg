@@ -173,6 +173,7 @@ class SBD(nn.Module):
                 - num_points (int): integer containing the number of points of the CA network;
                 - rad_pts (int): integer containing the number of radial points of the CA network;
                 - ang_pts (int): integer containing the number of angular points of the CA network;
+                - lvl_pts (int): integer containing the number of level points of the CA network;
                 - dup_pts (int): integer containing the number of duplicate points of the CA network;
                 - qk_size (int): query and key feature size of the CA network;
                 - val_size (int): value feature size of the CA network;

@@ -228,7 +228,7 @@ class DeformableAttn(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
-                 num_levels=5, num_points=4, rad_pts=1, ang_pts=1, dup_pts=1, qk_size=-1, val_size=-1,
+                 num_levels=5, num_points=4, rad_pts=1, ang_pts=1, lvl_pts=1, dup_pts=1, qk_size=-1, val_size=-1,
                  val_with_pos=False, sample_insert=False, insert_size=1):
         """
         Initializes the DeformableAttn module.
@@ -246,6 +246,7 @@ class DeformableAttn(nn.Module):
             num_points (int): Integer containing the number of sampling points per head and level (default=4).
             rad_pts (int): Integer containing the number of radial sampling points per head and level (default=1).
             ang_pts (int): Integer containing the number of angular sampling points per head and level (default=1).
+            lvl_pts (int): Integer containing the number of level sampling points per head (default=1).
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
             qk_size (int): Size of query and key features (default=-1).
             val_size (int): Size of value features (default=-1).
@@ -322,8 +323,8 @@ class DeformableAttn(nn.Module):
                                val_size, val_with_pos, sample_insert, insert_size)
 
         elif version == 6:
-            self.msda = MSDAv6(in_size, sample_size, out_size, num_heads, rad_pts, ang_pts, dup_pts, val_size,
-                               val_with_pos, sample_insert, insert_size)
+            self.msda = MSDAv6(in_size, sample_size, out_size, num_heads, num_levels, rad_pts, ang_pts, lvl_pts,
+                               dup_pts, val_size, val_with_pos, sample_insert, insert_size)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -1728,8 +1729,8 @@ class MSDAv6(nn.Module):
             out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, rad_pts=1, ang_pts=1, dup_pts=1, val_size=-1,
-                 val_with_pos=False, sample_insert=False, insert_size=1):
+    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=1, ang_pts=1, lvl_pts=1,
+                 dup_pts=1, val_size=-1, val_with_pos=False, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv6 module.
 
@@ -1738,8 +1739,10 @@ class MSDAv6(nn.Module):
             sample_size (int): Size of sample features.
             out_size (int): Size of output features (default=-1).
             num_heads (int): Integer containing the number of attention heads (default=8).
+            num_levels (int): Integer containing the number of map levels to sample from (default=5).
             rad_pts (int): Integer containing the number of radial sampling points per head and level (default=1).
             ang_pts (int): Integer containing the number of angular sampling points per head and level (default=1).
+            lvl_pts (int): Integer containing the number of level sampling points per head (default=1).
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
             val_size (int): Size of value features (default=-1).
             val_with_pos (bool): Boolean indicating whether position info is added to value features (default=False).
@@ -1755,7 +1758,7 @@ class MSDAv6(nn.Module):
         super().__init__()
 
         # Get number of sampling points per head and level
-        num_points = rad_pts * ang_pts * dup_pts
+        num_points = rad_pts * ang_pts * lvl_pts * dup_pts
 
         # Set attributes related to the number of heads and points
         self.num_heads = num_heads
@@ -1776,10 +1779,14 @@ class MSDAv6(nn.Module):
 
         grid_init = torch.stack([thetas.cos(), thetas.sin(), torch.zeros_like(thetas)], dim=1)
         grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
-        grid_init = grid_init.view(num_heads, 1, ang_pts, 1, 3).repeat(1, rad_pts, 1, dup_pts, 1)
 
-        sizes = torch.arange(1, rad_pts+1, dtype=torch.float).view(1, rad_pts, 1, 1, 1)
-        grid_init = sizes * grid_init
+        grid_init = grid_init[:, None, :].repeat(1, lvl_pts, 1)
+        level_offsets = torch.arange(lvl_pts, dtype=torch.float) - 0.5*(lvl_pts-1)
+        grid_init[:, :, 2] = grid_init[:, :, 2] + level_offsets[None, :] / (num_levels-1)
+        grid_init = grid_init.view(num_heads, 1, ang_pts, lvl_pts, 1, 3).repeat(1, rad_pts, 1, 1, dup_pts, 1)
+
+        sizes = torch.arange(1, rad_pts+1, dtype=torch.float).view(1, rad_pts, 1, 1, 1, 1)
+        grid_init[:, :, :, :, :, :2] = sizes * grid_init[:, :, :, :, :, :2]
         self.sampling_offsets.bias = nn.Parameter(grid_init.view(-1))
 
         # Get and check size of value features
