@@ -5,6 +5,8 @@ from collections import OrderedDict
 from copy import deepcopy
 
 from detectron2.layers import batched_nms
+from detectron2.structures.instances import Instances
+from detectron2.utils.visualizer import Visualizer
 from fvcore.nn import sigmoid_focal_loss, smooth_l1_loss
 import torch
 from torch import nn
@@ -770,6 +772,9 @@ class SBD(nn.Module):
                 loss_dict (Dict): Dictionary of different weighted loss terms used during training.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
+                If SBD module is stand-alone and visualize is True:
+                    images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
+
                 If SBD module is not stand-alone:
                     obj_states (List): List [batch_size] with state features corresponding to each object prediction.
                     obj_anchors (List): List [batch_size] with anchors corresponding to each object prediction.
@@ -780,6 +785,9 @@ class SBD(nn.Module):
                 pred_dicts (List): List with SBD prediction dictionaries.
                 analysis_dict (Dict): Dictionary of different analyses used for logging purposes only.
 
+                If SBD module is stand-alone and visualize is True:
+                    images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
+
                 If SBD module is not stand-alone:
                     obj_states (List): List [batch_size] with state features corresponding to each object prediction.
                     obj_anchors (List): List [batch_size] with anchors corresponding to each object prediction.
@@ -787,15 +795,11 @@ class SBD(nn.Module):
                     feat_ids (List): List [batch_size] with feature indices corresponding to each object prediction.
 
         Raises:
-            NotImplementedError: Error when visualizations are requested.
             ValueError: Error when no Images structure is provided.
             ValueError: Error when invalid loss application frequency is provided.
             ValueError: Error when the number of update iterations is smaller than one.
+            RuntimeError: Error when visualizations are requested during stand-alone training.
         """
-
-        # Check whether visualizations are requested
-        if visualize:
-            raise NotImplementedError
 
         # Get batch size
         batch_size = len(feat_maps[0])
@@ -1038,14 +1042,21 @@ class SBD(nn.Module):
             loss_dict.update(dod_loss_dict)
             analysis_dict.update(dod_analysis_dict)
 
+        # Raise error when visualizations requested during training
+        if self.training and stand_alone and visualize:
+            error_msg = "Visualizations are only provided during validation and testing, not during training."
+            raise RuntimeError(error_msg)
+
         # Return desired dictionaries if SBD module is stand-alone
         if stand_alone:
             if self.training:
                 return loss_dict, analysis_dict
-            elif tgt_dict is not None:
-                return pred_dicts, loss_dict, analysis_dict
-            else:
-                return pred_dicts, analysis_dict
+
+            return_list = [pred_dicts, analysis_dict]
+            return_list.insert(1, loss_dict) if tgt_dict is not None else None
+            return_list.append(self.visualize(images, pred_dicts, tgt_dict)) if visualize else None
+
+            return return_list
 
         # Return additional items if SBD module is not stand-alone
         if self.training:
@@ -1062,3 +1073,100 @@ class SBD(nn.Module):
             return pred_dicts, loss_dict, analysis_dict, obj_states, obj_anchors, feats, feat_ids
         else:
             return pred_dicts, analysis_dict, obj_states, obj_anchors, feats, feat_ids
+
+    def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.35):
+        """
+        Draws predicted and target bounding boxes on given full-resolution images.
+
+        Boxes must have a score of at least the score threshold to be drawn. Target boxes get a default 100% score.
+
+        Args:
+            images (Images): Images structure containing the batched images.
+
+            pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds_total];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+
+            score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.35).
+
+        Returns:
+            images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
+        """
+
+        # Get keys found in draw dictionaries
+        draw_dict_keys = ['labels', 'boxes', 'scores', 'sizes']
+
+        # Get draw dictionaries for predictions
+        pred_draw_dicts = []
+
+        for pred_dict in pred_dicts:
+            pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
+            well_defined = pred_boxes.well_defined()
+
+            pred_scores = pred_dict['scores'][well_defined]
+            sufficient_score = pred_scores >= score_treshold
+
+            pred_labels = pred_dict['labels'][well_defined][sufficient_score]
+            pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
+            pred_scores = pred_scores[sufficient_score]
+            pred_batch_ids = pred_dict['batch_ids'][well_defined][sufficient_score]
+
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+            pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
+
+            draw_dict_values = [pred_labels, pred_boxes, pred_scores, pred_sizes]
+            pred_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            pred_draw_dicts.append(pred_draw_dict)
+
+        # Get draw dictionary for targets
+        tgt_labels = tgt_dict['labels']
+        tgt_boxes = tgt_dict['boxes'].to_img_scale(images).to_format('xyxy').boxes
+        tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
+        tgt_sizes = tgt_dict['sizes']
+
+        draw_dict_values = [tgt_labels, tgt_boxes, tgt_scores, tgt_sizes]
+        tgt_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+
+        # Combine draw dicationaries and get corresponding dictionary names
+        draw_dicts = [*pred_draw_dicts, tgt_draw_dict]
+        dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
+
+        # Get image sizes without padding in (width, height) format
+        img_sizes = images.size(with_padding=False)
+
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
+
+        # Get number of images and initialize images dictionary
+        num_images = len(images)
+        images_dict = {}
+
+        # Draw bounding boxes on images and add them to images dictionary
+        for dict_name, draw_dict in zip(dict_names, draw_dicts):
+            sizes = draw_dict['sizes']
+
+            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+
+                img_size = img_sizes[image_id]
+                img_size = (img_size[1], img_size[0])
+
+                img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
+                img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
+                img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+
+                instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+                visualizer.draw_instance_predictions(instances)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'ret_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict
