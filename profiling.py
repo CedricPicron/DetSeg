@@ -65,15 +65,20 @@ elif profiling_args.model == 'bch_sbd':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
     main_args.core_type = 'gc'
+    main_args.dc_num_layers = 6
+    main_args.dc_da_num_points = 4
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     main_args.heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
-    main_args.dod_tgt_mode = 'static'
+    main_args.dod_tgt_rel_pos = 5
+    main_args.dod_tgt_rel_neg = 10
     main_args.sbd_match_rel_pos = 15
     main_args.sbd_match_rel_neg = 15
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
+    main_args.sbd_ca_version = 0
+    main_args.sbd_ca_num_points = 4
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
@@ -194,7 +199,7 @@ elif profiling_args.model == 'bvn_ret':
     main_args.bvn_sync_heads = False
     main_args.resnet_name = 'resnet50'
     main_args.core_type = 'gc'
-    main_args.gc_yaml = './configs/gc/tpn_37_eeec_2b3_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     main_args.heads = ['ret']
     main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
