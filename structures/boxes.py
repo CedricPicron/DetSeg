@@ -240,6 +240,18 @@ class Boxes(object):
 
         return self, well_defined
 
+    def detach(self):
+        """
+        Detaches the boxes tensor of the Boxes structure from the current computation graph.
+
+        Returns:
+            self (Boxes): Updated Boxes structure with the boxes tensor detached from the current computation graph.
+        """
+
+        self.boxes = self.boxes.detach()
+
+        return self
+
     def dist_len(self):
         """
         Gets the average number of boxes across Boxes structures from different processes.

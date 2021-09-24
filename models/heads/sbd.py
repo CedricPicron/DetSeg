@@ -965,7 +965,7 @@ class SBD(nn.Module):
 
                 # Update anchors if desired
                 if self.state_type == 'rel_dynamic':
-                    obj_anchors = [apply_box_deltas(box_preds[i], obj_anchors[i]) for i in range(batch_size)]
+                    obj_anchors = [apply_box_deltas(box_preds[i], obj_anchors[i]).detach() for i in range(batch_size)]
                     norm_anchors = [obj_anchors[i].clone().normalize(images[i]) for i in range(batch_size)]
                     norm_anchors = [norm_anchors[i].to_format('cxcywh') for i in range(batch_size)]
                     anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]

@@ -457,7 +457,7 @@ elif profiling_args.model == 'mbd':
     main_args.sbd_se = False
     main_args.sbd_match_mode = 'static'
     main_args.sbd_match_static_mode = 'rel'
-    main_args.sbd_loss_apply_freq = 'layers'
+    main_args.sbd_loss_apply_freq = 'last'
     main_args.sbd_loss_freeze_inter = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
@@ -573,7 +573,7 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_se = False
     main_args.sbd_match_mode = 'static'
     main_args.sbd_match_static_mode = 'rel'
-    main_args.sbd_loss_apply_freq = 'layers'
+    main_args.sbd_loss_apply_freq = 'last'
     main_args.sbd_loss_freeze_inter = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
@@ -581,7 +581,7 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
     main_args.sbd_ca_type = 'deformable_attn'
-    main_args.sbd_ca_version = 6
+    main_args.sbd_ca_version = 0
     main_args.sbd_ca_val_with_pos = False
     main_args.sbd_ca_step_size = -1
     main_args.sbd_ca_step_norm_xy = 'map'
