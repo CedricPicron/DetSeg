@@ -3,6 +3,8 @@ Collection of feature maps to feature maps operations.
 """
 from copy import deepcopy
 
+from mmcv.ops.deform_conv import DeformConv2dPack as DCN
+from mmcv.ops.modulated_deform_conv import ModulatedDeformConv2dPack as DCNv2
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -212,6 +214,70 @@ def initialize_conv2d(operation, feat_sizes, modules_offset):
         if 'bias_init' in operation:
             init_kwargs = {k.replace('bias_init_', ''): v for k, v in operation.items() if 'bias_init_' in k}
             getattr(nn.init, operation['bias_init'])(module.bias, **init_kwargs)
+
+        modules.append(module)
+        sub_operations.append(sub_operation)
+        feat_sizes.append(out_channels)
+
+    return modules, sub_operations, feat_sizes
+
+
+def initialize_dcn(operation, feat_sizes, modules_offset):
+    """
+    Initializes 2D deformable convolution operation with corresponding modules for forward computation.
+
+    Args:
+        operation (Dict): Dictionary specifying the operation to be performed.
+        feat_sizes (List): List of feature sizes of feature maps to be expected during forward computation.
+        modules_offset (int): Integer containing the offset to be added to the module indices.
+
+    Returns:
+        modules (List): List of initialized modules used by this operation.
+        sub_operations (List): List of sub-operation dictionaries specifying their behavior during forward computation.
+        feat_sizes (List): Updated list of feature sizes of feature maps to be generated during forward computation.
+
+    Raises:
+        ValueError: Error when incorrect input is provided for the 'in' operation key.
+        ValueError: Error when incorrect output channels input is provided.
+        ValueError: Error when invalid DCN version number is provided.
+    """
+
+    # Check 'in' operation key
+    if any(len(map_ids) != 1 for map_ids in operation['in']):
+        raise ValueError(f"Exactly one map must be provided per list in {operation['in']}.")
+
+    # Get lists of number of input and output channels
+    in_channels_list = [feat_sizes[map_ids[0]] for map_ids in operation['in']]
+    out_channels = operation['out_channels']
+    out_channels_list = [out_channels] if isinstance(out_channels, int) else out_channels
+
+    if len(in_channels_list) > 1 and len(out_channels_list) == 1:
+        out_channels_list = [out_channels_list[0]] * len(in_channels_list)
+    elif len(in_channels_list) != len(out_channels_list):
+        raise ValueError("Size of input and output channels list must match when multiple output channels are given.")
+
+    # Get 2D deformable convolution module of desired version
+    version = operation.setdefault('version', 2)
+
+    if version == 1:
+        dcn = DCN
+    elif version == 2:
+        dcn = DCNv2
+    else:
+        raise ValueError(f"DCN version number must be 1 or 2, but got {version}.")
+
+    # Get 2D deformable convolution keyword arguments
+    allowed_keys = ['kernel_size', 'stride', 'padding', 'dilation', 'groups', 'deform_groups', 'bias']
+    sub_operation_kwargs = {k: v for k, v in operation.items() if k in allowed_keys}
+
+    # Initialize list of modules and sub-operations
+    modules = []
+    sub_operations = []
+
+    # Initialize every 2D deformable convolution sub-operation
+    for map_ids, in_channels, out_channels in zip(operation['in'], in_channels_list, out_channels_list):
+        module = dcn(in_channels, out_channels, **sub_operation_kwargs)
+        sub_operation = {'in_map_ids': map_ids, 'module_id': modules_offset+len(modules)}
 
         modules.append(module)
         sub_operations.append(sub_operation)
@@ -595,6 +661,8 @@ def initialize_operation(operation, feat_sizes, layers, modules_offset):
         modules, sub_operations, feat_sizes = initialize_attn2d(operation, feat_sizes, modules_offset)
     elif operation_type == 'conv2d':
         modules, sub_operations, feat_sizes = initialize_conv2d(operation, feat_sizes, modules_offset)
+    elif operation_type == 'dcn':
+        modules, sub_operations, feat_sizes = initialize_dcn(operation, feat_sizes, modules_offset)
     elif operation_type == 'featurenorm':
         modules, sub_operations, feat_sizes = initialize_featurenorm(operation, feat_sizes, modules_offset)
     elif operation_type == 'groupnorm':

@@ -88,7 +88,7 @@ layers:
 
       # In-projection
       - type: 'conv2d'
-        out_channels: 128
+        out_channels: 64
         kernel_size: 1
         in:
           - - 2
@@ -112,12 +112,12 @@ layers:
           - - 5
 
       # Level processing
-      - type: 'conv2d'
-        out_channels: 128
+      - type: 'dcn'
+        version: 2
+        out_channels: 64
         kernel_size: 3
         stride: 1
         padding: 1
-        groups: 32
         in:
           - - 5
         out:

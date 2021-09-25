@@ -112,7 +112,8 @@ layers:
           - - 5
 
       # Level processing
-      - type: 'conv2d'
+      - type: 'dcn'
+        version: 2
         out_channels: 128
         kernel_size: 3
         stride: 1
