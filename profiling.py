@@ -415,7 +415,7 @@ elif profiling_args.model == 'gc':
     main_args.core_type = 'gc'
     main_args.core_min_map_id = 3
     main_args.core_max_map_id = 7
-    main_args.gc_yaml = './configs/gc/bpn_37_conv14_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3x2_gn.yaml'
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')

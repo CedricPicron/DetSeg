@@ -60,14 +60,14 @@ layers:
         out:
           - - 6
 
-  # Self-processing layer
-  - name: 'self-processing'
+  # Bottleneck layer
+  - name: 'bottleneck'
     in:
       - - 0
     out:
-      - - 5
+      - - 10
 
-    # Self-processing operations
+    # Bottleneck operations
     operations:
       
       # Group normalization
@@ -86,33 +86,75 @@ layers:
         out:
           - - 2
 
-      # Depth-wise convolution
+      # In-projection
       - type: 'conv2d'
-        out_channels: 256
-        kernel_size: 3
-        padding: 1
-        groups: 256
+        out_channels: 64
+        kernel_size: 1
         in:
           - - 2
         out:
           - - 3
 
-      # Point-wise convolution
-      - type: 'conv2d'
-        out_channels: 256
-        kernel_size: 1
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
         in:
           - - 3
         out:
           - - 4
 
+      # ReLU activation
+      - type: 'relu'
+        inplace: True
+        in:
+          - - 4
+        out:
+          - - 5
+
+      # Level processing
+      - type: 'conv2d'
+        out_channels: 64
+        kernel_size: 3
+        stride: 1
+        padding: 1
+        groups: 8
+        in:
+          - - 5
+        out:
+          - - 6
+
+      # Group normalization
+      - type: 'groupnorm'
+        num_groups: 8
+        in:
+          - - 6
+        out:
+          - - 7
+
+      # ReLU activation
+      - type: 'relu'
+        inplace: True
+        in:
+          - - 7
+        out:
+          - - 8
+
+      # Out-projection
+      - type: 'conv2d'
+        out_channels: 256
+        kernel_size: 1
+        in:
+          - - 8
+        out:
+          - - 9
+
       # Residual addition
       - type: 'add'
         in:
           - - 0
-            - 4
+            - 9
         out:
-          - - 5
+          - - 10
 
   # Bottom-up layer
   - name: 'bottom-up'
@@ -246,10 +288,10 @@ layers:
           - - 7 # P4
           - - 8 # P3
 
-      # Self-processing layer
+      # Bottleneck layer
       - type: 'layer'
-        name: 'self-processing'
-        num_layers: 3
+        name: 'bottleneck'
+        num_layers: 2
         in:
           - - 0 # P7
           - - 5 # P6
@@ -287,10 +329,10 @@ layers:
           - - 16 # P6
           - - 17 # P7
 
-      # Self-processing layer
+      # Bottleneck layer
       - type: 'layer'
-        name: 'self-processing'
-        num_layers: 3
+        name: 'bottleneck'
+        num_layers: 2
         in:
           - - 13 # P3
           - - 14 # P4
@@ -367,7 +409,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 2
+    num_layers: 3
     in:
       - - 8 # P7
         - 6 # P6
