@@ -568,9 +568,12 @@ elif profiling_args.model == 'sbd':
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
     main_args.dod_sel_mode = 'rel'
     main_args.dod_tgt_decision = 'rel'
+    main_args.sbd_state_size = 256
     main_args.sbd_state_type = 'rel_static'
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_se = False
+    main_args.sbd_hcls_layers = 1
+    main_args.sbd_hbox_layers = 1
     main_args.sbd_match_mode = 'static'
     main_args.sbd_match_static_mode = 'rel'
     main_args.sbd_loss_apply_freq = 'last'
@@ -582,6 +585,7 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_update_layers = 6
     main_args.sbd_ca_type = 'deformable_attn'
     main_args.sbd_ca_version = 0
+    main_args.sbd_ca_num_points = 1
     main_args.sbd_ca_val_with_pos = False
     main_args.sbd_ca_step_size = -1
     main_args.sbd_ca_step_norm_xy = 'map'
