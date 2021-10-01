@@ -947,9 +947,9 @@ class SBD(nn.Module):
                 up_kwargs[i]['sample_map_shapes'] = sample_map_shapes
                 up_kwargs[i]['sample_map_start_ids'] = sample_map_start_ids
 
-                level_mask = (feat_ids[i][:, None] - sample_map_start_ids) >= 0
-                level_ids = level_mask.sum(dim=1) - 1
-                up_kwargs[i]['level_ids'] = level_ids
+                map_mask = (feat_ids[i][:, None] - sample_map_start_ids) >= 0
+                map_ids = map_mask.sum(dim=1) - 1
+                up_kwargs[i]['map_ids'] = map_ids
 
                 if self.up_ca_type == 'particle_attn':
                     up_kwargs[i]['storage_dict'] = {}

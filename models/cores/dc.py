@@ -149,13 +149,13 @@ class DeformableCore(nn.Module):
         sample_map_start_ids = feats_per_map.cumsum(dim=0)[:-1]
         sample_map_start_ids = torch.cat([sample_map_shapes.new_zeros((1,)), sample_map_start_ids], dim=0)
 
-        num_levels = len(feat_maps)
-        level_ids = torch.arange(num_levels, device=feats.device)
-        level_ids = level_ids.repeat_interleave(feats_per_map, dim=0)
-        level_ids = level_ids[None, :].expand(batch_size, -1)
+        num_maps = len(feat_maps)
+        map_ids = torch.arange(num_maps, device=feats.device)
+        map_ids = map_ids.repeat_interleave(feats_per_map, dim=0)
+        map_ids = map_ids[None, :].expand(batch_size, -1)
 
         da_kwargs = {'sample_priors': sample_priors, 'sample_map_shapes': sample_map_shapes}
-        da_kwargs = {**da_kwargs, 'sample_map_start_ids': sample_map_start_ids, 'level_ids': level_ids}
+        da_kwargs = {**da_kwargs, 'sample_map_start_ids': sample_map_start_ids, 'map_ids': map_ids}
 
         if hasattr(self, 'scale_encs'):
             da_kwargs['add_encs'] = self.scale_encs.repeat_interleave(feats_per_map, dim=0)
@@ -167,6 +167,6 @@ class DeformableCore(nn.Module):
 
         # Get output feature pyramid
         out_feat_maps = feats.split(feats_per_map.tolist(), dim=1)
-        out_feat_maps = [out_feat_maps[i].transpose(1, 2).view_as(feat_maps[i]) for i in range(num_levels)]
+        out_feat_maps = [out_feat_maps[i].transpose(1, 2).view_as(feat_maps[i]) for i in range(num_maps)]
 
         return out_feat_maps

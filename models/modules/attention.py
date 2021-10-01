@@ -10,6 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+from models.extensions.deformable.modules import MSDA3D
 from models.ops.insert.functional import pytorch_maps_insert_2d, pytorch_maps_insert_3d
 from models.ops.sample.functional import pytorch_maps_sample_2d, pytorch_maps_sample_3d
 
@@ -225,6 +226,7 @@ class DeformableAttn(nn.Module):
         act_fn (nn.Module): Optional module with the activation function of the DeformableAttn module.
         msda (nn.Module): Multi-scale deformable attention module of the DeformableAttn module.
         skip (bool): Boolean indicating whether skip connection is used or not.
+        version (int): Integer containing the version of the MSDA module.
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
@@ -327,15 +329,19 @@ class DeformableAttn(nn.Module):
             self.msda = MSDAv6(in_size, sample_size, out_size, num_heads, num_levels, rad_pts, ang_pts, lvl_pts,
                                dup_pts, val_size, val_with_pos, norm_z, sample_insert, insert_size)
 
+        elif version == 7:
+            self.msda = MSDA3D(in_size, sample_size, out_size, num_heads, num_points, val_size)
+
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
             raise ValueError(error_msg)
 
-        # Set skip attribute
+        # Set skip and version attribute
         self.skip = skip
+        self.version = version
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids,
-                add_encs=None, mul_encs=None, level_ids=None, sample_mask=None, storage_dict=None, **kwargs):
+                add_encs=None, mul_encs=None, map_ids=None, sample_mask=None, storage_dict=None, **kwargs):
         """
         Forward method of the DeformableAttn module.
 
@@ -347,7 +353,7 @@ class DeformableAttn(nn.Module):
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
             add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
             mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
-            level_ids (LongTensor): Level indices of input features of shape [*, num_in_feats] (default=None).
+            map_ids (LongTensor): Map indices of input features of shape [*, num_in_feats] (default=None).
             sample_mask (BoolTensor): Inactive samples mask of shape [*, num_sample_feats] (default=None).
             storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
@@ -371,16 +377,18 @@ class DeformableAttn(nn.Module):
         if add_encs is not None:
             delta_feats = delta_feats + add_encs.view(-1, *orig_shape[-2:])
 
-        num_levels = len(sample_map_start_ids)
         sample_priors = sample_priors.view(-1, *sample_priors.shape[-2:])
-        sample_priors = sample_priors[:, :, None, :].expand(-1, -1, num_levels, -1)
         sample_feats = sample_feats.view(-1, *sample_feats.shape[-2:])
 
-        if level_ids is not None:
-            level_ids = level_ids.view(-1, level_ids.shape[-1])
+        if self.version <= 6:
+            num_levels = len(sample_map_start_ids)
+            sample_priors = sample_priors[:, :, None, :].expand(-1, -1, num_levels, -1)
+
+        if map_ids is not None:
+            map_ids = map_ids.view(-1, map_ids.shape[-1])
 
         msda_args = (delta_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids)
-        msda_kwargs = {'level_ids': level_ids, 'input_padding_mask': sample_mask, 'storage_dict': storage_dict}
+        msda_kwargs = {'map_ids': map_ids, 'input_padding_mask': sample_mask, 'storage_dict': storage_dict}
         delta_feats = self.msda(*msda_args, **msda_kwargs).view(*orig_shape[:-1], -1)
 
         # Get output features
@@ -1876,7 +1884,7 @@ class MSDAv6(nn.Module):
             error_msg = "Sample insertion should be True when not computing output features."
             raise RuntimeError(error_msg)
 
-    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, level_ids=None,
+    def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, map_ids=None,
                 storage_dict=None, **kwargs):
         """
         Forward method of the MSDAv6 module.
@@ -1887,7 +1895,7 @@ class MSDAv6(nn.Module):
             sample_feats (FloatTensor): Sample features of shape [batch_size, num_sample_feats, sample_size].
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
-            level_ids (LongTensor): Level indices of input features of shape [batch_size, num_in_feats] (default=None).
+            map_ids (LongTensor): Map indices of input features of shape [batch_size, num_in_feats] (default=None).
             storage_dict (Dict): Dictionary storing additional arguments (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
@@ -1895,7 +1903,7 @@ class MSDAv6(nn.Module):
             out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
 
         Raises:
-            ValueError: Error when no level indices are provided.
+            ValueError: Error when no map indices are provided.
             ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
         """
 
@@ -1910,15 +1918,15 @@ class MSDAv6(nn.Module):
         # Get sample locations
         sample_priors = sample_priors[:, :, 0, :]
 
-        if level_ids is None:
-            error_msg = "Level indices must be provided but are missing."
+        if map_ids is None:
+            error_msg = "Map indices must be provided but are missing."
             raise ValueError(error_msg)
 
-        sample_z = level_ids / (num_levels-1)
+        sample_z = map_ids / (num_levels-1)
         sample_z = sample_z[:, :, None, None, None]
 
         if sample_priors.shape[-1] == 2:
-            offset_normalizers = sample_map_shapes.fliplr()[level_ids, None, None, :]
+            offset_normalizers = sample_map_shapes.fliplr()[map_ids, None, None, :]
             sample_offsets[:, :, :, :, :2] = sample_offsets[:, :, :, :, :2] / offset_normalizers
             sample_offsets[:, :, :, :, 2] = sample_offsets[:, :, :, :, 2] / self.norm_z
 
@@ -2123,7 +2131,7 @@ class ParticleAttn(nn.Module):
         self.skip = skip
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
-                add_encs=None, mul_encs=None, level_ids=None, **kwargs):
+                add_encs=None, mul_encs=None, map_ids=None, **kwargs):
         """
         Forward method of the ParticleAttn module.
 
@@ -2136,7 +2144,7 @@ class ParticleAttn(nn.Module):
             storage_dict (Dict): Dictionary storing additional arguments such as the sample locations.
             add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
             mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
-            level_ids (LongTensor): Level indices of input features of shape [*, num_in_feats] (default=None).
+            map_ids (LongTensor): Map indices of input features of shape [*, num_in_feats] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -2161,11 +2169,11 @@ class ParticleAttn(nn.Module):
         sample_priors = sample_priors.view(-1, *sample_priors.shape[-2:])
         sample_feats = sample_feats.view(-1, *sample_feats.shape[-2:])
 
-        if level_ids is not None:
-            level_ids = level_ids.view(-1, level_ids.shape[-1])
+        if map_ids is not None:
+            map_ids = map_ids.view(-1, map_ids.shape[-1])
 
         pa_args = (delta_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict)
-        pa_kwargs = {'level_ids': level_ids}
+        pa_kwargs = {'map_ids': map_ids}
         delta_feats = self.pa(*pa_args, **pa_kwargs)
 
         # Get output features
@@ -4149,7 +4157,7 @@ class PAv8(nn.Module):
         delattr(self, 'step_norm_z')
 
     def forward(self, in_feats, sample_priors, sample_feats, sample_map_shapes, sample_map_start_ids, storage_dict,
-                level_ids=None, **kwargs):
+                map_ids=None, **kwargs):
         """
         Forward method of the PAv8 module.
 
@@ -4160,14 +4168,14 @@ class PAv8(nn.Module):
             sample_map_shapes (LongTensor): Map shapes corresponding to samples of shape [num_levels, 2].
             sample_map_start_ids (LongTensor): Start indices of sample maps of shape [num_levels].
             storage_dict (Dict): Dictionary storing additional arguments such as the sample locations.
-            level_ids (LongTensor): Level indices of input features of shape [batch_size, num_in_feats] (default=None).
+            map_ids (LongTensor): Map indices of input features of shape [batch_size, num_in_feats] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
             out_feats (FloatTensor): Output features of shape [batch_size, num_in_feats, out_size].
 
         Raises:
-            ValueError: Error when no level indices are provided when sample locations are missing.
+            ValueError: Error when no map indices are provided when sample locations are missing.
             ValueError: Error when the last dimension of 'sample_priors' is different from 2 or 4.
             ValueError: Error when last dimension of 'sample_priors' is not 4 when using 'anchor' step normalization.
             ValueError: Error when invalid sample step normalization type is provided.
@@ -4201,12 +4209,12 @@ class PAv8(nn.Module):
             sample_offsets = sizes[None, :, None] * sample_offsets
             sample_offsets = sample_offsets[None, None, :, :, :]
 
-            if level_ids is None:
-                error_msg = "Level indices must be provided when sample locations are missing."
+            if map_ids is None:
+                error_msg = "Map indices must be provided when sample locations are missing."
                 raise ValueError(error_msg)
 
             if sample_priors.shape[-1] == 2:
-                offset_normalizers = sample_map_shapes[level_ids, None, None, :]
+                offset_normalizers = sample_map_shapes[map_ids, None, None, :]
                 sample_locations = sample_priors[:, :, None, None, :]
                 sample_locations = sample_locations + sample_offsets / offset_normalizers
 
@@ -4220,7 +4228,7 @@ class PAv8(nn.Module):
                 raise ValueError(error_msg)
 
             num_levels = len(sample_map_start_ids)
-            sample_z = level_ids / (num_levels-1)
+            sample_z = map_ids / (num_levels-1)
             sample_z = sample_z[:, :, None, None, None].expand(-1, -1, self.num_heads, self.num_particles, -1)
 
             sample_locations = torch.cat([sample_locations, sample_z], dim=4)
@@ -4285,12 +4293,12 @@ class PAv8(nn.Module):
             if self.step_norm_xy == 'map':
                 with torch.no_grad():
                     num_levels = len(sample_map_start_ids)
-                    level_ids = sample_locations[:, :, 2] * (num_levels-1)
+                    map_ids = sample_locations[:, :, 2] * (num_levels-1)
 
-                    lower_ids = level_ids.floor().to(dtype=torch.int64).clamp_(max=num_levels-2)
+                    lower_ids = map_ids.floor().to(dtype=torch.int64).clamp_(max=num_levels-2)
                     upper_ids = lower_ids + 1
 
-                    lower_ws = upper_ids - level_ids
+                    lower_ws = upper_ids - map_ids
                     lower_ws = lower_ws[:, :, None]
                     upper_ws = 1 - lower_ws
 

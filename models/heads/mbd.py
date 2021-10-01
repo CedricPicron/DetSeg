@@ -405,9 +405,9 @@ class MBD (nn.Module):
                 ca_kwargs[i]['add_encs'] = abs_anchor_encs[i]
                 ca_kwargs[i]['storage_dict'] = {'map_feats': map_feats}
 
-                level_mask = (sample_feat_ids[i][:, None] - sample_map_start_ids) >= 0
-                level_ids = level_mask.sum(dim=1) - 1
-                ca_kwargs[i]['level_ids'] = level_ids
+                map_mask = (sample_feat_ids[i][:, None] - sample_map_start_ids) >= 0
+                map_ids = map_mask.sum(dim=1) - 1
+                ca_kwargs[i]['map_ids'] = map_ids
 
         # Apply cross-attention (CA) module
         [self.ca(obj_feats[i], **ca_kwargs[i]) for i in range(batch_size)]
