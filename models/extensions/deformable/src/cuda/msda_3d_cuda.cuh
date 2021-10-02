@@ -53,10 +53,11 @@ __global__ void msda_3d_cuda_forward_kernel(
   CUDA_KERNEL_LOOP(index, num_kernels)
   {
     // Get kernel-specific indices
-    const int p = index % P;
-    const int h = (index / P) % H;
-    const int f = (index / (P * H)) % F;
-    const int n = index / (P * H * F);
+    const int c = index % C;
+    const int p = (index / C) % P;
+    const int h = (index / (C * P)) % H;
+    const int f = (index / (C * P * H)) % F;
+    const int n = index / (C * P * H * F);
 
     // Get normalized sample locations
     const int sample_offset = n * sample_sN + f * sample_sF + h * sample_sH + p * sample_sP;
@@ -134,7 +135,7 @@ __global__ void msda_3d_cuda_forward_kernel(
     int64_t off_1 = map_offs.data[iz_1];
 
     // Get initial input pointers
-    auto in_ptr = in_feats.data + n * in_sN + h * in_sH;
+    auto in_ptr = in_feats.data + n * in_sN + h * in_sH + c * in_sC;
     auto in_ptr_000 = in_ptr + (off_0 + w_0 * iy_00 + ix_00) * in_sF;
     auto in_ptr_001 = in_ptr + (off_1 + w_1 * iy_10 + ix_10) * in_sF;
     auto in_ptr_010 = in_ptr + (off_0 + w_0 * iy_01 + ix_00) * in_sF;
@@ -145,21 +146,16 @@ __global__ void msda_3d_cuda_forward_kernel(
     auto in_ptr_111 = in_ptr + (off_1 + w_1 * iy_11 + ix_11) * in_sF;
 
     // Get initial output pointer
-    auto out_ptr = out_feats.data + n * out_sN + f * out_sF + h * out_sH;
+    auto out_ptr = out_feats.data + n * out_sN + f * out_sF + h * out_sH + c * out_sC;
 
-    // Add weighted sampled inputs to output for every channel
-    for (int c = 0; c < C; ++c, in_ptr_000 += in_sC, in_ptr_001 += in_sC, in_ptr_010 += in_sC,
-         in_ptr_011 += in_sC, in_ptr_100 += in_sC, in_ptr_101 += in_sC, in_ptr_110 += in_sC,
-         in_ptr_111 += in_sC, out_ptr += out_sC)
-    {
-      atomicAdd(out_ptr, *in_ptr_000 * w_000 * w);
-      atomicAdd(out_ptr, *in_ptr_001 * w_001 * w);
-      atomicAdd(out_ptr, *in_ptr_010 * w_010 * w);
-      atomicAdd(out_ptr, *in_ptr_011 * w_011 * w);
-      atomicAdd(out_ptr, *in_ptr_100 * w_100 * w);
-      atomicAdd(out_ptr, *in_ptr_101 * w_101 * w);
-      atomicAdd(out_ptr, *in_ptr_110 * w_110 * w);
-      atomicAdd(out_ptr, *in_ptr_111 * w_111 * w);
-    }
+    // Add weighted sampled inputs to output
+    atomicAdd(out_ptr, *in_ptr_000 * w_000 * w);
+    atomicAdd(out_ptr, *in_ptr_001 * w_001 * w);
+    atomicAdd(out_ptr, *in_ptr_010 * w_010 * w);
+    atomicAdd(out_ptr, *in_ptr_011 * w_011 * w);
+    atomicAdd(out_ptr, *in_ptr_100 * w_100 * w);
+    atomicAdd(out_ptr, *in_ptr_101 * w_101 * w);
+    atomicAdd(out_ptr, *in_ptr_110 * w_110 * w);
+    atomicAdd(out_ptr, *in_ptr_111 * w_111 * w);
   }
 }
