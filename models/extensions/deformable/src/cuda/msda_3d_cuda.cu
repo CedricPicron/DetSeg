@@ -33,7 +33,7 @@ at::Tensor msda_3d_cuda_forward(
     auto num_pts = sample_xyz.size(3);
 
     auto out_feats = at::zeros({batch_size, num_out_feats, num_heads, channels}, in_feats.options());
-    int64_t num_kernels = batch_size * num_out_feats * num_heads * num_pts * channels;
+    int64_t num_kernels = batch_size * num_out_feats * num_heads * channels;
 
     if (num_kernels > 0)
     {
