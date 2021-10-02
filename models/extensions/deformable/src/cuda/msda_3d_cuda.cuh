@@ -156,14 +156,15 @@ __global__ void msda_3d_cuda_forward_kernel(
       auto in_ptr_111 = in_ptr + (off_1 + w_1 * iy_11 + ix_11) * in_sF;
 
       // Add weighted sampled inputs to output
-      *out_ptr += *in_ptr_000 * w_000 * w;
-      *out_ptr += *in_ptr_001 * w_001 * w;
-      *out_ptr += *in_ptr_010 * w_010 * w;
-      *out_ptr += *in_ptr_011 * w_011 * w;
-      *out_ptr += *in_ptr_100 * w_100 * w;
-      *out_ptr += *in_ptr_101 * w_101 * w;
-      *out_ptr += *in_ptr_110 * w_110 * w;
-      *out_ptr += *in_ptr_111 * w_111 * w;
+      *out_ptr += *in_ptr_000 * w_000;
+      *out_ptr += *in_ptr_001 * w_001;
+      *out_ptr += *in_ptr_010 * w_010;
+      *out_ptr += *in_ptr_011 * w_011;
+      *out_ptr += *in_ptr_100 * w_100;
+      *out_ptr += *in_ptr_101 * w_101;
+      *out_ptr += *in_ptr_110 * w_110;
+      *out_ptr += *in_ptr_111 * w_111;
+      *out_ptr *= w;
     }
   }
 }
