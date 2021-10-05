@@ -4,11 +4,20 @@
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/detail/IndexUtils.cuh>
-#include <ATen/cuda/detail/KernelUtils.h>
 #include <ATen/cuda/detail/TensorInfo.cuh>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+
+inline int BLOCKS(const int64_t N, const int64_t max_threads_per_block=NUM_THREADS) {
+  TORCH_INTERNAL_ASSERT(N > 0, "CUDA kernel launch blocks must be positive, but got N=", N);
+  constexpr int64_t max_int = std::numeric_limits<int>::max();
+
+  auto block_num = (N - 1) / max_threads_per_block + 1;
+  TORCH_INTERNAL_ASSERT(block_num <= max_int, "Can't schedule too many blocks on CUDA device");
+
+  return static_cast<int>(block_num);
+}
 
 using namespace at::cuda::detail;
 
@@ -39,7 +48,7 @@ at::Tensor msda_3d_cuda_forward(
     {
         AT_DISPATCH_FLOATING_TYPES_AND_HALF(in_feats.scalar_type(), "msda_3d_cuda_forward", [&] {
             msda_3d_cuda_forward_kernel<scalar_t>
-            <<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
+            <<<BLOCKS(num_kernels), NUM_THREADS, 0, at::cuda::getCurrentCUDAStream()>>>(
             static_cast<int>(num_kernels),
             getTensorInfo<scalar_t, int>(in_feats),
             getTensorInfo<int64_t, int>(map_hw),
@@ -47,6 +56,7 @@ at::Tensor msda_3d_cuda_forward(
             getTensorInfo<scalar_t, int>(sample_xyz),
             getTensorInfo<scalar_t, int>(attn_ws),
             getTensorInfo<scalar_t, int>(out_feats));
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
         });
     }
 

@@ -5,10 +5,12 @@
 #include <ATen/cuda/detail/TensorInfo.cuh>
 #include <c10/macros/Macros.h>
 
+constexpr int NUM_THREADS = 256;
+
 using namespace at::cuda::detail;
 
 template <typename scalar_t>
-C10_LAUNCH_BOUNDS_1(1024)
+C10_LAUNCH_BOUNDS_1(NUM_THREADS)
 __global__ void msda_3d_cuda_forward_kernel(
   const int num_kernels,
   TensorInfo<scalar_t, int> in_feats,
@@ -128,19 +130,6 @@ __global__ void msda_3d_cuda_forward_kernel(
       scalar_t wz_0 = iz_1 - iz;
       scalar_t wz_1 = iz - iz_0;
 
-      // Get XYZ sampling weights
-      scalar_t w_000 = wx_00 * wy_00 * wz_0;
-      scalar_t w_001 = wx_10 * wy_10 * wz_1;
-      scalar_t w_010 = wx_00 * wy_01 * wz_0;
-      scalar_t w_011 = wx_10 * wy_11 * wz_1;
-      scalar_t w_100 = wx_01 * wy_00 * wz_0;
-      scalar_t w_101 = wx_11 * wy_10 * wz_1;
-      scalar_t w_110 = wx_01 * wy_01 * wz_0;
-      scalar_t w_111 = wx_11 * wy_11 * wz_1;
-
-      // Get attention weight
-      scalar_t w = attn_ws.data[attn_offset];
-
       // Get map offsets
       int64_t off_0 = map_offs.data[iz_0];
       int64_t off_1 = map_offs.data[iz_1];
@@ -156,15 +145,18 @@ __global__ void msda_3d_cuda_forward_kernel(
       auto in_ptr_111 = in_ptr + (off_1 + w_1 * iy_11 + ix_11) * in_sF;
 
       // Add weighted sampled inputs to output
-      *out_ptr += *in_ptr_000 * w_000;
-      *out_ptr += *in_ptr_001 * w_001;
-      *out_ptr += *in_ptr_010 * w_010;
-      *out_ptr += *in_ptr_011 * w_011;
-      *out_ptr += *in_ptr_100 * w_100;
-      *out_ptr += *in_ptr_101 * w_101;
-      *out_ptr += *in_ptr_110 * w_110;
-      *out_ptr += *in_ptr_111 * w_111;
-      *out_ptr *= w;
+      scalar_t val_0 = 0;
+      val_0 += (*in_ptr_000 * wx_00 + *in_ptr_100 * wx_01) * wy_00;
+      val_0 += (*in_ptr_010 * wx_00 + *in_ptr_110 * wx_01) * wy_01;
+      val_0 *= wz_0;
+
+      scalar_t val_1 = 0;
+      val_1 += (*in_ptr_001 * wx_10 + *in_ptr_101 * wx_11) * wy_10;
+      val_1 += (*in_ptr_011 * wx_10 + *in_ptr_111 * wx_11) * wy_11;
+      val_1 *= wz_1;
+
+      scalar_t w = attn_ws.data[attn_offset];
+      *out_ptr += (val_0 + val_1) * w;
     }
   }
 }
