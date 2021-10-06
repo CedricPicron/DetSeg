@@ -55,13 +55,13 @@ Args:
     grad_out_feats (FloatTensor): Grad output feats of shape [batch_size, num_out_feats, num_heads, channels].
 
 Returns:
-    Vector containing following items:
+    Tuple containing following items:
         - Gradient (FloatTensor) of input features of shape [batch_size, num_in_feats, num_heads, channels].
         - Gradient (FloatTensor) of zero-one sample XYZ of shape [batch_size, num_out_feats, num_heads, num_pts, 3].
         - Gradient (FloatTensor) of attention weights of shape [batch_size, num_out_feats, num_heads, num_pts].
 */
 
-std::vector<at::Tensor> msda_3d_backward(
+std::tuple<at::Tensor, at::Tensor, at::Tensor> msda_3d_backward(
     const at::Tensor &in_feats, 
     const at::Tensor &map_hw,
     const at::Tensor &map_offs,

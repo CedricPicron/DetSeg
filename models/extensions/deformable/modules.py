@@ -114,7 +114,8 @@ class MSDA3D(nn.Module):
         common_shape = (batch_size, num_in_feats, self.num_heads)
 
         # Get value features
-        val_feats = self.val_proj(sample_feats).view(*common_shape, -1)
+        num_sample_feats = sample_feats.shape[1]
+        val_feats = self.val_proj(sample_feats).view(batch_size, num_sample_feats, self.num_heads, -1)
 
         # Get zero-one normalized sample XYZ
         num_maps = len(map_hw)

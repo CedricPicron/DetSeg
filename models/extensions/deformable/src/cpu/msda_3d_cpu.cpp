@@ -1,7 +1,4 @@
-#include <vector>
-
 #include <ATen/ATen.h>
-#include <ATen/cuda/CUDAContext.h>
 
 at::Tensor msda_3d_cpu_forward(
     const at::Tensor &in_feats, 
@@ -13,7 +10,7 @@ at::Tensor msda_3d_cpu_forward(
     AT_ERROR("Not implemented on CPU.");
 }
 
-std::vector<at::Tensor> msda_3d_cpu_backward(
+std::tuple<at::Tensor, at::Tensor, at::Tensor> msda_3d_cpu_backward(
     const at::Tensor &in_feats, 
     const at::Tensor &map_hw,
     const at::Tensor &map_offs,
