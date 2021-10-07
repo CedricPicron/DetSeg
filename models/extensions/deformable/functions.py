@@ -30,6 +30,7 @@ class MSDA3DF(Function):
             out_feats (FloatTensor): Sampled features of shape [batch_size, num_out_feats, num_heads, channels].
         """
 
+        sample_xyz = sample_xyz.clamp_(min=0.0, max=1.0)
         ctx.save_for_backward(in_feats, map_hw, map_offs, sample_xyz, attn_ws)
         out_feats = msda_3d_forward(in_feats, map_hw, map_offs, sample_xyz, attn_ws)
 

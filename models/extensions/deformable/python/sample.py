@@ -1,5 +1,5 @@
 """
-Collection of sample functions.
+Collection of PyTorch-based sample functions.
 """
 
 import torch

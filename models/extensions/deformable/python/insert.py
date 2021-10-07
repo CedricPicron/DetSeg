@@ -1,5 +1,5 @@
 """
-Collection of insert functions.
+Collection of PyTorch-based insert functions.
 """
 
 import torch

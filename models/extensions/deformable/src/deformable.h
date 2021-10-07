@@ -20,6 +20,11 @@ Args:
 
 Returns:
     Output features (FloatTensor) of weighted samples of shape [batch_size, num_out_feats, num_heads, channels].
+
+Remarks:
+    We assume the 'sample_xyz' input argument is normalized between 0 and 1. This is guaranteed to be the case when
+    using the MSDA3DF autograd function. However, if this function is used directly, please make sure the provided
+    input argument 'sample_xyz' is indeed normalized between 0 and 1.
 */
 
 at::Tensor msda_3d_forward(
@@ -59,6 +64,10 @@ Returns:
         - Gradient (FloatTensor) of input features of shape [batch_size, num_in_feats, num_heads, channels].
         - Gradient (FloatTensor) of zero-one sample XYZ of shape [batch_size, num_out_feats, num_heads, num_pts, 3].
         - Gradient (FloatTensor) of attention weights of shape [batch_size, num_out_feats, num_heads, num_pts].
+Remarks:
+    We assume the 'sample_xyz' input argument is normalized between 0 and 1. This is guaranteed to be the case when
+    using the MSDA3DF autograd function. However, if this function is used directly, please make sure the provided
+    input argument 'sample_xyz' is indeed normalized between 0 and 1.
 */
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> msda_3d_backward(

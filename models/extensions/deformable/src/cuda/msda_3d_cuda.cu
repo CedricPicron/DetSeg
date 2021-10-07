@@ -81,8 +81,8 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> msda_3d_cuda_backward(
     auto channels = in_feats.size(3);
 
     auto grad_in_feats = at::zeros_like(in_feats, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
-    auto grad_sample_xyz = at::empty_like(sample_xyz, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
-    auto grad_attn_ws = at::empty_like(attn_ws, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    auto grad_sample_xyz = at::zeros_like(sample_xyz, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    auto grad_attn_ws = at::zeros_like(attn_ws, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
     int64_t num_kernels = batch_size * num_out_feats * num_heads * channels;
 
     if (num_kernels > 0)

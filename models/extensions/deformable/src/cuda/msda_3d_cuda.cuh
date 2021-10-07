@@ -78,13 +78,8 @@ __global__ void msda_3d_cuda_forward_kernel(
       scalar_t iy = sample_xyz.data[sample_offset + sample_sC];
       scalar_t iz = sample_xyz.data[sample_offset + 2 * sample_sC];
 
-      // Clip normalized sample locations between 0 and 1
-      float ix_f = ::min(::max(static_cast<float>(ix), 0.f), 1.f);
-      float iy_f = ::min(::max(static_cast<float>(iy), 0.f), 1.f);
-      float iz_f = ::min(::max(static_cast<float>(iz), 0.f), 1.f);
-
       // Get unnormalized Z sample locations
-      iz_f = iz_f * (M-1);
+      float iz_f = static_cast<float>(iz) * (M-1);
       int iz_0 = static_cast<int>(::min(::floor(iz_f), static_cast<float>(M-2)));
       int iz_1 = iz_0 + 1;
 
@@ -95,8 +90,11 @@ __global__ void msda_3d_cuda_forward_kernel(
       int64_t w_1 = map_hw.data[iz_1 * map_sM + map_sC];
 
       // Get unnormalized X and Y sample locations
+      float ix_f = static_cast<float>(ix);
+      float iy_f = static_cast<float>(iy);
+
       float ix_f0 = ix_f * static_cast<float>(w_0 - 1);
-      float ix_f1 = ix_f * static_cast<float>(w_1 - 1);
+      float ix_f1 = ix_f * static_cast<float>(w_1 - 1);      
       float iy_f0 = iy_f * static_cast<float>(h_0 - 1);
       float iy_f1 = iy_f * static_cast<float>(h_1 - 1);
 
@@ -231,11 +229,9 @@ __global__ void msda_3d_cuda_backward_kernel(
     const int f = (index / (C * H)) % F;
     const int n = index / (C * H * F);
 
-    // Get initial (gradient) sample and (gradient) attention offsets
+    // Get initial sample and attention offsets
     int sample_offset = n * sample_sN + f * sample_sF + h * sample_sH;
     int attn_offset = n * attn_sN + f * attn_sF + h * attn_sH;
-    int gSample_offset = n * gSample_sN + f * gSample_sF + h * gSample_sH;
-    int gAttn_offset = n * gAttn_sN + f * gAttn_sF + h * gAttn_sH;
 
     // Get base (gradient) input pointers
     auto in_ptr = in_feats.data + n * in_sN + h * in_sH + c * in_sC;
@@ -244,22 +240,21 @@ __global__ void msda_3d_cuda_backward_kernel(
     // Get output gradient
     scalar_t gOut = grad_out_feats.data[n * gOut_sN + f * gOut_sF + h * gOut_sH + c * gOut_sC];
 
+    // Get initial gradient sample and gradient attention pointers
+    auto gSample_ptr = grad_sample_xyz.data + n * gSample_sN + f * gSample_sF + h * gSample_sH;
+    auto gAttn_ptr = grad_attn_ws.data + n * gAttn_sN + f * gAttn_sF + h * gAttn_sH;
+
     // Loop over points
-    for (int p = 0; p < P; ++p, sample_offset += sample_sP, attn_offset += attn_sP, gSample_offset += gSample_sP,
-         gAttn_offset += gAttn_sP)
+    for (int p = 0; p < P; ++p, sample_offset += sample_sP, attn_offset += attn_sP, gSample_ptr += gSample_sP,
+         gAttn_ptr += gAttn_sP)
     {
       // Get normalized sample locations
       scalar_t ix = sample_xyz.data[sample_offset];
       scalar_t iy = sample_xyz.data[sample_offset + sample_sC];
       scalar_t iz = sample_xyz.data[sample_offset + 2 * sample_sC];
 
-      // Clip normalized sample locations between 0 and 1
-      float ix_f = ::min(::max(static_cast<float>(ix), 0.f), 1.f);
-      float iy_f = ::min(::max(static_cast<float>(iy), 0.f), 1.f);
-      float iz_f = ::min(::max(static_cast<float>(iz), 0.f), 1.f);
-
       // Get unnormalized Z sample locations
-      iz_f = iz_f * (M-1);
+      float iz_f = static_cast<float>(iz) * (M-1);
       int iz_0 = static_cast<int>(::min(::floor(iz_f), static_cast<float>(M-2)));
       int iz_1 = iz_0 + 1;
 
@@ -270,8 +265,11 @@ __global__ void msda_3d_cuda_backward_kernel(
       int64_t w_1 = map_hw.data[iz_1 * map_sM + map_sC];
 
       // Get unnormalized X and Y sample locations
+      float ix_f = static_cast<float>(ix);
+      float iy_f = static_cast<float>(iy);
+
       float ix_f0 = ix_f * static_cast<float>(w_0 - 1);
-      float ix_f1 = ix_f * static_cast<float>(w_1 - 1);
+      float ix_f1 = ix_f * static_cast<float>(w_1 - 1);      
       float iy_f0 = iy_f * static_cast<float>(h_0 - 1);
       float iy_f1 = iy_f * static_cast<float>(h_1 - 1);
 
@@ -353,24 +351,34 @@ __global__ void msda_3d_cuda_backward_kernel(
       atomicAdd(gIn_ptr_111, gVal_11 * wx_11);
 
       // Get sample gradients
-      grad_sample_xyz.data[gSample_offset] = gVal_00 * (*in_ptr_100 - *in_ptr_000);
-      grad_sample_xyz.data[gSample_offset] += gVal_01 * (*in_ptr_110 - *in_ptr_010);
-      grad_sample_xyz.data[gSample_offset] += gVal_10 * (*in_ptr_101 - *in_ptr_001);
-      grad_sample_xyz.data[gSample_offset] += gVal_11 * (*in_ptr_111 - *in_ptr_011);
+      scalar_t grad_sample_x0 = gVal_00 * (*in_ptr_100 - *in_ptr_000);
+      grad_sample_x0 += gVal_01 * (*in_ptr_110 - *in_ptr_010);
+      grad_sample_x0 *= (w_0 - 1);
+
+      scalar_t grad_sample_x1 = gVal_10 * (*in_ptr_101 - *in_ptr_001);
+      grad_sample_x1 += gVal_11 * (*in_ptr_111 - *in_ptr_011);
+      grad_sample_x1 *= (w_1 - 1);
+
+      scalar_t grad_sample_x = grad_sample_x0 + grad_sample_x1;
+      atomicAdd(gSample_ptr, grad_sample_x);
 
       scalar_t val_00 = *in_ptr_000 * wx_00 + *in_ptr_100 * wx_01;
       scalar_t val_01 = *in_ptr_010 * wx_00 + *in_ptr_110 * wx_01;
       scalar_t val_10 = *in_ptr_001 * wx_10 + *in_ptr_101 * wx_11;
       scalar_t val_11 = *in_ptr_011 * wx_10 + *in_ptr_111 * wx_11;
-      grad_sample_xyz.data[gSample_offset + gSample_sC] = gVal_0 * (val_01 - val_00) + gVal_1 * (val_11 - val_10);
+
+      scalar_t grad_sample_y = gVal_0 * (val_01 - val_00) * (h_0 - 1);
+      grad_sample_y += gVal_1 * (val_11 - val_10) * (h_1 - 1);
+      atomicAdd(gSample_ptr + gSample_sC, grad_sample_y);
 
       scalar_t val_0 = val_00 * wy_00 + val_01 * wy_01;
-      scalar_t val_1 = val_10 * wy_10 + val_11 * wy_11; 
-      grad_sample_xyz.data[gSample_offset + 2 * gSample_sC] = gVal * (val_1 - val_0);
+      scalar_t val_1 = val_10 * wy_10 + val_11 * wy_11;
+
+      scalar_t grad_sample_z = gVal *(val_1 - val_0) * (M-1);
+      atomicAdd(gSample_ptr + 2 * gSample_sC,  grad_sample_z);
 
       // Get attention gradients
-      val_0 *= wz_0;
-      grad_attn_ws.data[gAttn_offset] = gOut * (val_0 * wz_0 + val_1 * wz_1);
+      atomicAdd(gAttn_ptr, gOut * (val_0 * wz_0 + val_1 * wz_1));
     }
   }
 }

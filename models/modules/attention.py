@@ -11,8 +11,8 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 from models.extensions.deformable.modules import MSDA3D
-from models.ops.insert.functional import pytorch_maps_insert_2d, pytorch_maps_insert_3d
-from models.ops.sample.functional import pytorch_maps_sample_2d, pytorch_maps_sample_3d
+from models.extensions.deformable.python.insert import pytorch_maps_insert_2d, pytorch_maps_insert_3d
+from models.extensions.deformable.python.sample import pytorch_maps_sample_2d, pytorch_maps_sample_3d
 
 
 class Attn2d(nn.Module):
