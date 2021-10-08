@@ -118,24 +118,22 @@ class MSDA3D(nn.Module):
         val_feats = self.val_proj(sample_feats).view(batch_size, num_sample_feats, self.num_heads, -1)
 
         # Get zero-one normalized sample XYZ
-        num_maps = len(map_hw)
-        sample_z = map_ids / (num_maps-1)
-        sample_xyz = torch.cat([sample_priors[:, :, None, None, :2], sample_z[:, :, None, None, None]], dim=4)
         sample_offs = self.sample_offsets(in_feats).view(*common_shape, self.num_pts, 3)
 
         if sample_priors.shape[-1] == 2:
             offset_normalizers = map_hw.fliplr()[map_ids, None, None, :]
-            sample_offs[:, :, :, :, :2] = sample_offs[:, :, :, :, :2] / offset_normalizers
-            sample_xyz = sample_xyz + sample_offs
+            sample_xy = sample_priors[:, :, None, None, :2] + sample_offs[:, :, :, :, :2] / offset_normalizers
 
         elif sample_priors.shape[-1] == 4:
             offset_factors = 0.5 * sample_priors[:, :, None, None, 2:] / self.num_pts
-            sample_offs[:, :, :, :, :2] = sample_offs[:, :, :, :, :2] * offset_factors
-            sample_xyz = sample_xyz + sample_offs
+            sample_xy = sample_priors[:, :, None, None, :2] + sample_offs[:, :, :, :, :2] * offset_factors
 
         else:
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
+
+        sample_z = (map_ids[:, :, None, None] + sample_offs[:, :, :, :, 2].tanh()) / (len(map_hw) - 1)
+        sample_xyz = torch.cat([sample_xy, sample_z[:, :, :, :, None]], dim=4)
 
         # Get normalized attention weights
         attn_ws = self.attn_weights(in_feats).view(*common_shape, self.num_pts)
