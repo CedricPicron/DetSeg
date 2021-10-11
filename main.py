@@ -61,6 +61,9 @@ def get_parser():
     # Backbone
     parser.add_argument('--backbone_type', default='resnet', type=str, help='type of backbone module')
 
+    # * MMDetection backbone
+    parser.add_argument('--mmdet_backbone_cfg_path', default='', type=str, help='path to MMDetection backbone config')
+
     # * ResNet
     parser.add_argument('--resnet_name', default='resnet50', type=str, help='full name of the desired ResNet model')
     parser.add_argument('--resnet_dilation', action='store_true', help='use dilation for ResNet layer block')
@@ -672,7 +675,7 @@ def main(args):
 
 if __name__ == '__main__':
     prog = "python main.py"
-    description = "SampleDETR training and evaluation script"
+    description = "Main training and evaluation script"
     fmt = argparse.MetavarTypeHelpFormatter
 
     parser = argparse.ArgumentParser(prog=prog, description=description, parents=[get_parser()], formatter_class=fmt)

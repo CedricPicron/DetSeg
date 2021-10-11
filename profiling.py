@@ -23,8 +23,8 @@ from structures.images import Images
 
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'dc']
-model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'resnet']
-model_choices = [*model_choices, 'ret', 'sample_decoder', 'sbd', 'sem']
+model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd']
+model_choices = [*model_choices, 'mmdet_backbone', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -197,6 +197,8 @@ elif profiling_args.model == 'bvn_ret':
     main_args.arch_type = 'bvn'
     main_args.bvn_step_mode = 'single'
     main_args.bvn_sync_heads = False
+    main_args.backbone_type = 'resnet'
+    main_args.mmdet_backbone_cfg_path = './configs/mmdet/backbones/resnet_50_v0.py'
     main_args.resnet_name = 'resnet50'
     main_args.core_type = 'gc'
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
@@ -501,10 +503,21 @@ elif profiling_args.model == 'mbd':
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
+elif profiling_args.model == 'mmdet_backbone':
+    main_args.backbone_type = 'mmdet'
+    main_args.mmdet_backbone_cfg_path = './configs/mmdet/backbones/resnet_50_v0.py'
+    model = build_backbone(main_args).to('cuda')
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    inputs = {'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
+
 elif profiling_args.model == 'resnet':
     main_args.backbone_map_ids = list(range(3, 8))
     main_args.backbone_type = 'resnet'
-    main_args.lr_backbone = 1e-5
     model = build_backbone(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -641,16 +654,18 @@ elif profiling_args.model == 'sem':
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)[0]['sem_seg_loss'].backward()"
 
-# Select forward or backward statement depending on mode
-stmt = backward_stmt if profiling_args.mode == 'train' else forward_stmt
+# Some additional preparation depending on profiling mode
+if profiling_args.mode == 'train':
+    model.train()
+    stmt = backward_stmt
 
-# Some additional preparation for the validation and testing modes
-if profiling_args.mode in ('val', 'test'):
+elif profiling_args.mode in ('val', 'test'):
+    globals_dict['inputs'].pop('optimizer', None)
+    model.eval()
+    stmt = forward_stmt
+
     for parameter in model.parameters():
         parameter.requires_grad = False
-
-    model.eval()
-    globals_dict['inputs'].pop('optimizer', None)
 
     if profiling_args.mode == 'test':
         globals_dict['inputs'].pop('tgt_dict', None)

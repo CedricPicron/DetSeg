@@ -19,8 +19,8 @@ class ResNet(nn.Module):
     Attributes:
         in_norm_mean (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization means.
         in_norm_std (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization standard deviations.
-        body (IntermediateLayerGetter): Module computing and returning the requested ResNet feature maps.
-        feat_sizes (List): List of size [num_maps] containing the feature size of each returned feature map.
+        feat_sizes (List): List of size [num_maps] containing the feature sizes of the returned feature maps.
+        body (IntermediateLayerGetter): Module computing and returning the requested backbone feature maps.
     """
 
     def __init__(self, name, dilation, return_layers):
@@ -50,13 +50,13 @@ class ResNet(nn.Module):
             if 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
                 parameter.requires_grad_(False)
 
-        # Get body module computing and returning the requested ResNet feature maps
-        self.body = IntermediateLayerGetter(resnet, return_layers=return_layers)
-
         # Get feature sizes of returned feature maps
         feat_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
         feat_sizes = {f'layer{i+1}': feat_sizes[i] for i in range(4)}
         self.feat_sizes = [feat_sizes[layer_name] for layer_name in return_layers]
+
+        # Get body module computing and returning the requested ResNet feature maps
+        self.body = IntermediateLayerGetter(resnet, return_layers=return_layers)
 
     def load_from_original_detr(self, fb_detr_state_dict):
         """

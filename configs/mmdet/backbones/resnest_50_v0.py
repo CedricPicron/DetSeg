@@ -1,0 +1,16 @@
+backbone = dict(
+        type='ResNeSt',
+        stem_channels=64,
+        depth=50,
+        radix=2,
+        reduction_factor=4,
+        avg_down_stride=True,
+        num_stages=4,
+        out_indices=(1, 2, 3),
+        out_sizes=(512, 1024, 2048),
+        frozen_stages=1,
+        norm_cfg=dict(type='BN', requires_grad=True),
+        norm_eval=True,
+        style='pytorch',
+        init_cfg=dict(type='Pretrained', checkpoint='open-mmlab://resnest50'),
+        )
