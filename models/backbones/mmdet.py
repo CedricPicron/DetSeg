@@ -42,6 +42,7 @@ class MMDetBackbone(nn.Module):
 
         # Get backbone body
         self.body = build_backbone(cfg.backbone)
+        self.body.init_weights()
 
     def forward(self, images):
         """
