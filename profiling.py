@@ -505,7 +505,7 @@ elif profiling_args.model == 'mbd':
 
 elif profiling_args.model == 'mmdet_backbone':
     main_args.backbone_type = 'mmdet'
-    main_args.mmdet_backbone_cfg_path = './configs/mmdet/backbones/resnet_50_v0.py'
+    main_args.mmdet_backbone_cfg_path = './configs/mmdet/backbones/resnet_50_v6.py'
     model = build_backbone(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
