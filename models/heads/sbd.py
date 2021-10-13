@@ -8,6 +8,7 @@ from detectron2.layers import batched_nms
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
 from fvcore.nn import sigmoid_focal_loss, smooth_l1_loss
+from scipy.optimize import linear_sum_assignment as lsa
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -34,7 +35,14 @@ class SBD(nn.Module):
         box (Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
 
         match_mode (str): String containing the prediction-target matching mode.
+        match_cls_type (str): String containing the type of classification loss function during hungarian matching.
+        match_cls_alpha (float): Alpha value of the classification sigmoid focal loss during hungarian matching.
+        match_cls_gamma (float): Gamma value of the classification sigmoid focal loss during hungarian matching.
+        match_cls_weight (float): Factor weighting the classification loss during hungarian matching.
+        match_box_types (List): List of strings with the types of box loss functions during hungarian matching.
+        match_box_weights (List): List of factors weighting the different box losses during hungarian matching.
         match_static_mode (str): String containing the static prediction-target matching mode.
+        match_static_metric (str): String containing the static prediction-target matching metric.
         match_abs_pos (float): Absolute positive threshold used static prediction-target matching.
         match_abs_neg (float): Absolute negative threshold used static prediction-target matching.
         match_rel_pos (int): Relative positive threshold used static prediction-target matching.
@@ -130,7 +138,14 @@ class SBD(nn.Module):
 
             match_dict (Dict): Matching dictionary containing following keys:
                 - mode (str): string containing the prediction-target matching mode;
+                - cls_type (str): string containing the type of classification loss function during hungarian matching;
+                - cls_alpha (float): alpha value of the classification sigmoid focal loss during hungarian matching;
+                - cls_gamma (float): gamma value of the classification sigmoid focal loss during hungarian matching;
+                - cls_weight (float): factor weighting the classification loss during hungarian matching;
+                - box_types (List): list of strings with the types of box loss functions during hungarian matching;
+                - box_weights (List): list of factors weighting the different box losses during hungarian matching;
                 - static_mode (str): string containing the static prediction-target matching mode;
+                - static_metric (str): string containing the static prediction-target matching metric;
                 - abs_pos (float): absolute positive threshold used static prediction-target matching;
                 - abs_neg (float): absolute negative threshold used static prediction-target matching;
                 - rel_pos (int): relative positive threshold used static prediction-target matching;
@@ -305,15 +320,21 @@ class SBD(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def perform_matching(self, pred_anchors=None, tgt_boxes=None, pred_anchor_ids=None, tgt_sorted_ids=None):
+    def perform_matching(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids):
         """
         Perform prediction-target matching.
 
         Args:
-            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
-            tgt_boxes (List): List [batch_size] of target boxes of size [num_targets] (default=None).
-            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
-            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets] (default=None).
+            cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
+            box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (List): list of size [batch_size] with class indices of shape [num_targets];
+                - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
+
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds].
+            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds].
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets].
 
         Returns:
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
@@ -321,13 +342,18 @@ class SBD(nn.Module):
             neg_pred_ids (List): List [batch_size] with indices of negative predictions of shape [num_neg_preds].
 
         Raises:
-            ValueError: Error when the 'pred_anchors' input is missing when needed.
-            ValueError: Error when the 'tgt_boxes' input is missing when needed.
-            ValueError: Error when the 'pred_anchor_ids' input is missing when needed.
-            ValueError: Error when the 'tgt_sorted_ids' input is missing when needed.
+            ValueError: Error when invalid classification loss type is provided during hungarian matching.
+            ValueError: Error when invalid object state type is provided.
+            ValueError: Error when the number of hungarian matching box loss types and loss weights is different.
+            ValueError: Error when invalid bounding box loss type is provided during hungarian matching.
+            ValueError: Error when invalid static prediction-target matching metric is provided.
             ValueError: Error when invalid static prediction-target matching mode is provided.
             ValueError: Error when invalid prediction-target matching mode is provided.
         """
+
+        # Get batch size and dictionary with desired output dtype and device
+        batch_size = len(cls_preds)
+        tensor_kwargs = {'dtype': torch.int64, 'device': cls_preds[0].device}
 
         # Initialize empty lists for prediction-target matching
         pos_pred_ids = []
@@ -335,35 +361,93 @@ class SBD(nn.Module):
         neg_pred_ids = []
 
         # Perform prediction-target matching
-        if self.match_mode == 'static':
-            if 'abs' in self.match_static_mode:
-                if pred_anchors is None:
-                    mode = self.match_static_mode
-                    error_msg = f"The 'pred_anchors' input must be provided when in '{mode}' static match mode."
+        if self.match_mode == 'hungarian':
+            for i in range(batch_size):
+
+                # Get classification loss matrix
+                if self.match_cls_type == 'sigmoid_focal':
+                    cls_preds_i = cls_preds[i][:, tgt_dict['labels'][i]]
+                    cls_targets_i = torch.ones_like(cls_preds_i)
+
+                    cls_kwargs = {'alpha': self.match_cls_alpha, 'gamma': self.match_cls_gamma, 'reduction': 'none'}
+                    cls_loss_matrix = sigmoid_focal_loss(cls_preds_i, cls_targets_i, **cls_kwargs)
+
+                else:
+                    error_msg = f"Invalid classification loss type '{self.match_cls_type}' during hungarian matching."
                     raise ValueError(error_msg)
 
-                if tgt_boxes is None:
-                    mode = self.match_static_mode
-                    error_msg = f"The 'tgt_boxes' input must be provided when in '{mode}' static match mode."
+                cls_loss_matrix = self.match_cls_weight * cls_loss_matrix
+                loss_matrices = [cls_loss_matrix]
+
+                # Get prediction boxes
+                if self.state_type == 'abs':
+                    pred_boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
+
+                elif self.state_type in ['rel_static', 'rel_dynamic']:
+                    pred_boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i]).to_format('cxcywh')
+
+                else:
+                    error_msg = f"Invalid object state type '{self.state_type}'."
                     raise ValueError(error_msg)
 
-            if 'rel' in self.match_static_mode:
-                if pred_anchor_ids is None:
-                    mode = self.match_static_mode
-                    error_msg = f"The 'pred_anchor_ids' input must be provided when in '{mode}' static match mode."
+                # Get target boxes
+                tgt_boxes_i = tgt_dict['boxes'][i].to_format('cxcywh')
+
+                # Get bounding box loss matrices
+                if len(self.match_box_types) != len(self.match_box_weights):
+                    error_msg = "The number of hungarian matching box loss types and loss weights must be equal."
                     raise ValueError(error_msg)
 
-                if tgt_sorted_ids is None:
-                    mode = self.match_static_mode
-                    error_msg = f"The 'tgt_sorted_ids' input must be provided when in '{mode}' static match mode."
-                    raise ValueError(error_msg)
+                for box_type, box_weight in zip(self.match_box_types, self.match_box_weights):
+                    if box_type == 'l1':
+                        box_loss_matrix = box_weight * torch.cdist(pred_boxes_i.boxes, tgt_boxes_i.boxes, p=1)
 
-            for i in range(len(pred_anchor_ids)):
+                    elif box_type == 'iou':
+                        box_loss_matrix = -box_weight * box_iou(pred_boxes_i, tgt_boxes_i)
+
+                    elif box_type == 'giou':
+                        box_loss_matrix = -box_weight * box_giou(pred_boxes_i, tgt_boxes_i)
+
+                    else:
+                        error_msg = f"Invalid bounding box loss type '{box_type}' during hungarian matching."
+                        raise ValueError(error_msg)
+
+                    loss_matrices.append(box_loss_matrix)
+
+                # Perform hungarian matching
+                loss_matrix = sum(loss_matrix for loss_matrix in loss_matrices).cpu()
+                pos_pred_ids_i, pos_tgt_ids_i = lsa(loss_matrix)
+
+                pos_pred_ids_i = torch.as_tensor(pos_pred_ids_i, **tensor_kwargs)
+                pos_tgt_ids_i = torch.as_tensor(pos_tgt_ids_i, **tensor_kwargs)
+
+                # Get indices of negative predictions
+                num_preds = len(cls_preds[i])
+                neg_mask = torch.ones(num_preds, dtype=torch.bool, device=tensor_kwargs['device'])
+                neg_mask[pos_pred_ids_i] = False
+                neg_pred_ids_i = torch.arange(num_preds, **tensor_kwargs)[neg_mask]
+
+                # Append to lists collecting indices from every batch entry
+                pos_pred_ids.append(pos_pred_ids_i)
+                pos_tgt_ids.append(pos_tgt_ids_i)
+                neg_pred_ids.append(neg_pred_ids_i)
+
+        elif self.match_mode == 'static':
+            for i in range(batch_size):
+
+                # Get absolute masks if needed
                 if 'abs' in self.match_static_mode:
-                    sim_matrix = box_iou(pred_anchors[i], tgt_boxes[i])
+                    if self.match_static_metric == 'iou':
+                        sim_matrix = box_iou(pred_anchors[i], tgt_dict['boxes'][i])
+
+                    else:
+                        error_msg = f"Invalid static prediction-target matching metric '{self.match_static_metric}'."
+                        raise ValueError(error_msg)
+
                     abs_pos_mask = sim_matrix >= self.match_abs_pos
                     abs_neg_mask = sim_matrix < self.match_abs_neg
 
+                # Get relative masks if needed
                 if 'rel' in self.match_static_mode:
                     pos_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_pos]
                     non_neg_masks = pred_anchor_ids[i][:, None, None] == tgt_sorted_ids[i][:self.match_rel_neg]
@@ -371,6 +455,7 @@ class SBD(nn.Module):
                     rel_pos_mask = pos_masks.any(dim=1)
                     rel_neg_mask = ~non_neg_masks.any(dim=1)
 
+                # Perform static matching
                 if self.match_static_mode == 'abs':
                     pos_mask = abs_pos_mask
                     neg_mask = abs_neg_mask
@@ -394,6 +479,7 @@ class SBD(nn.Module):
                 pos_pred_ids_i, pos_tgt_ids_i = torch.nonzero(pos_mask, as_tuple=True)
                 neg_pred_ids_i = neg_mask.all(dim=1).nonzero(as_tuple=True)[0]
 
+                # Append to lists collecting indices from every batch entry
                 pos_pred_ids.append(pos_pred_ids_i)
                 pos_tgt_ids.append(pos_tgt_ids_i)
                 neg_pred_ids.append(neg_pred_ids_i)
@@ -449,10 +535,10 @@ class SBD(nn.Module):
             cls_preds_i = torch.cat([cls_preds_i, bg_preds_i], dim=0)
             cls_targets_i = torch.cat([cls_targets_i, bg_targets_i], dim=0)
 
-            # Handle case where there are no targets
+            # Handle case where there are no matched targets
             if len(cls_targets_i) == 0:
                 cls_loss += 0.0 * cls_preds[i].sum()
-                cls_acc += 100 / batch_size
+                cls_acc += 100 / batch_size if len(tgt_dict['labels'][i]) == 0 else 0.0
                 continue
 
             # Get classification losses
@@ -522,10 +608,10 @@ class SBD(nn.Module):
             box_preds_i = box_preds[i][pred_ids[i]]
             tgt_boxes_i = tgt_dict['boxes'][i][tgt_ids[i]]
 
-            # Handle case where there are no targets
+            # Handle case where there are no matched targets
             if len(tgt_boxes_i) == 0:
                 box_loss += 0.0 * box_preds[i].sum()
-                box_acc += 100 / batch_size
+                box_acc += 100 / batch_size if len(tgt_dict['boxes'][i]) == 0 else 0.0
                 continue
 
             # Prepare predictions and targets
@@ -588,7 +674,7 @@ class SBD(nn.Module):
 
         return box_loss, box_acc
 
-    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchors=None, pred_anchor_ids=None, tgt_sorted_ids=None):
+    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids):
         """
         Compute classification and bounding box losses from predictions.
 
@@ -600,9 +686,9 @@ class SBD(nn.Module):
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with Boxes structures of size [num_targets].
 
-            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
-            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds] (default=None).
-            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets] (default=None).
+            pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds].
+            pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds].
+            tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets].
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -617,7 +703,7 @@ class SBD(nn.Module):
         """
 
         # Perform prediction-target matching
-        match_args = (pred_anchors, tgt_dict['boxes'], pred_anchor_ids, tgt_sorted_ids)
+        match_args = (cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids)
         pos_pred_ids, pos_tgt_ids, neg_pred_ids = self.perform_matching(*match_args)
 
         # Get classification loss and accuracy

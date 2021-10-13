@@ -234,6 +234,12 @@ def build_heads(args):
             assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
             num_levels = len(args.core_feat_sizes)
 
+            if not isinstance(args.sbd_match_box_types, list):
+                args.sbd_match_box_types = [args.sbd_match_box_types]
+
+            if not isinstance(args.sbd_match_box_weights, list):
+                args.sbd_match_box_weights = [args.sbd_match_box_weights]
+
             if not isinstance(args.sbd_loss_box_types, list):
                 args.sbd_loss_box_types = [args.sbd_loss_box_types]
 
@@ -278,7 +284,12 @@ def build_heads(args):
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
             box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
 
-            match_dict = {'mode': args.sbd_match_mode, 'static_mode': args.sbd_match_static_mode}
+            match_dict = {'mode': args.sbd_match_mode, 'cls_type': args.sbd_match_cls_type}
+            match_dict = {**match_dict, 'cls_alpha': args.sbd_match_cls_alpha, 'cls_gamma': args.sbd_match_cls_gamma}
+            match_dict = {**match_dict, 'cls_weight': args.sbd_match_cls_weight, 'box_types': args.sbd_match_box_types}
+            match_dict = {**match_dict, 'box_weights': args.sbd_match_box_weights}
+            match_dict = {**match_dict, 'static_mode': args.sbd_match_static_mode}
+            match_dict = {**match_dict, 'static_metric': args.sbd_match_static_metric}
             match_dict = {**match_dict, 'abs_pos': args.sbd_match_abs_pos, 'abs_neg': args.sbd_match_abs_neg}
             match_dict = {**match_dict, 'rel_pos': args.sbd_match_rel_pos, 'rel_neg': args.sbd_match_rel_neg}
 

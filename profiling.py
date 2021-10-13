@@ -588,6 +588,8 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_hcls_layers = 1
     main_args.sbd_hbox_layers = 1
     main_args.sbd_match_mode = 'static'
+    main_args.sbd_match_box_types = ['l1', 'giou']
+    main_args.sbd_match_box_weights = [5.0, 2.0]
     main_args.sbd_match_static_mode = 'rel'
     main_args.sbd_loss_apply_freq = 'last'
     main_args.sbd_loss_freeze_inter = False
