@@ -408,7 +408,7 @@ operations:
   # TPN
   - type: 'layer'
     name: 'tpn'
-    num_layers: 5
+    num_layers: 4
     in:
       - - 8 # P7
         - 6 # P6
