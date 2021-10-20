@@ -6,6 +6,7 @@ from .bifpn import BiFPN
 from .dc import DeformableCore
 from .fpn import FPN
 from .gc import GC
+from .mmdet import MMDetCore
 
 
 def build_core(args):
@@ -61,6 +62,9 @@ def build_core(args):
 
     elif args.core_type == 'gc':
         core = GC(args.gc_yaml)
+
+    elif args.core_type == 'mmdet':
+        core = MMDetCore(args.mmdet_core_cfg_path)
 
     else:
         raise ValueError(f"Unknown core type {args.core_type} was provided.")

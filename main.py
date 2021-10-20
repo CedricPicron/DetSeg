@@ -107,6 +107,9 @@ def get_parser():
     # * GC (Generalized Core)
     parser.add_argument('--gc_yaml', default='', type=str, help='path to yaml-file with GC specification')
 
+    # * MMDetection core
+    parser.add_argument('--mmdet_core_cfg_path', default='', type=str, help='path to MMDetection core config')
+
     # * Heads
     parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
 

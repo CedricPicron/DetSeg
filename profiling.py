@@ -24,7 +24,7 @@ from structures.images import Images
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'dc']
 model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd']
-model_choices = [*model_choices, 'mmdet_backbone', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
+model_choices = [*model_choices, 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -426,7 +426,6 @@ elif profiling_args.model == 'gc':
     feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
     feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
     feat_maps = [feat_map3, feat_map4, feat_map5]
-    inputs = [feat_maps]
 
     inputs = {'in_feat_maps': feat_maps}
     globals_dict = {'model': model, 'inputs': inputs}
@@ -513,6 +512,23 @@ elif profiling_args.model == 'mmdet_backbone':
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 
     inputs = {'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
+
+elif profiling_args.model == 'mmdet_core':
+    main_args.core_type = 'mmdet'
+    main_args.mmdet_core_cfg_path = './configs/mmdet/cores/rfp_v0.py'
+    model = build_core(main_args).to('cuda')
+
+    images = torch.randn(2, 3, 1024, 1024).to('cuda')
+    feat_map2 = torch.randn(2, 256, 256, 256).to('cuda')
+    feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 1024, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 2048, 32, 32).to('cuda')
+    feat_maps = [images, feat_map2, feat_map3, feat_map4, feat_map5]
+
+    inputs = {'in_feat_maps': feat_maps}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
