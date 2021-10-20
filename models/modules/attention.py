@@ -230,7 +230,7 @@ class DeformableAttn(nn.Module):
     """
 
     def __init__(self, in_size, sample_size, out_size=-1, norm='', act_fn='', skip=True, version=0, num_heads=8,
-                 num_levels=5, num_points=4, rad_pts=1, ang_pts=1, lvl_pts=1, dup_pts=1, qk_size=-1, val_size=-1,
+                 num_levels=5, num_points=4, rad_pts=4, ang_pts=1, lvl_pts=1, dup_pts=1, qk_size=-1, val_size=-1,
                  val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the DeformableAttn module.
@@ -246,7 +246,7 @@ class DeformableAttn(nn.Module):
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_levels (int): Integer containing the number of map levels to sample from (default=5).
             num_points (int): Integer containing the number of sampling points per head and level (default=4).
-            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=1).
+            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=4).
             ang_pts (int): Integer containing the number of angular sampling points per head and level (default=1).
             lvl_pts (int): Integer containing the number of level sampling points per head (default=1).
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
@@ -330,7 +330,7 @@ class DeformableAttn(nn.Module):
                                dup_pts, val_size, val_with_pos, norm_z, sample_insert, insert_size)
 
         elif version == 7:
-            self.msda = MSDA3D(in_size, sample_size, out_size, num_heads, num_points, val_size)
+            self.msda = MSDA3D(in_size, sample_size, out_size, num_heads, rad_pts, lvl_pts, val_size)
 
         else:
             error_msg = f"Invalid MSDA version number '{version}'."
@@ -1482,7 +1482,7 @@ class MSDAv5(nn.Module):
             out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=1, ang_pts=1, dup_pts=1,
+    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=4, ang_pts=1, dup_pts=1,
                  val_size=-1, val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv5 module.
@@ -1493,7 +1493,7 @@ class MSDAv5(nn.Module):
             out_size (int): Size of output features (default=-1).
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_levels (int): Integer containing the number of map levels to sample from (default=5).
-            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=1).
+            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=4).
             ang_pts (int): Integer containing the number of angular sampling points per head and level (default=1).
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
             val_size (int): Size of value features (default=-1).
@@ -1732,7 +1732,7 @@ class MSDAv6(nn.Module):
 
     Attributes:
         num_heads (int): Integer containing the number of attention heads.
-        num_points (int): Integer containing the number of sampling points per head and level.
+        num_points (int): Integer containing the number of sampling points per head.
         rad_pts (int): Integer containing the number of radial sampling points per head and level.
 
         sampling_offsets (nn.Linear): Module computing the sampling offsets from the input features.
@@ -1753,7 +1753,7 @@ class MSDAv6(nn.Module):
             out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=1, ang_pts=1, lvl_pts=1,
+    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_levels=5, rad_pts=4, ang_pts=1, lvl_pts=1,
                  dup_pts=1, val_size=-1, val_with_pos=False, norm_z=1.0, sample_insert=False, insert_size=1):
         """
         Initializes the MSDAv6 module.
@@ -1764,7 +1764,7 @@ class MSDAv6(nn.Module):
             out_size (int): Size of output features (default=-1).
             num_heads (int): Integer containing the number of attention heads (default=8).
             num_levels (int): Integer containing the number of map levels to sample from (default=5).
-            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=1).
+            rad_pts (int): Integer containing the number of radial sampling points per head and level (default=4).
             ang_pts (int): Integer containing the number of angular sampling points per head and level (default=1).
             lvl_pts (int): Integer containing the number of level sampling points per head (default=1).
             dup_pts (int): Integer containing the number of duplicate sampling points per head and level (default=1).
@@ -1782,7 +1782,7 @@ class MSDAv6(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Get number of sampling points per head and level
+        # Get number of sampling points per head
         num_points = rad_pts * ang_pts * lvl_pts * dup_pts
 
         # Set attributes related to the number of heads and points

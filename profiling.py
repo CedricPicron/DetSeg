@@ -281,6 +281,8 @@ elif profiling_args.model == 'dc':
     main_args.core_max_map_id = 7
     main_args.dc_num_layers = 6
     main_args.dc_da_version = 7
+    main_args.dc_da_rad_pts = 4
+    main_args.dc_da_lvl_pts = 1
     main_args.dc_prior_type = 'location'
     main_args.dc_scale_encs = False
     model = build_core(main_args).to('cuda')

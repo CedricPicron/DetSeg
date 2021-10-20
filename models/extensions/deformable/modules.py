@@ -16,7 +16,8 @@ class MSDA3D(nn.Module):
 
     Attributes:
         num_heads (int): Integer containing the number of attention heads.
-        num_pts (int): Integer containing the number of sample points per head.
+        rad_pts (int): Integer containing the number of radial sample points per head and level.
+        lvl_pts (int): Integer containing the number of level sample points per head.
 
         sample_offsets (nn.Linear): Module computing the sample offsets from the input features.
         attn_weights (nn.Linear): Module computing the unnormalized attention weights from the input features.
@@ -24,7 +25,7 @@ class MSDA3D(nn.Module):
         out_proj (nn.Linear): Module computing output features from weighted value features.
     """
 
-    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, num_pts=4, val_size=-1):
+    def __init__(self, in_size, sample_size, out_size=-1, num_heads=8, rad_pts=4, lvl_pts=1, val_size=-1):
         """
         Initializes the MSDA3D module.
 
@@ -33,7 +34,8 @@ class MSDA3D(nn.Module):
             sample_size (int): Size of sample features.
             out_size (int): Size of output features (default=-1).
             num_heads (int): Integer containing the number of attention heads (default=8).
-            num_pts (int): Integer containing the number of sample points per head (default=4).
+            rad_pts (int): Integer containing the number of radial sample points per head and level (default=4).
+            lvl_pts (int): Integer containing the number of level sample points per head (default=1).
             val_size (int): Size of value features (default=-1).
 
         Raises:
@@ -46,7 +48,8 @@ class MSDA3D(nn.Module):
 
         # Set attributes related to the number of heads and points
         self.num_heads = num_heads
-        self.num_pts = num_pts
+        self.rad_pts = rad_pts
+        self.lvl_pts = lvl_pts
 
         # Check divisibility input size by number of heads
         if in_size % num_heads != 0:
@@ -54,19 +57,19 @@ class MSDA3D(nn.Module):
             raise ValueError(error_msg)
 
         # Initialize module computing the sample offsets
-        self.sample_offsets = nn.Linear(in_size, num_heads * num_pts * 3)
+        self.sample_offsets = nn.Linear(in_size, num_heads * rad_pts * lvl_pts * 3)
         nn.init.zeros_(self.sample_offsets.weight)
 
         thetas = torch.arange(num_heads, dtype=torch.float) * (2.0 * math.pi / num_heads)
         grid_init = torch.stack([thetas.cos(), thetas.sin(), torch.zeros_like(thetas)], dim=1)
         grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
-        grid_init = grid_init.view(num_heads, 1, 3).repeat(1, num_pts, 1)
+        grid_init = grid_init.view(num_heads, 1, 1, 3).repeat(1, rad_pts, lvl_pts, 1)
 
-        grid_init = grid_init * torch.arange(1, num_pts+1, dtype=torch.float).view(1, num_pts, 1)
+        grid_init = grid_init * torch.arange(1, rad_pts+1, dtype=torch.float).view(1, rad_pts, 1, 1)
         self.sample_offsets.bias = nn.Parameter(grid_init.view(-1))
 
         # Initialize module computing the unnormalized attention weights
-        self.attn_weights = nn.Linear(in_size, num_heads * num_pts)
+        self.attn_weights = nn.Linear(in_size, num_heads * rad_pts * lvl_pts)
         nn.init.zeros_(self.attn_weights.weight)
         nn.init.zeros_(self.attn_weights.bias)
 
@@ -118,25 +121,28 @@ class MSDA3D(nn.Module):
         val_feats = self.val_proj(sample_feats).view(batch_size, num_sample_feats, self.num_heads, -1)
 
         # Get zero-one normalized sample XYZ
-        sample_offs = self.sample_offsets(in_feats).view(*common_shape, self.num_pts, 3)
+        sample_offs = self.sample_offsets(in_feats).view(*common_shape, self.rad_pts * self.lvl_pts, 3)
 
         if sample_priors.shape[-1] == 2:
             offset_normalizers = map_hw.fliplr()[map_ids, None, None, :]
             sample_xy = sample_priors[:, :, None, None, :2] + sample_offs[:, :, :, :, :2] / offset_normalizers
 
         elif sample_priors.shape[-1] == 4:
-            offset_factors = 0.5 * sample_priors[:, :, None, None, 2:] / self.num_pts
+            offset_factors = 0.5 * sample_priors[:, :, None, None, 2:] / self.rad_pts
             sample_xy = sample_priors[:, :, None, None, :2] + sample_offs[:, :, :, :, :2] * offset_factors
 
         else:
             error_msg = f"Last dimension of 'sample_priors' must be 2 or 4, but got {sample_priors.shape[-1]}."
             raise ValueError(error_msg)
 
-        sample_z = (map_ids[:, :, None, None] + sample_offs[:, :, :, :, 2].tanh()) / (len(map_hw) - 1)
+        sample_z = map_ids[:, :, None, None, None].expand(-1, -1, self.num_heads, self.rad_pts, self.lvl_pts)
+        sample_z = sample_z + torch.arange(self.lvl_pts, device=sample_z.device) - 0.5 * (self.lvl_pts - 1)
+
+        sample_z = (sample_z.flatten(3) + sample_offs[:, :, :, :, 2].tanh()) / (len(map_hw) - 1)
         sample_xyz = torch.cat([sample_xy, sample_z[:, :, :, :, None]], dim=4)
 
         # Get normalized attention weights
-        attn_ws = self.attn_weights(in_feats).view(*common_shape, self.num_pts)
+        attn_ws = self.attn_weights(in_feats).view(*common_shape, self.rad_pts * self.lvl_pts)
         attn_ws = F.softmax(attn_ws, dim=3)
 
         # Get attention features consisting of weighted sampled value features
