@@ -538,7 +538,7 @@ class RetinaHead(nn.Module):
         dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
 
         # Get image sizes without padding in (width, height) format
-        img_sizes = images.size(with_padding=False)
+        img_sizes = images.size(mode='without_padding')
 
         # Get and convert tensor with images
         images = images.images.clone().permute(0, 2, 3, 1)

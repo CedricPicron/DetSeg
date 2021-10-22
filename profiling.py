@@ -24,7 +24,8 @@ from structures.images import Images
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'dc']
 model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd']
-model_choices = [*model_choices, 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
+model_choices = [*model_choices, 'mmdet_arch', 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder']
+model_choices = [*model_choices, 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -64,6 +65,7 @@ if profiling_args.model == 'bch_dod':
 elif profiling_args.model == 'bch_sbd':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
+    main_args.backbone_type = 'resnet'
     main_args.core_type = 'gc'
     main_args.dc_num_layers = 6
     main_args.dc_da_num_points = 4
@@ -503,6 +505,30 @@ elif profiling_args.model == 'mbd':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
+
+elif profiling_args.model == 'mmdet_arch':
+    main_args.num_classes = 80
+    main_args.arch_type = 'mmdet'
+    main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/faster_rcnn_v0.py'
+    main_args.backbone_type = 'resnet'
+    main_args.core_type = 'gc'
+    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
+    model = build_arch(main_args).to('cuda')
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'mmdet_backbone':
     main_args.backbone_type = 'mmdet'

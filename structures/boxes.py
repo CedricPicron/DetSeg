@@ -398,7 +398,8 @@ class Boxes(object):
         if self.normalized == 'false':
 
             # Get image sizes in (width, height) format
-            img_sizes = images.size(with_padding=with_padding)
+            mode = 'with_padding' if with_padding else 'without_padding'
+            img_sizes = images.size(mode=mode)
             img_sizes = [img_sizes for _ in range(len(images))] if with_padding else img_sizes
 
             # Normalize bounding box coordinates w.r.t. the image sizes
@@ -500,8 +501,8 @@ class Boxes(object):
         if self.normalized in ['img_with_padding', 'img_without_padding']:
 
             # Get image sizes in (width, height) format
+            img_sizes = images.size(mode=self.normalized[4:])
             with_padding = self.normalized == 'img_with_padding'
-            img_sizes = images.size(with_padding=with_padding)
             img_sizes = [img_sizes for _ in range(len(images))] if with_padding else img_sizes
 
             # Scale bounding box coordinates w.r.t. the image sizes

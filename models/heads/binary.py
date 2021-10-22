@@ -282,7 +282,7 @@ class BinarySegHead(nn.Module):
         map_names.extend([f'tgt_f{j}' for j in range(len(tgt_dict['binary_maps']))])
 
         # Get possible map sizes in (height, width) format
-        map_width, map_height = images.size()
+        map_width, map_height = images.size(mode='with_padding')
         map_sizes = [(map_height, map_width)]
 
         while (map_height, map_width) != (1, 1):
@@ -291,7 +291,7 @@ class BinarySegHead(nn.Module):
             map_sizes.append((map_height, map_width))
 
         # Get image sizes without padding in (width, height) format
-        img_sizes = images.size(with_padding=False)
+        img_sizes = images.size(mode='without_padding')
 
         # Get and convert tensor with images
         images = images.images.clone().permute(0, 2, 3, 1)

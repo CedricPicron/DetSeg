@@ -1015,8 +1015,8 @@ class DFD(nn.Module):
         dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
 
         # Get image sizes with and without padding in (width, height) format
-        img_size_with_padding = images.size(with_padding=True)
-        img_sizes_without_padding = images.size(with_padding=False)
+        img_size_with_padding = images.size(mode='with_padding')
+        img_sizes_without_padding = images.size(mode='without_padding')
 
         # Get and convert tensor with images
         images = images.images.clone().permute(0, 2, 3, 1)

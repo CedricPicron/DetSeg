@@ -229,6 +229,28 @@ class Images(object):
 
         return self
 
+    def hflipped(self):
+        """
+        Checks whether the images within the Images structure were flipped horizontally.
+
+        Returns:
+            hflipped (List): List of size [num_images] with booleans indicating horizontally flipped images.
+        """
+
+        # Get booleans indicating horizontally flipped images
+        hflipped = []
+
+        for transforms in self.transforms:
+            hflipped_i = False
+
+            for transform in transforms:
+                if transform[0] == 'hflip':
+                    hflipped_i = not hflipped_i
+
+            hflipped.append(hflipped_i)
+
+        return hflipped
+
     def normalize(self, mean, std, inplace=False):
         """
         Method normalizing the channels of the images tensor at non-padded positions.
@@ -315,22 +337,65 @@ class Images(object):
 
         return self, size, resize_ratio
 
-    def size(self, with_padding=True):
+    def resize_ratios(self):
         """
-        Gets the image size (with or without padding) of images within the Images structure.
-
-        Args:
-            with_padding (bool): Boolean indicating whether padding should be counted towards image size or not.
+        Gets the resize ratio of images within the Images structure after their last crop.
 
         Returns:
-            If 'with_padding' is True:
-                img_size (Tuple): Tuple of size [2] containing the (width, height) image size with padding.
-
-            If 'with_padding' is False:
-                img_sizes (List): List of size [num_images] containing the (width, height) image sizes without padding.
+            resize_ratios (List): List of size [num_images] containing the (width, height) resize ratios.
         """
 
-        # Get global image size with padding
+        # Get the desired resize ratios
+        resize_ratios = []
+
+        for transforms in self.transforms:
+            resize_ratio = (1.0, 1.0)
+
+            for transform in reversed(transforms):
+                if transform[0] == 'crop':
+                    break
+
+                elif transform[0] == 'resize':
+                    new_width_ratio = resize_ratio[0] * transform[1][0]
+                    new_height_ratio = resize_ratio[1] * transform[1][1]
+                    resize_ratio = (new_width_ratio, new_height_ratio)
+
+            resize_ratios.append(resize_ratio)
+
+        return resize_ratios
+
+    def size(self, mode='with_padding'):
+        """
+        Gets the image size of images within the Images structure.
+
+        The mode determines the type of requested image size, chosen from:
+            1) 'with_padding': the final image size with the padding used for batching;
+            2) 'without_padding': the final image size but without the padding used for batching;
+            3) 'original': the original image size before applying any transformation.
+
+        Args:
+            mode (str): String containing type of requested image size (default='with_padding').
+
+        Returns:
+            If 'mode' is 'with_padding':
+                img_size (Tuple): Tuple of size [2] containing the (width, height) image size with padding.
+
+            If 'mode' is 'without_padding':
+                img_sizes (List): List of size [num_images] containing the (width, height) image sizes without padding.
+
+            If 'mode' is 'original':
+                img_sizes (List): List of size [num_images] containing the original (width, height) image sizes.
+
+        Raises:
+            ValueError: Error when invalid mode is provided.
+        """
+
+        # Check mode
+        if mode not in ('with_padding', 'without_padding', 'original'):
+            error_msg = f"Invalid mode '{mode}' to compute image sizes within Images structure."
+            raise ValueError(error_msg)
+
+        # Get image size with padding
         if isinstance(self.images, PIL.Image.Image):
             img_size = self.images.size
 
@@ -339,22 +404,31 @@ class Images(object):
             img_size = (iW, iH)
 
         # Return image size with padding if requested
-        if with_padding:
+        if mode == 'with_padding':
             return img_size
 
-        # Get image sizes without padding if requested
-        img_sizes = [list(img_size) for i in range(len(self))]
+        # Get image sizes without padding or original images sizes
+        img_sizes = [list(img_size) for _ in range(len(self))]
 
         for i, transforms in enumerate(self.transforms):
-            for j in range(len(transforms)-1, -1, -1):
-                transform = transforms[j]
+            for transform in reversed(transforms):
+                if transform[0] == 'pad':
+                    padding = transform[1]
+                    img_sizes[i][0] = img_sizes[i][0] - padding[0] - padding[2]
+                    img_sizes[i][1] = img_sizes[i][1] - padding[1] - padding[3]
 
-                if transform[0] != 'pad':
+                elif mode == 'without_padding':
                     break
 
-                padding = transform[1]
-                img_sizes[i][0] = img_sizes[i][0] - padding[0] - padding[2]
-                img_sizes[i][1] = img_sizes[i][1] - padding[1] - padding[3]
+                elif transform[0] == 'crop':
+                    crop_deltas = transform[2]
+                    img_sizes[i][0] = img_sizes[i][0] + crop_deltas[0] + crop_deltas[2]
+                    img_sizes[i][1] = img_sizes[i][1] + crop_deltas[1] + crop_deltas[3]
+
+                elif transform[0] == 'resize':
+                    resize_ratio = transform[1]
+                    img_sizes[i][0] = img_sizes[i][0] / resize_ratio[0]
+                    img_sizes[i][1] = img_sizes[i][1] / resize_ratio[1]
 
         img_sizes = [tuple(img_size) for img_size in img_sizes]
 

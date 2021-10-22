@@ -58,6 +58,9 @@ def get_parser():
     parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BVN step mode')
     parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
 
+    # * MMDetection architecture
+    parser.add_argument('--mmdet_arch_cfg_path', default='', type=str, help='path to MMDetection architecture config')
+
     # Backbone
     parser.add_argument('--backbone_type', default='resnet', type=str, help='type of backbone module')
 
@@ -110,15 +113,15 @@ def get_parser():
     # * MMDetection core
     parser.add_argument('--mmdet_core_cfg_path', default='', type=str, help='path to MMDetection core config')
 
-    # * Heads
+    # Heads
     parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
 
-    # ** Binary segmentation head
+    # * Binary segmentation head
     parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
     parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
     parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
 
-    # ** BRD (Base Reinforced Detector) head
+    # * BRD (Base Reinforced Detector) head
     parser.add_argument('--brd_feat_size', default=256, type=int, help='internal feature size of the BRD head')
 
     parser.add_argument('--brd_num_groups', default=8, type=int, help='number of group normalization groups')
@@ -156,7 +159,7 @@ def get_parser():
     parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
     parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')
 
-    # ** Duplicate-Free Detector (DFD) head
+    # * Duplicate-Free Detector (DFD) head
     parser.add_argument('--dfd_cls_feat_size', default=256, type=int, help='classification hidden feature size')
     parser.add_argument('--dfd_cls_norm', default='group', type=str, help='normalization type of classification head')
     parser.add_argument('--dfd_cls_prior_prob', default=0.01, type=float, help='prior class probability')
@@ -212,7 +215,7 @@ def get_parser():
     parser.add_argument('--dfd_inf_ins_threshold', default=0.5, type=float, help='instance threshold during inference')
     parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
 
-    # ** Dense Object Discovery (DOD) head
+    # * Dense Object Discovery (DOD) head
     parser.add_argument('--dod_feat_size', default=256, type=int, help='DOD hidden feature size')
     parser.add_argument('--dod_norm', default='group', type=str, help='normalization type of DOD head')
     parser.add_argument('--dod_kernel_size', default=3, type=int, help='DOD hidden layer kernel size')
@@ -246,7 +249,7 @@ def get_parser():
     parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive anchors per DOD target')
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
-    # ** Map-Based Detector (MBD) head
+    # * Map-Based Detector (MBD) head
     parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
     parser.add_argument('--mbd_hrae_layers', default=1, type=int, help='number of layers of HRAE network')
     parser.add_argument('--mbd_hrae_hidden_size', default=1024, type=int, help='hidden feature size of HRAE network')
@@ -291,7 +294,7 @@ def get_parser():
 
     parser.add_argument('--mbd_pred_thr', default=0.6, type=float, help='minimum probability for positive prediction')
 
-    # ** Retina head
+    # * Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
     parser.add_argument('--ret_num_convs', default=4, type=int, help='number of retina head convolutions')
     parser.add_argument('--ret_pred_type', default='conv1', choices=['conv1', 'conv3'], help='last prediction module')
@@ -311,7 +314,7 @@ def get_parser():
     parser.add_argument('--ret_nms_threshold', default=0.5, type=float, help='retina head NMS threshold')
     parser.add_argument('--ret_max_detections', default=100, type=int, help='retina head max test detections')
 
-    # ** State-Based Detector (SBD) head
+    # * State-Based Detector (SBD) head
     parser.add_argument('--sbd_state_size', default=256, type=int, help='size of SBD object states')
     parser.add_argument('--sbd_state_type', default='rel_static', type=str, help='type of SBD object states')
 
@@ -420,7 +423,7 @@ def get_parser():
     parser.add_argument('--sbd_ffn_norm', default='layer', type=str, help='normalization type of FFN network')
     parser.add_argument('--sbd_ffn_act_fn', default='relu', type=str, help='activation function of FFN network')
 
-    # ** Semantic segmentation head
+    # * Semantic segmentation head
     parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
     parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
@@ -484,6 +487,7 @@ def get_parser():
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
 
     # * Learning rates (General)
+    parser.add_argument('--lr_default', default=1e-4, type=float, help='default learning rate')
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
     # * Learning rates (BCH and BVN)
@@ -496,6 +500,9 @@ def get_parser():
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='DETR decoder learning rate')
     parser.add_argument('--lr_class_head', default=1e-4, type=float, help='DETR classification head learning rate')
     parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
+
+    # * Learning rates (MMDetArch)
+    parser.add_argument('--lr_neck', default=1e-4, type=float, help='neck learning rate')
 
     # * Learning rates (MSDA)
     parser.add_argument('--lr_offset', default=1e-5, type=float, help='learning rate of deformable offsets')
@@ -627,13 +634,13 @@ def main(args):
 
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
-    param_families = ['offset', 'steps', *param_families]
+    param_families = ['offset', 'steps', *param_families, 'default']
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():
         if parameter.requires_grad:
             for family_name in param_families:
-                if family_name in param_name:
+                if family_name in param_name or family_name == 'default':
                     param_dicts[family_name]['params'].append(parameter)
                     break
 

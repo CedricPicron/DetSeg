@@ -5,6 +5,7 @@ General build function for architecture modules.
 from .bch import BCH
 from .bvn import BVN
 from .detr import DETR
+from .mmdet import MMDetArch
 
 from models.backbones.build import build_backbone
 from models.cores.build import build_core
@@ -62,6 +63,14 @@ def build_arch(args):
 
         metadata = args.val_metadata
         arch = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
+
+    elif args.arch_type == 'mmdet':
+        args.backbone_map_ids = list(range(args.core_min_map_id, args.core_max_map_id+1))
+        backbone = build_backbone(args)
+
+        core = build_core(args)
+        arch = MMDetArch(backbone, core, args.mmdet_arch_cfg_path)
+        args.requires_masks = arch.requires_masks
 
     else:
         raise ValueError(f"Unknown architecture type {args.arch_type} was provided.")
