@@ -233,6 +233,15 @@ class CocoEvaluator(object):
                     result_dict['score'] = scores[i]
                     result_dicts.append(result_dict)
 
+                for image_id in images.image_ids:
+                    if image_id not in image_ids:
+                        result_dict = {}
+                        result_dict['image_id'] = image_id
+                        result_dict['category_id'] = 0
+                        result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
+                        result_dict['score'] = 0.0
+                        result_dicts.append(result_dict)
+
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
                     coco_api_predictions = COCO.loadRes(self.coco, result_dicts)

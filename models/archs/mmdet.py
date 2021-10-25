@@ -93,17 +93,17 @@ class MMDetArch(nn.Module):
         batch_size = len(images)
         img_metas = [{} for _ in range(batch_size)]
 
-        img_shapes = [(iH, iW) for iW, iH in images.size(mode='without_padding')]
+        img_shapes = [(iH, iW, 3) for iW, iH in images.size(mode='without_padding')]
         scale_factors = images.resize_ratios()
         hflipped = images.hflipped()
         padded_width, padded_height = images.size(mode='with_padding')
-        orig_img_shapes = [(iH, iW) for iW, iH in images.size(mode='original')]
+        orig_img_shapes = [(iH, iW, 3) for iW, iH in images.size(mode='original')]
 
         for i in range(batch_size):
             img_metas[i]['img_shape'] = img_shapes[i]
             img_metas[i]['scale_factor'] = [*scale_factors[i], *scale_factors[i]]
             img_metas[i]['flip'] = hflipped[i]
-            img_metas[i]['pad_shape'] = (padded_height, padded_width)
+            img_metas[i]['pad_shape'] = (padded_height, padded_width, 3)
             img_metas[i]['ori_shape'] = orig_img_shapes[i]
 
         # Get loss and analysis dictionaries if desired
