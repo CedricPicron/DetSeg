@@ -360,7 +360,7 @@ def get_parser():
     parser.add_argument('--sbd_match_cls_type', default='sigmoid_focal', type=str, help='SBD hungarian cls type')
     parser.add_argument('--sbd_match_cls_alpha', default=0.25, type=float, help='SBD hungarian focal alpha value')
     parser.add_argument('--sbd_match_cls_gamma', default=2.0, type=float, help='SBD hungarian focal gamma value')
-    parser.add_argument('--sbd_match_cls_weight', default=1.0, type=float, help='SBD hungarian cls weight')
+    parser.add_argument('--sbd_match_cls_weight', default=2.0, type=float, help='SBD hungarian cls weight')
     parser.add_argument('--sbd_match_box_types', nargs='*', default='iou', help='SBD hungarian box types')
     parser.add_argument('--sbd_match_box_weights', nargs='*', default=1, type=float, help='SBD hungarian box weights')
     parser.add_argument('--sbd_match_static_mode', default='rel', type=str, help='SBD static matching mode')

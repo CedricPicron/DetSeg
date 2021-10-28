@@ -320,7 +320,7 @@ class SBD(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def perform_matching(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids):
+    def perform_matching(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids, images):
         """
         Perform prediction-target matching.
 
@@ -335,6 +335,7 @@ class SBD(nn.Module):
             pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds].
             pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds].
             tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets].
+            images (Images): Images structure containing the batched images.
 
         Returns:
             pos_pred_ids (List): List [batch_size] with indices of positive predictions of shape [num_pos_preds].
@@ -367,10 +368,13 @@ class SBD(nn.Module):
                 # Get classification loss matrix
                 if self.match_cls_type == 'sigmoid_focal':
                     cls_preds_i = cls_preds[i][:, tgt_dict['labels'][i]]
-                    cls_targets_i = torch.ones_like(cls_preds_i)
+                    cls_pos_tgts = torch.ones_like(cls_preds_i)
+                    cls_neg_tgts = torch.zeros_like(cls_preds_i)
 
                     cls_kwargs = {'alpha': self.match_cls_alpha, 'gamma': self.match_cls_gamma, 'reduction': 'none'}
-                    cls_loss_matrix = sigmoid_focal_loss(cls_preds_i, cls_targets_i, **cls_kwargs)
+                    cls_pos_loss_matrix = sigmoid_focal_loss(cls_preds_i, cls_pos_tgts, **cls_kwargs)
+                    cls_neg_loss_matrix = sigmoid_focal_loss(cls_preds_i, cls_neg_tgts, **cls_kwargs)
+                    cls_loss_matrix = cls_pos_loss_matrix - cls_neg_loss_matrix
 
                 else:
                     error_msg = f"Invalid classification loss type '{self.match_cls_type}' during hungarian matching."
@@ -384,14 +388,15 @@ class SBD(nn.Module):
                     pred_boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
 
                 elif self.state_type in ['rel_static', 'rel_dynamic']:
-                    pred_boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i]).to_format('cxcywh')
+                    pred_boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
+                    pred_boxes_i = pred_boxes_i.normalize(images[i]).to_format('cxcywh')
 
                 else:
                     error_msg = f"Invalid object state type '{self.state_type}'."
                     raise ValueError(error_msg)
 
                 # Get target boxes
-                tgt_boxes_i = tgt_dict['boxes'][i].to_format('cxcywh')
+                tgt_boxes_i = deepcopy(tgt_dict['boxes'][i]).normalize(images[i]).to_format('cxcywh')
 
                 # Get bounding box loss matrices
                 if len(self.match_box_types) != len(self.match_box_weights):
@@ -674,7 +679,7 @@ class SBD(nn.Module):
 
         return box_loss, box_acc
 
-    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids):
+    def get_loss(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids, images):
         """
         Compute classification and bounding box losses from predictions.
 
@@ -689,6 +694,7 @@ class SBD(nn.Module):
             pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds].
             pred_anchor_ids (List): List [batch_size] with anchor indices of shape [num_preds].
             tgt_sorted_ids (List): List [batch_size] of sorted ids of shape [sort_thr, num_targets].
+            images (Images): Images structure containing the batched images.
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following keys:
@@ -703,7 +709,7 @@ class SBD(nn.Module):
         """
 
         # Perform prediction-target matching
-        match_args = (cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids)
+        match_args = (cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids, images)
         pos_pred_ids, pos_tgt_ids, neg_pred_ids = self.perform_matching(*match_args)
 
         # Get classification loss and accuracy
@@ -995,7 +1001,7 @@ class SBD(nn.Module):
             sbd_tgt_dict = {'labels': tgt_labels, 'boxes': tgt_boxes}
 
             # Get static loss keyword arguments
-            loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids}
+            loss_kwargs = {'pred_anchor_ids': sel_ids, 'tgt_sorted_ids': tgt_sorted_ids, 'images': images}
 
             # Get initial classification and bounding box losses with corresponding analyses if desired
             if compute_loss_preds:
