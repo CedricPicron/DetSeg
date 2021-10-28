@@ -133,6 +133,13 @@ class CocoDataset(VisionDataset):
         # Perform image and bounding box transformations
         image, tgt_dict = self.transforms(image, tgt_dict)
 
+        # Only keep targets with well-defined boxes
+        well_defined = tgt_dict['boxes'].well_defined()
+
+        for key in tgt_dict.keys():
+            if key in ['labels', 'boxes', 'masks']:
+                tgt_dict[key] = tgt_dict[key][well_defined]
+
         return image, tgt_dict
 
     def __len__(self):
