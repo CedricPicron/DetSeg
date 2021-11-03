@@ -347,6 +347,8 @@ def get_parser():
     parser.add_argument('--sbd_hcls_norm', default='layer', type=str, help='normalization type of HCLS network')
     parser.add_argument('--sbd_hcls_act_fn', default='relu', type=str, help='activation function of HCLS network')
     parser.add_argument('--sbd_hcls_skip', action='store_true', help='whether to use skip connection in HCLS network')
+    parser.add_argument('--sbd_cls_freeze_inter', action='store_true', help='freeze intermediate shared CLS network')
+    parser.add_argument('--sbd_cls_no_sharing', action='store_true', help='whether to not share CLS network')
 
     parser.add_argument('--sbd_hbox_type', default='one_step_mlp', type=str, help='HBOX network type')
     parser.add_argument('--sbd_hbox_layers', default=1, type=int, help='number of layers of HBOX network')
@@ -355,6 +357,8 @@ def get_parser():
     parser.add_argument('--sbd_hbox_norm', default='layer', type=str, help='normalization type of HBOX network')
     parser.add_argument('--sbd_hbox_act_fn', default='relu', type=str, help='activation function of HBOX network')
     parser.add_argument('--sbd_hbox_skip', action='store_true', help='whether to use skip connection in HBOX network')
+    parser.add_argument('--sbd_box_freeze_inter', action='store_true', help='freeze intermediate shared BOX network')
+    parser.add_argument('--sbd_box_no_sharing', action='store_true', help='whether to not share BOX network')
 
     parser.add_argument('--sbd_match_mode', default='static', type=str, help='SBD prediction-target matching mode')
     parser.add_argument('--sbd_match_cls_type', default='sigmoid_focal', type=str, help='SBD hungarian cls type')
@@ -372,7 +376,6 @@ def get_parser():
 
     parser.add_argument('--sbd_loss_ae_weight', default=1.0, type=float, help='SBD anchor encoding loss weight')
     parser.add_argument('--sbd_loss_apply_freq', default='last', type=str, help='frequency of SBD loss application')
-    parser.add_argument('--sbd_loss_freeze_inter', action='store_true', help='freeze intermediate SBD sub-heads')
     parser.add_argument('--sbd_loss_bg_weight', default=1.0, type=float, help='SBD classification background weight')
     parser.add_argument('--sbd_loss_cls_type', default='sigmoid_focal', type=str, help='SBD classification loss type')
     parser.add_argument('--sbd_loss_cls_alpha', default=0.25, type=float, help='SBD classification focal alpha value')

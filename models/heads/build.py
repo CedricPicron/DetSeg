@@ -278,11 +278,13 @@ def build_heads(args):
             cls_dict = {**cls_dict, 'hidden_size': args.sbd_hcls_hidden_size, 'out_size': args.sbd_hcls_out_size}
             cls_dict = {**cls_dict, 'norm': args.sbd_hcls_norm, 'act_fn': args.sbd_hcls_act_fn}
             cls_dict = {**cls_dict, 'skip': args.sbd_hcls_skip, 'num_classes': args.num_classes}
+            cls_dict = {**cls_dict, 'freeze_inter': args.sbd_cls_freeze_inter, 'no_sharing': args.sbd_cls_no_sharing}
 
             box_dict = {'type': args.sbd_hbox_type, 'layers': args.sbd_hbox_layers, 'in_size': args.sbd_state_size}
             box_dict = {**box_dict, 'hidden_size': args.sbd_hbox_hidden_size, 'out_size': args.sbd_hbox_out_size}
             box_dict = {**box_dict, 'norm': args.sbd_hbox_norm, 'act_fn': args.sbd_hbox_act_fn}
-            box_dict = {**box_dict, 'skip': args.sbd_hbox_skip}
+            box_dict = {**box_dict, 'skip': args.sbd_hbox_skip, 'freeze_inter': args.sbd_box_freeze_inter}
+            box_dict = {**box_dict, 'no_sharing': args.sbd_box_no_sharing}
 
             match_dict = {'mode': args.sbd_match_mode, 'cls_type': args.sbd_match_cls_type}
             match_dict = {**match_dict, 'cls_alpha': args.sbd_match_cls_alpha, 'cls_gamma': args.sbd_match_cls_gamma}
@@ -294,11 +296,10 @@ def build_heads(args):
             match_dict = {**match_dict, 'rel_pos': args.sbd_match_rel_pos, 'rel_neg': args.sbd_match_rel_neg}
 
             loss_dict = {'ae_weight': args.sbd_loss_ae_weight, 'apply_freq': args.sbd_loss_apply_freq}
-            loss_dict = {**loss_dict, 'freeze_inter': args.sbd_loss_freeze_inter, 'bg_weight': args.sbd_loss_bg_weight}
-            loss_dict = {**loss_dict, 'cls_type': args.sbd_loss_cls_type, 'cls_alpha': args.sbd_loss_cls_alpha}
-            loss_dict = {**loss_dict, 'cls_gamma': args.sbd_loss_cls_gamma, 'cls_weight': args.sbd_loss_cls_weight}
-            loss_dict = {**loss_dict, 'box_types': args.sbd_loss_box_types, 'box_beta': args.sbd_loss_box_beta}
-            loss_dict = {**loss_dict, 'box_weights': args.sbd_loss_box_weights}
+            loss_dict = {**loss_dict, 'bg_weight': args.sbd_loss_bg_weight, 'cls_type': args.sbd_loss_cls_type}
+            loss_dict = {**loss_dict, 'cls_alpha': args.sbd_loss_cls_alpha, 'cls_gamma': args.sbd_loss_cls_gamma}
+            loss_dict = {**loss_dict, 'cls_weight': args.sbd_loss_cls_weight, 'box_types': args.sbd_loss_box_types}
+            loss_dict = {**loss_dict, 'box_beta': args.sbd_loss_box_beta, 'box_weights': args.sbd_loss_box_weights}
 
             pred_dict = {'dup_removal': args.sbd_pred_dup_removal, 'nms_candidates': args.sbd_pred_nms_candidates}
             pred_dict = {**pred_dict, 'nms_thr': args.sbd_pred_nms_thr, 'max_dets': args.sbd_pred_max_dets}

@@ -630,13 +630,16 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_osi_type = 'one_step_mlp'
     main_args.sbd_se = False
     main_args.sbd_hcls_layers = 1
+    main_args.sbd_cls_freeze_inter = False
+    main_args.sbd_cls_no_sharing = False
     main_args.sbd_hbox_layers = 1
+    main_args.sbd_box_freeze_inter = False
+    main_args.sbd_box_no_sharing = False
     main_args.sbd_match_mode = 'static'
     main_args.sbd_match_box_types = ['l1', 'giou']
     main_args.sbd_match_box_weights = [5.0, 2.0]
     main_args.sbd_match_static_mode = 'rel'
     main_args.sbd_loss_apply_freq = 'last'
-    main_args.sbd_loss_freeze_inter = False
     main_args.sbd_loss_box_types = 'smooth_l1'
     main_args.sbd_loss_box_weights = 1.0
     main_args.sbd_pred_dup_removal = 'nms'

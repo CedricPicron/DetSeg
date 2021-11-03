@@ -31,8 +31,14 @@ class SBD(nn.Module):
         osi (nn.ModuleList): List of object state initialization (OSI) modules computing the initial object states.
         ae (Sequential): Optional anchor encoding (AE) module computing anchor encodings from normalized anchor boxes.
         se (Sequential): Optional scale encoding (SE) module computing scale encodings from normalized anchor sizes.
-        cls (Sequential): Classification (CLS) module computing classification predictions from object states.
-        box (Sequential): Bounding box (BOX) module computing bounding box predictions from object states.
+
+        cls (nn.ModuleList): List of classification (CLS) modules computing classification predictions from states.
+        cls_freeze_inter (bool): Boolean indicating whether to freeze shared CLS module for intermediate losses.
+        cls_no_sharing (bool): Boolean indicating whether CLS module should not be shared for intermediate predictions.
+
+        box (nn.ModuleList): List of bounding box (BOX) modules computing bounding box predictions from states.
+        box_freeze_inter (bool): Boolean indicating whether to freeze shared BOX module for intermediate losses.
+        box_no_sharing (bool): Boolean indicating whether BOX module should not be shared for intermediate predictions.
 
         match_mode (str): String containing the prediction-target matching mode.
         match_cls_type (str): String containing the type of classification loss function during hungarian matching.
@@ -50,7 +56,6 @@ class SBD(nn.Module):
 
         ae_weight (float): Factor weighting the anchor encoding loss.
         apply_freq (str): String containing the frequency at which losses are computed and applied.
-        freeze_inter (bool): Boolean indicating whether CLS and BOX modules are frozen for intermediate losses.
         bg_weight (float): Factor weighting the classification losses with background targets.
         cls_type (str): String containing the type of classification loss function.
         cls_alpha (float): Alpha value used by the classification sigmoid focal loss.
@@ -124,7 +129,9 @@ class SBD(nn.Module):
                 - norm (str): string containing the type of normalization of the HCLS network;
                 - act_fn (str): string containing the type of activation function of the HCLS network;
                 - skip (bool): boolean indicating whether layers of the HCLS network contain skip connections;
-                - num_classes (int): integer containing the number of object classes (without background).
+                - num_classes (int): integer containing the number of object classes (without background);
+                - freeze_inter (bool): boolean indicating whether to freeze shared CLS network for intermediate losses;
+                - no_sharing (bool): boolean indicating whether CLS network should not be shared.
 
             box_dict (Dict): Bounding box (BOX) network dictionary containing following keys:
                 - type (str): string containing the type of hidden BOX (HBOX) network;
@@ -134,7 +141,9 @@ class SBD(nn.Module):
                 - out_size (int): output feature size of the HBOX network;
                 - norm (str): string containing the type of normalization of the HBOX network;
                 - act_fn (str): string containing the type of activation function of the HBOX network;
-                - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections.
+                - skip (bool): boolean indicating whether layers of the HBOX network contain skip connections;
+                - freeze_inter (bool): boolean indicating whether to freeze shared BOX network for intermediate losses;
+                - no_sharing (bool): boolean indicating whether BOX network should not be shared.
 
             match_dict (Dict): Matching dictionary containing following keys:
                 - mode (str): string containing the prediction-target matching mode;
@@ -154,7 +163,6 @@ class SBD(nn.Module):
             loss_dict (Dict): Loss dictionary containing following keys:
                 - ae_weight (float): factor weighting the anchor encoding loss;
                 - apply_freq (str): string containing the frequency at which losses are computed and applied;
-                - freeze_inter (bool): boolean indicating whether CLS and BOX are frozen for intermediate losses;
                 - bg_weight (float): factor weighting the classification losses with background targets;
                 - cls_type (str): string containing the type of classification loss function;
                 - cls_alpha (float): alpha value used by the classification sigmoid focal loss;
@@ -224,6 +232,10 @@ class SBD(nn.Module):
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
         Raises:
+            ValueError: Error when using the 'rel_dynamic' state type and the loss is not applied after every layer.
+            ValueError: Error when invalid loss application frequency is provided.
+            ValueError: Error when both the 'freeze_inter' and 'no_sharing' CLS attributes are set to True.
+            ValueError: Error when both the 'freeze_inter' and 'no_sharing' BOX attributes are set to True.
             ValueError: Error when invalid module type is provided for update layer.
         """
 
@@ -234,6 +246,10 @@ class SBD(nn.Module):
         self.dod = dod
 
         # Set state attributes
+        if state_dict['type'] == 'rel_dynamic' and loss_dict['apply_freq'] != 'layers':
+            error_msg = "The loss should be applied after every layer when using the 'rel_dynamic' state type."
+            raise ValueError(error_msg)
+
         for k, v in state_dict.items():
             setattr(self, f'state_{k}', v)
 
@@ -256,18 +272,61 @@ class SBD(nn.Module):
             hse = get_net(se_dict)
             self.se = Sequential(OrderedDict([('in', ise), ('hidden', hse)]))
 
-        # Initialization of classification prediction (CLS) network
+        # Get number of prediction sets if needed
+        if cls_dict['no_sharing'] or box_dict['no_sharing']:
+            loss_apply_freq = loss_dict['apply_freq']
+
+            if loss_apply_freq == 'last':
+                num_pred_sets = 1
+            elif loss_apply_freq == 'iters':
+                num_pred_sets = min(2, update_dict['layers'] + 1)
+            elif loss_apply_freq == 'layers':
+                num_pred_sets = update_dict['layers'] + 1
+            else:
+                error_msg = f"Invalid type of loss application frequency '{loss_apply_freq}'."
+                raise ValueError(error_msg)
+
+        # Initialization of classification prediction (CLS) networks
         num_classes = cls_dict.pop('num_classes')
         num_cls_labels = num_classes + 1
 
         hcls = get_net(cls_dict)
         ocls = nn.Linear(cls_dict['out_size'], num_cls_labels)
-        self.cls = Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
+        cls_net = Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
 
-        # Initialization of bounding box prediction (BOX) network
+        num_cls_nets = num_pred_sets if cls_dict['no_sharing'] else 1
+        self.cls = nn.ModuleList([deepcopy(cls_net) for _ in range(num_cls_nets)])
+
+        if not (cls_dict['freeze_inter'] and cls_dict['no_sharing']):
+            self.cls_freeze_inter = cls_dict['freeze_inter']
+            self.cls_no_sharing = cls_dict['no_sharing']
+
+        else:
+            error_msg = "The 'freeze_inter' and 'no_sharing' CLS attributes cannot both be set to True."
+            raise ValueError(error_msg)
+
+        # Initialization of bounding box prediction (BOX) networks
         hbox = get_net(box_dict)
         obox = nn.Linear(cls_dict['out_size'], 4)
-        self.box = Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
+        box_net = Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
+
+        if box_dict['no_sharing']:
+            if state_dict['type'] == 'abs':
+                num_box_nets = num_pred_sets + 1
+            else:
+                num_box_nets = num_pred_sets
+        else:
+            num_box_nets = 1
+
+        self.box = nn.ModuleList([deepcopy(box_net) for _ in range(num_box_nets)])
+
+        if not (box_dict['freeze_inter'] and box_dict['no_sharing']):
+            self.box_freeze_inter = box_dict['freeze_inter']
+            self.box_no_sharing = box_dict['no_sharing']
+
+        else:
+            error_msg = "The 'freeze_inter' and 'no_sharing' BOX attributes cannot both be set to True."
+            raise ValueError(error_msg)
 
         # Set matching attributes
         for k, v in match_dict.items():
@@ -950,8 +1009,8 @@ class SBD(nn.Module):
 
         # Get absolute object states if desired
         if self.state_type == 'abs':
-            if hasattr(self, 'se'):
-                obj_states = [obj_states[i] * scale_encs[i] for i in range(batch_size)]
+            has_se = hasattr(self, 'se')
+            obj_states = [obj_states[i] * scale_encs[i] for i in range(batch_size)] if has_se else obj_states
             obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
 
         # Get boolean indicating whether initial losses/prediction dictionary should be computed
@@ -963,25 +1022,30 @@ class SBD(nn.Module):
             error_msg = f"Invalid type of loss application frequency '{self.apply_freq}'."
             raise ValueError(error_msg)
 
-        # Get initial predictions
-        if self.training and self.freeze_inter and len(self.up_layers) > 0:
-            cls_module = deepcopy(self.cls).requires_grad_(False)
-            box_module = deepcopy(self.box).requires_grad_(False)
-        else:
-            cls_module = self.cls
-            box_module = self.box
+        # Get initial predictions if desired
+        if compute_loss_preds:
+            cls_net = self.cls[0]
+            box_net = self.box[0]
 
-        cls_preds = [cls_module(obj_states[i]) for i in range(batch_size)]
-        box_preds = [box_module(obj_states[i]) for i in range(batch_size)]
+            if self.training and len(self.up_layers) > 0:
+                cls_net = deepcopy(cls_net).requires_grad_(False) if self.cls_freeze_inter else cls_net
+                box_net = deepcopy(box_net).requires_grad_(False) if self.box_freeze_inter else box_net
+
+            cls_preds = [cls_net(obj_states[i]) for i in range(batch_size)]
+            box_preds = [box_net(obj_states[i]) for i in range(batch_size)]
 
         # Get initial loss if desired
         if tgt_dict is not None:
 
             # Get anchor encoding loss if desired
             if self.state_type == 'abs':
-                ae_box_preds = [self.box(anchor_encs[i]) for i in range(batch_size)]
-                ae_tgt_dict = {'boxes': norm_anchors}
+                box_net = self.box[-1] if self.box_no_sharing else self.box[0]
+                box_net = deepcopy(box_net).requires_grad_(False) if self.box_freeze_inter else box_net
 
+                ae_box_preds = [box_net(anchor_encs[i]) for i in range(batch_size)]
+                box_preds = box_preds if compute_loss_preds else ae_box_preds
+
+                ae_tgt_dict = {'boxes': norm_anchors}
                 ae_pred_ids = [torch.arange(len(sel_ids[i]), device=feats.device) for i in range(batch_size)]
                 ae_tgt_ids = [ae_pred_ids[i].clone() for i in range(batch_size)]
 
@@ -994,7 +1058,7 @@ class SBD(nn.Module):
             tgt_sizes = tgt_dict['sizes']
 
             if self.state_type == 'abs':
-                tgt_boxes = tgt_boxes.normalize(images)
+                tgt_boxes = deepcopy(tgt_boxes).normalize(images)
 
             tgt_labels = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
             tgt_boxes = [tgt_boxes[i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
@@ -1088,13 +1152,26 @@ class SBD(nn.Module):
                 compute_loss_preds = (last_iter and last_layer) or (last_layer and self.apply_freq != 'last')
                 compute_loss_preds = compute_loss_preds or (self.apply_freq == 'layers')
 
-                # Get predictions
-                if self.training and self.freeze_inter and last_iter and last_layer:
-                    cls_module = self.cls
-                    box_module = self.box
+                # Get predictions if desired
+                if compute_loss_preds:
+                    if self.apply_freq == 'last':
+                        cls_net = self.cls[0]
+                        box_net = self.box[0]
 
-                cls_preds = [cls_module(obj_states[i]) for i in range(batch_size)]
-                box_preds = [box_module(obj_states[i]) for i in range(batch_size)]
+                    elif self.apply_freq == 'iters':
+                        cls_net = self.cls[1] if self.cls_no_sharing else self.cls[0]
+                        box_net = self.box[1] if self.box_no_sharing else self.box[0]
+
+                    elif self.apply_freq == 'layers':
+                        cls_net = self.cls[j] if self.cls_no_sharing else self.cls[0]
+                        box_net = self.box[j] if self.box_no_sharing else self.box[0]
+
+                    if self.training and not (last_iter and last_layer):
+                        cls_net = deepcopy(cls_net).requires_grad_(False) if self.cls_freeze_inter else cls_net
+                        box_net = deepcopy(box_net).requires_grad_(False) if self.box_freeze_inter else box_net
+
+                    cls_preds = [cls_net(obj_states[i]) for i in range(batch_size)]
+                    box_preds = [box_net(obj_states[i]) for i in range(batch_size)]
 
                 # Get loss if desired
                 if tgt_dict is not None and compute_loss_preds:
