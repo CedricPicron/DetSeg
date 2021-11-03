@@ -497,6 +497,9 @@ def get_parser():
     parser.add_argument('--lr_core', default=1e-4, type=float, help='core learning rate')
     parser.add_argument('--lr_heads', default=1e-4, type=float, help='heads learning rate')
 
+    # * Learning rates (Deformable DETR)
+    parser.add_argument('--lr_reference_points', default=1e-5, type=float, help='reference points learning rate')
+
     # * Learning rates (DETR)
     parser.add_argument('--lr_projector', default=1e-4, type=float, help='DETR projector learning rate')
     parser.add_argument('--lr_encoder', default=1e-4, type=float, help='DETR encoder learning rate')
@@ -637,7 +640,7 @@ def main(args):
 
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
-    param_families = ['offset', 'steps', *param_families, 'default']
+    param_families = ['offset', 'steps', 'reference_points', *param_families, 'default']
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():
