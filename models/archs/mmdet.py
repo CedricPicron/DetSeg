@@ -20,14 +20,14 @@ class MMDetArch(nn.Module):
         arch (nn.Module): Module containing the MMDetection architecture.
     """
 
-    def __init__(self, backbone, core, cfg_path):
+    def __init__(self, cfg_path, backbone=None, core=None):
         """
         Initializes the MMDetArch module.
 
         Args:
-            backbone (nn.Module): Module implementing the backbone.
-            core (nn.Module): Module implementing the core.
             cfg_path (str): Path to configuration file specifying the MMDetection architecture.
+            backbone (nn.Module): Module overwriting the backbone if requested (default=None).
+            core (nn.Module): Module overwriting the core if requested (default=None).
         """
 
         # Initialization of default nn.Module
@@ -36,16 +36,18 @@ class MMDetArch(nn.Module):
         # Get config specifying the MMDetection architecture
         cfg = Config.fromfile(cfg_path)
 
-        # Set attribute indicating whether target masks are required during training
+        # Pop information from configuration dictionary
+        overwrite_backbone = cfg.model.pop('overwrite_backbone')
+        overwrite_neck = cfg.model.pop('overwrite_neck')
         self.requires_masks = cfg.model.pop('requires_masks')
 
         # Get architecture
         self.arch = build_arch(cfg.model)
         self.arch.init_weights()
 
-        # Replace backbone and core/neck with given input modules
-        self.arch.backbone = backbone
-        self.arch.neck = core
+        # Replace backbone and core/neck with given input modules if requested
+        self.arch.backbone = backbone if overwrite_backbone else self.arch.backbone
+        self.arch.neck = core if overwrite_neck else self.arch.neck
 
     @staticmethod
     def get_param_families():

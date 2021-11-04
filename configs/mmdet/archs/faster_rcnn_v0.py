@@ -1,6 +1,7 @@
-# Note: The backbone and neck will be overwritten.
 model = dict(
     type='FasterRCNN',
+    overwrite_backbone=True,
+    overwrite_neck=True,
     requires_masks=False,
     backbone=dict(
         type='ResNet',

@@ -67,9 +67,9 @@ def build_arch(args):
     elif args.arch_type == 'mmdet':
         args.backbone_map_ids = list(range(args.core_min_map_id, args.core_max_map_id+1))
         backbone = build_backbone(args)
-
         core = build_core(args)
-        arch = MMDetArch(backbone, core, args.mmdet_arch_cfg_path)
+
+        arch = MMDetArch(args.mmdet_arch_cfg_path, backbone, core)
         args.requires_masks = arch.requires_masks
 
     else:
