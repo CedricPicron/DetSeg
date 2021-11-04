@@ -4,8 +4,41 @@ Collection of additional MMDetection modules.
 
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 from mmcv.runner.base_module import BaseModule
+from mmdet.models.builder import DETECTORS
+from mmdet.models.detectors import DeformableDETR
 from mmdet.models.utils.builder import TRANSFORMER
 from mmdet.models.utils.transformer import DeformableDetrTransformer, Transformer
+
+
+@DETECTORS.register_module()
+class DeformableDETRPlus(DeformableDETR):
+    """
+    Class implementing the DeformableDETRPlus module.
+    """
+
+    def forward_train(self, images, img_metas, *args, **kwargs):
+        """
+        Forward method of the DeformableDETRPlus module during training.
+
+        Args:
+            images (Images): Images structure containing the batched images.
+            img_metas (List): List of size [num_images] containing additional image-specific information.
+            args (Tuple): Tuple of additional arguments passed to underlying bounding box head.
+            kwargs (Dict): Dictionary of additional keyword arguments passed to underlying bounding box head.
+
+        Returns:
+            loss_dict (Dict): Dictionary containing different loss terms.
+        """
+
+        # Add 'batch_input_shape' key to list of MMDetection image metas
+        iW, iH = images.size(mode='with_padding')
+        [img_meta.update({'batch_input_shape': (iH, iW)}) for img_meta in img_metas]
+
+        # Get loss dictionary
+        feat_maps = self.extract_feat(images)
+        loss_dict = self.bbox_head.forward_train(feat_maps, img_metas, *args, **kwargs)
+
+        return loss_dict
 
 
 @TRANSFORMER.register_module()
@@ -59,12 +92,12 @@ class DeformableDetrTransformerPlus(DeformableDetrTransformer):
         two_stage_num_proposals (int): Integer containing the number of two-stage proposals.
     """
 
-    def __init__(self, num_feature_levels=4, as_two_stage=False, two_stage_num_proposals=300, **kwargs):
+    def __init__(self, num_feature_levels=5, as_two_stage=False, two_stage_num_proposals=300, **kwargs):
         """
         Initializes the DeformableDetrTransformerPlus module.
 
         Args:
-            num_feature_levels (int): Integer containing the number of expected input feature levels (default=4).
+            num_feature_levels (int): Integer containing the number of expected input feature levels (default=5).
             as_two_stage (bool): Boolean indicating whether to generate queries from encoder output (default=False).
             two_stage_num_proposals (int): Integer containing the number of two-stage proposals (default=300).
         """
@@ -79,3 +112,4 @@ class DeformableDetrTransformerPlus(DeformableDetrTransformer):
 
         # Initialize the transformer layers
         self.init_layers()
+        self.level_embeds.requires_grad_(False)

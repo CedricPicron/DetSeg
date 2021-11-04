@@ -1,5 +1,5 @@
 model = dict(
-    type='DeformableDETR',
+    type='DeformableDETRPlus',
     overwrite_backbone=True,
     overwrite_neck=True,
     requires_masks=False,
