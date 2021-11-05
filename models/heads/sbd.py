@@ -232,7 +232,6 @@ class SBD(nn.Module):
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
         Raises:
-            ValueError: Error when using the 'rel_dynamic' state type and the loss is not applied after every layer.
             ValueError: Error when invalid loss application frequency is provided.
             ValueError: Error when both the 'freeze_inter' and 'no_sharing' CLS attributes are set to True.
             ValueError: Error when both the 'freeze_inter' and 'no_sharing' BOX attributes are set to True.
@@ -246,10 +245,6 @@ class SBD(nn.Module):
         self.dod = dod
 
         # Set state attributes
-        if state_dict['type'] == 'rel_dynamic' and loss_dict['apply_freq'] != 'layers':
-            error_msg = "The loss should be applied after every layer when using the 'rel_dynamic' state type."
-            raise ValueError(error_msg)
-
         for k, v in state_dict.items():
             setattr(self, f'state_{k}', v)
 
@@ -259,7 +254,7 @@ class SBD(nn.Module):
 
         # Initialization of anchor encoding (AE) network if needed
         needs_ae = [t for t in update_dict['types'] if t in ['ca', 'sa']] and update_dict['layers'] > 0
-        needs_ae = needs_ae or self.state_type == 'abs'
+        needs_ae = needs_ae or 'abs' in self.state_type
 
         if needs_ae:
             iae = nn.Linear(4, ae_dict['in_size'])
@@ -443,10 +438,10 @@ class SBD(nn.Module):
                 loss_matrices = [cls_loss_matrix]
 
                 # Get prediction boxes
-                if self.state_type == 'abs':
+                if 'abs' in self.state_type:
                     pred_boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
 
-                elif self.state_type in ['rel_static', 'rel_dynamic']:
+                elif 'rel' in self.state_type:
                     pred_boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
                     pred_boxes_i = pred_boxes_i.normalize(images[i]).to_format('cxcywh')
 
@@ -679,7 +674,7 @@ class SBD(nn.Module):
                 continue
 
             # Prepare predictions and targets
-            if self.state_type == 'abs':
+            if 'abs' in self.state_type:
                 box_targets_i = tgt_boxes_i.to_format('cxcywh').boxes
                 pred_boxes_i = Boxes(box_preds_i, format='cxcywh', normalized='img_with_padding')
 
@@ -687,7 +682,7 @@ class SBD(nn.Module):
                 pred_boxes_i = pred_boxes_i[well_defined]
                 tgt_boxes_i = tgt_boxes_i[well_defined]
 
-            elif self.state_type in ['rel_static', 'rel_dynamic']:
+            elif 'rel' in self.state_type:
                 if pred_anchors is not None:
                     pred_anchors_i = pred_anchors[i][pred_ids[i]]
                     box_targets_i = get_box_deltas(pred_anchors_i, tgt_boxes_i)
@@ -827,10 +822,10 @@ class SBD(nn.Module):
             scores_i, labels_i = cls_preds_i.sigmoid().max(dim=1)
 
             # Get prediction boxes
-            if self.state_type == 'abs':
+            if 'abs' in self.state_type:
                 boxes_i = Boxes(box_preds[i], format='cxcywh', normalized='img_with_padding')
 
-            elif self.state_type in ['rel_static', 'rel_dynamic']:
+            elif 'rel' in self.state_type:
                 if pred_anchors is not None:
                     boxes_i = apply_box_deltas(box_preds[i], pred_anchors[i])
                 else:
@@ -1008,7 +1003,7 @@ class SBD(nn.Module):
                 scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in range(batch_size)]
 
         # Get absolute object states if desired
-        if self.state_type == 'abs':
+        if 'abs' in self.state_type:
             has_se = hasattr(self, 'se')
             obj_states = [obj_states[i] * scale_encs[i] for i in range(batch_size)] if has_se else obj_states
             obj_states = [obj_states[i] + anchor_encs[i].detach() for i in range(batch_size)]
@@ -1038,12 +1033,10 @@ class SBD(nn.Module):
         if tgt_dict is not None:
 
             # Get anchor encoding loss if desired
-            if self.state_type == 'abs':
+            if 'abs' in self.state_type:
                 box_net = self.box[-1] if self.box_no_sharing else self.box[0]
                 box_net = deepcopy(box_net).requires_grad_(False) if self.box_freeze_inter else box_net
-
                 ae_box_preds = [box_net(anchor_encs[i]) for i in range(batch_size)]
-                box_preds = box_preds if compute_loss_preds else ae_box_preds
 
                 ae_tgt_dict = {'boxes': norm_anchors}
                 ae_pred_ids = [torch.arange(len(sel_ids[i]), device=feats.device) for i in range(batch_size)]
@@ -1057,7 +1050,7 @@ class SBD(nn.Module):
             tgt_boxes = tgt_dict['boxes']
             tgt_sizes = tgt_dict['sizes']
 
-            if self.state_type == 'abs':
+            if 'abs' in self.state_type:
                 tgt_boxes = deepcopy(tgt_boxes).normalize(images)
 
             tgt_labels = [tgt_dict['labels'][i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
@@ -1082,12 +1075,12 @@ class SBD(nn.Module):
             pred_dict = self.make_predictions(cls_preds, box_preds, obj_anchors, return_obj_ids=return_obj_ids)
             pred_dicts.append(pred_dict)
 
-        # Get static keyword arguments for update layers
+        # Get initial keyword arguments for update layers
         up_kwargs = [{} for _ in range(batch_size)]
 
-        if self.state_type == 'rel_static' and hasattr(self, 'ae'):
+        if 'rel' in self.state_type:
             for i in range(batch_size):
-                up_kwargs[i]['add_encs'] = anchor_encs[i]
+                up_kwargs[i]['add_encs'] = anchor_encs[i] if hasattr(self, 'ae') else None
                 up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
 
         if self.up_ca_type in ('deformable_attn', 'particle_attn'):
@@ -1096,7 +1089,10 @@ class SBD(nn.Module):
             sample_map_start_ids = torch.cat([sample_map_shapes.new_zeros((1,)), sample_map_start_ids], dim=0)
 
             for i in range(batch_size):
-                if self.state_type == 'rel_static':
+                if 'abs' in self.state_type:
+                    up_kwargs[i]['sample_priors'] = ae_box_preds[i].detach()
+
+                elif 'rel' in self.state_type:
                     up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
 
                 up_kwargs[i]['sample_feats'] = feats[i]
@@ -1116,38 +1112,38 @@ class SBD(nn.Module):
             raise ValueError(error_msg)
 
         # Update object states and get losses and prediction dictionaries if desired
-        for i in range(1, self.up_iters+1):
-            for j, up_layer in enumerate(self.up_layers, 1):
+        for iter_id in range(1, self.up_iters+1):
+            for layer_id, up_layer in enumerate(self.up_layers, 1):
 
-                # Update anchors if desired
-                if self.state_type == 'rel_dynamic':
-                    obj_anchors = [apply_box_deltas(box_preds[i], obj_anchors[i]).detach() for i in range(batch_size)]
-                    norm_anchors = [obj_anchors[i].clone().normalize(images[i]) for i in range(batch_size)]
-                    norm_anchors = [norm_anchors[i].to_format('cxcywh') for i in range(batch_size)]
-                    anchor_encs = [self.ae(norm_anchors[i].boxes) for i in range(batch_size)]
-
-                    if hasattr(self, 'se'):
-                        scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in range(batch_size)]
-
-                # Get dynamic keyword arguments for update layers
-                if self.state_type == 'abs' and self.up_ca_type in ('deformable_attn', 'particle_attn'):
-                    for i in range(batch_size):
-                        up_kwargs[i]['sample_priors'] = box_preds[i]
-
-                elif self.state_type == 'rel_dynamic':
-                    for i in range(batch_size):
-                        up_kwargs[i]['add_encs'] = anchor_encs[i]
-                        up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
-
+                # Update keyword arguments of update layers if desired
+                if compute_loss_preds and 'dynamic' in self.state_type:
+                    if 'abs' in self.state_type:
                         if self.up_ca_type in ('deformable_attn', 'particle_attn'):
-                            up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
+                            for i in range(batch_size):
+                                up_kwargs[i]['sample_priors'] = box_preds[i].detach()
+
+                    elif 'rel' in self.state_type:
+                        rng = range(batch_size)
+                        obj_anchors = [apply_box_deltas(box_preds[i], obj_anchors[i]).detach() for i in rng]
+                        norm_anchors = [obj_anchors[i].clone().normalize(images[i]).to_format('cxcywh') for i in rng]
+                        anchor_encs = [self.ae(norm_anchors[i].boxes) for i in rng]
+
+                        if hasattr(self, 'se'):
+                            scale_encs = [self.se(norm_anchors[i].boxes[:, 2:]) for i in rng]
+
+                        for i in range(batch_size):
+                            up_kwargs[i]['add_encs'] = anchor_encs[i] if hasattr(self, 'ae') else None
+                            up_kwargs[i]['mul_encs'] = scale_encs[i] if hasattr(self, 'se') else None
+
+                            if self.up_ca_type in ('deformable_attn', 'particle_attn'):
+                                up_kwargs[i]['sample_priors'] = norm_anchors[i].boxes
 
                 # Update object states
                 obj_states = [up_layer(obj_states[i], **up_kwargs[i]) for i in range(batch_size)]
 
                 # Get boolean indicating whether losses/prediction dictionary should be computed
-                last_iter = i == self.up_iters
-                last_layer = j == len(self.up_layers)
+                last_iter = iter_id == self.up_iters
+                last_layer = layer_id == len(self.up_layers)
 
                 compute_loss_preds = (last_iter and last_layer) or (last_layer and self.apply_freq != 'last')
                 compute_loss_preds = compute_loss_preds or (self.apply_freq == 'layers')
@@ -1179,8 +1175,8 @@ class SBD(nn.Module):
                     loss_output = self.get_loss(cls_preds, box_preds, sbd_tgt_dict, **loss_kwargs)
                     local_loss_dict, local_analysis_dict, pos_pred_ids, pos_tgt_ids = loss_output
 
-                    loss_dict.update({f'{k}_{i}_{j}': v for k, v in local_loss_dict.items()})
-                    analysis_dict.update({f'{k}_{i}_{j}': v for k, v in local_analysis_dict.items()})
+                    loss_dict.update({f'{k}_{iter_id}_{layer_id}': v for k, v in local_loss_dict.items()})
+                    analysis_dict.update({f'{k}_{iter_id}_{layer_id}': v for k, v in local_analysis_dict.items()})
 
                 # Get prediction dictionary if desired
                 if not self.training and compute_loss_preds:
