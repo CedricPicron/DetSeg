@@ -509,7 +509,7 @@ elif profiling_args.model == 'mbd':
 elif profiling_args.model == 'mmdet_arch':
     main_args.num_classes = 80
     main_args.arch_type = 'mmdet'
-    main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/sparse_rcnn_v0.py'
+    main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/deformable_detr_v0.py'
     main_args.backbone_type = 'resnet'
     main_args.core_type = 'gc'
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'

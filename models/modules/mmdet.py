@@ -5,20 +5,28 @@ Collection of additional MMDetection modules.
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 from mmcv.runner.base_module import BaseModule
 from mmdet.models.builder import DETECTORS
-from mmdet.models.detectors import DeformableDETR
+from mmdet.models.detectors import DETR, SingleStageDetector
 from mmdet.models.utils.builder import TRANSFORMER
 from mmdet.models.utils.transformer import DeformableDetrTransformer, Transformer
 
 
 @DETECTORS.register_module()
-class DeformableDETRPlus(DeformableDETR):
+class DETRPlus(DETR):
     """
-    Class implementing the DeformableDETRPlus module.
+    Class implementing the DETRPlus module.
     """
+
+    def __init__(self, *args, **kwargs):
+        """
+        Initializes the DETRPlus module.
+        """
+
+        # Initialization of SingleStageDetector module
+        SingleStageDetector.__init__(self, *args, **kwargs)
 
     def forward_train(self, images, img_metas, *args, **kwargs):
         """
-        Forward method of the DeformableDETRPlus module during training.
+        Forward method of the DETRPlus module during training.
 
         Args:
             images (Images): Images structure containing the batched images.
@@ -39,6 +47,66 @@ class DeformableDETRPlus(DeformableDETR):
         loss_dict = self.bbox_head.forward_train(feat_maps, img_metas, *args, **kwargs)
 
         return loss_dict
+
+    def forward_test(self, images, img_metas, *args, **kwargs):
+        """
+        Forward method of the DETRPlus module during testing.
+
+        Args:
+            images (List): List [num_augs] with Images structures [num_images] containing the batched images.
+            img_metas (List): List [num_augs] of lists [num_images] containing additional image-specific information.
+            args (Tuple): Tuple of additional arguments passed to underlying test method.
+            kwargs (Dict): Dictionary of additional keyword arguments passed to underlying test method.
+
+        Returns:
+            preds (List): List [num_images] of lists [num_classes] containing bounding box predictions.
+
+        Raises:
+            TypeError: Error when the 'images' or 'img_metas' input arguments are not lists.
+            ValueError: Error when the size of the 'images' and 'img_metas' input arguments are different.
+            ValueError: Error when batch size is not one and testing with with test-time augmentations.
+            ValueError: Error when proposals are provided and testing with with test-time augmentations.
+        """
+
+        # Check inputs
+        for var, name in [(images, 'images'), (img_metas, 'img_metas')]:
+            if not isinstance(var, list):
+                error_msg = f"Input argument '{name}' must be a list, but got {type(var)}."
+                raise TypeError(error_msg)
+
+        if len(images) != len(img_metas):
+            error_msg = f"The 'images' ({len(images)}) and 'img_metas' ({len(img_metas)}) inputs must have same size."
+            raise ValueError(error_msg)
+
+        # Add 'batch_input_shape' key to list of MMDetection image metas
+        for images_i, img_metas_i in zip(images, img_metas):
+            iW, iH = images_i.size(mode='with_padding')
+            [img_meta.update({'batch_input_shape': (iH, iW)}) for img_meta in img_metas_i]
+
+        # Get test method and prepare inputs
+        if len(images) == 1:
+            test_method = self.simple_test
+            images = images[0]
+            img_metas = img_metas[0]
+
+            if 'proposals' in kwargs:
+                kwargs['proposals'] = kwargs['proposals'][0]
+
+        elif len(images[0]) != 1:
+            error_msg = f"Batch size (got {len(images[0])}) must be one when testing with test-time augmentations."
+            raise ValueError(error_msg)
+
+        elif 'proposals' in kwargs:
+            error_msg = "Proposals are not supported when testing with test-time augmentations."
+            raise ValueError(error_msg)
+
+        else:
+            test_method = self.aug_test
+
+        # Get bounding box predictions
+        preds = test_method(images, img_metas, *args, **kwargs)
+
+        return preds
 
 
 @TRANSFORMER.register_module()
