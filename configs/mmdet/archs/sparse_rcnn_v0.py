@@ -1,5 +1,5 @@
 num_stages = 6
-num_proposals = 100
+num_proposals = 300
 model = dict(
     type='SparseRCNN',
     overwrite_backbone=True,
