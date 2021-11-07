@@ -177,7 +177,7 @@ def reduce_dict(input_dict, average=True):
         reduced_dict (Dict): Dictionary with reduced values for all input keys.
     """
 
-    if not is_dist_avail_and_initialized():
+    if not is_dist_avail_and_initialized() or not input_dict:
         return input_dict
 
     keys = sorted(input_dict.keys())
