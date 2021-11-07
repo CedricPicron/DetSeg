@@ -181,7 +181,7 @@ def reduce_dict(input_dict, average=True):
         return input_dict
 
     keys = sorted(input_dict.keys())
-    values = torch.stack([input_dict[key] for key in keys], dim=0)
+    values = torch.cat([input_dict[key].view(1) for key in keys], dim=0)
     torch.distributed.all_reduce(values)
 
     values = values/get_world_size() if average else values
