@@ -373,6 +373,29 @@ class SBD(nn.Module):
         metadata.stuff_colors = metadata.thing_colors
         self.metadata = metadata
 
+    def _load_from_state_dict(self, state_dict, *args):
+        """
+        Method updating the state dictionary keys from older models and proceeding with default loading.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        args (Tuple): Tuple containing additional arguments passed to the default loading method.
+        """
+
+        # Update keys from old state dictionaries
+        for key in deepcopy(state_dict).keys():
+            key_parts = key.split('.')
+
+            for i, key_part in enumerate(key_parts):
+                if key_part in ('cls', 'box'):
+                    if not key_parts[i+1].isnumeric():
+                        key_parts.insert(i+1, '0')
+                        new_key = '.'.join(key_parts)
+                        state_dict[new_key] = state_dict.pop(key)
+                    break
+
+        # Proceed with default loading
+        super()._load_from_state_dict(state_dict, *args)
+
     @torch.no_grad()
     def perform_matching(self, cls_preds, box_preds, tgt_dict, pred_anchors, pred_anchor_ids, tgt_sorted_ids, images):
         """
