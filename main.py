@@ -666,8 +666,13 @@ def main(args):
     # Update default optimizer and/or scheduler based on checkpoint
     if checkpoint_path:
         if load_model_only:
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    p.grad = torch.zeros_like(p)
+
             optimizer.step()
             [scheduler.step() for _ in range(checkpoint['epoch'])]
+
         else:
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
