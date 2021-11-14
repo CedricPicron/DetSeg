@@ -105,6 +105,7 @@ elif profiling_args.model == 'bifpn':
     main_args.core_min_map_id = 3
     main_args.core_max_map_id = 7
     main_args.bifpn_num_layers = 7
+    main_args.bifpn_norm_type = 'batch'
     main_args.bifpn_separable_conv = True
     model = build_core(main_args).to('cuda')
 

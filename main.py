@@ -79,6 +79,7 @@ def get_parser():
     # * BiFPN (Bidirectional FPN)
     parser.add_argument('--bifpn_feat_size', default=256, type=int, help='feature size of BiFPN output maps')
     parser.add_argument('--bifpn_num_layers', default=7, type=int, help='number of consecutive BiFPN layers')
+    parser.add_argument('--bifpn_norm_type', default='batch', type=str, help='type of BiFPN normalization layer')
     parser.add_argument('--bifpn_separable_conv', action='store_true', help='whether to use separable convolutions')
 
     # * DC (Deformable Core)

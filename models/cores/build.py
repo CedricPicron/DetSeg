@@ -30,8 +30,9 @@ def build_core(args):
 
         feat_size = args.bifpn_feat_size
         num_layers = args.bifpn_num_layers
+        norm_type = args.bifpn_norm_type
         separable_conv = args.bifpn_separable_conv
-        core = BiFPN(in_feat_sizes, in_bot_layers, feat_size, num_layers, separable_conv)
+        core = BiFPN(in_feat_sizes, in_bot_layers, feat_size, num_layers, norm_type, separable_conv)
 
     elif args.core_type == 'dc':
         in_feat_sizes = args.backbone_feat_sizes

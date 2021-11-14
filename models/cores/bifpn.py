@@ -17,7 +17,7 @@ class BiFPN(nn.Module):
         feat_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, in_feat_sizes, in_bot_layers, feat_size, num_layers, separable_conv=False):
+    def __init__(self, in_feat_sizes, in_bot_layers, feat_size, num_layers, norm_type='batch', separable_conv=False):
         """
         Initializes the BiFPN module.
 
@@ -26,11 +26,28 @@ class BiFPN(nn.Module):
             in_bot_layers (int): Integer containing the number of bottom-up layers applied on last input feature map.
             feat_size (int): Integer containing the feature size of the feature maps processed by this module.
             num_layers (int): Integer containing the number of consecutive BiFPN layers.
+            norm_type (str): String containing the type of BiFPN normalization layer (default='batch').
             separable_conv (bool): Boolean indicating whether separable convolutions should be used (default=False).
+
+        Raises:
+            ValueError: Error when invalid normalization layer is provided.
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Get normalization module and corresponding keyword arguments for initialization
+        if norm_type == 'batch':
+            norm_layer = nn.BatchNorm2d
+            norm_kwargs = {'num_features': feat_size, 'eps': 1e-3, 'momentum': 1e-2}
+
+        elif norm_type == 'group':
+            norm_layer = nn.GroupNorm
+            norm_kwargs = {'num_groups': 8, 'num_channels': feat_size}
+
+        else:
+            error_msg = f"Invalid type of normalization layer (got '{norm_type}')."
+            raise ValueError(error_msg)
 
         # Initialization of input projection layers
         conv_kwargs = {'kernel_size': 1, 'stride': 1, 'padding': 0}
@@ -46,14 +63,15 @@ class BiFPN(nn.Module):
                     continue
 
                 in_proj = nn.Sequential()
-                in_proj.add_module('norm', nn.BatchNorm2d(feat_size, momentum=1e-2, eps=1e-3))
+                in_proj.add_module('norm', norm_layer(**norm_kwargs))
                 in_proj.add_module('act', nn.ReLU(inplace=True))
                 in_proj.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
                 self.in_projs.append(in_proj)
 
         # Initialization of BiFPN layers
         num_maps = len(self.in_projs)
-        self.layers = nn.Sequential(*[BiFPNLayer(feat_size, num_maps, separable_conv) for _ in range(num_layers)])
+        bifpn_layer_args = (feat_size, num_maps, norm_layer, norm_kwargs, separable_conv)
+        self.layers = nn.Sequential(*[BiFPNLayer(*bifpn_layer_args) for _ in range(num_layers)])
 
         # Set feature sizes attribute
         self.feat_sizes = [feat_size for _ in range(num_maps)]
@@ -93,18 +111,20 @@ class BiFPNLayer(nn.Module):
         bu_layers (nn.ModuleList): List [num_maps-1] of bottom-up projection layers.
         td_weights (nn.Parameter): Factors weighting feature maps during top-down processing of shape [num_maps-1, 2].
         bu_weights (nn.Parameter): Factors weighting feature maps during bottom-up processing of shape [num_maps-1, 3].
-        epsilon (float): Value added to denominator of weight normalization for numerical stability
+        eps (float): Value added to denominator of weight normalization for numerical stability.
     """
 
-    def __init__(self, feat_size, num_maps, separable_conv=False, epsilon=1e-4):
+    def __init__(self, feat_size, num_maps, norm_layer=nn.BatchNorm2d, norm_kwargs={}, separable_conv=False, eps=1e-4):
         """
         Initializes the BiFPNLayer module.
 
         Args:
             feat_size (int): Integer containing the feature size of the feature maps processed by this module.
             num_maps (int): Number of feature maps to process.
+            norm_layer (nn.Module): Module implementing the normalization layer (default=nn.BatchNorm2d).
+            norm_kwargs (dict): Dictionary with keyword arguments to initialize the normalization layer (default={}).
             separable_conv (bool): Boolean indicating whether separable convolutions should be used (default=False).
-            epsilon (float): Value added to denominator of weight normalization for numerical stability (default=1e-4).
+            eps (float): Value added to denominator of weight normalization for numerical stability (default=1e-4).
         """
 
         # Initialization of default nn.Module
@@ -128,7 +148,7 @@ class BiFPNLayer(nn.Module):
                 conv_kwargs = {'kernel_size': 3, 'padding': 1, 'groups': 1, 'bias': False}
                 td_layer.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
 
-            td_layer.add_module('norm', nn.BatchNorm2d(feat_size, momentum=1e-2, eps=1e-3))
+            td_layer.add_module('norm', norm_layer(**norm_kwargs))
             self.td_layers.append(td_layer)
 
         # Initialization of bottom-up projection layers
@@ -149,7 +169,7 @@ class BiFPNLayer(nn.Module):
                 conv_kwargs = {'kernel_size': 3, 'padding': 1, 'groups': 1, 'bias': False}
                 bu_layer.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
 
-            bu_layer.add_module('norm', nn.BatchNorm2d(feat_size, momentum=1e-2, eps=1e-3))
+            bu_layer.add_module('norm', norm_layer(**norm_kwargs))
             self.bu_layers.append(bu_layer)
 
         # Initialization of weight parameters
@@ -157,7 +177,7 @@ class BiFPNLayer(nn.Module):
         self.bu_weights = nn.Parameter(torch.ones(num_maps-1, 3))
 
         # Set epsilon attribute
-        self.epsilon = epsilon
+        self.eps = eps
 
     def forward(self, in_maps, **kwargs):
         """
@@ -176,10 +196,10 @@ class BiFPNLayer(nn.Module):
 
         # Get normalized top-down and bottom-up weights
         td_weights = F.relu(self.td_weights)
-        td_weights /= td_weights.sum(dim=1, keepdim=True) + self.epsilon
+        td_weights /= td_weights.sum(dim=1, keepdim=True) + self.eps
 
         bu_weights = F.relu(self.bu_weights)
-        bu_weights /= bu_weights.sum(dim=1, keepdim=True) + self.epsilon
+        bu_weights /= bu_weights.sum(dim=1, keepdim=True) + self.eps
 
         # Perform top-down processing
         td_maps = [in_maps[-1]]
