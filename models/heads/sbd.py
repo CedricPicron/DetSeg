@@ -1182,8 +1182,8 @@ class SBD(nn.Module):
                         box_net = self.box[1] if self.box_no_sharing else self.box[0]
 
                     elif self.apply_freq == 'layers':
-                        cls_net = self.cls[j] if self.cls_no_sharing else self.cls[0]
-                        box_net = self.box[j] if self.box_no_sharing else self.box[0]
+                        cls_net = self.cls[layer_id] if self.cls_no_sharing else self.cls[0]
+                        box_net = self.box[layer_id] if self.box_no_sharing else self.box[0]
 
                     if self.training and not (last_iter and last_layer):
                         cls_net = deepcopy(cls_net).requires_grad_(False) if self.cls_freeze_inter else cls_net
