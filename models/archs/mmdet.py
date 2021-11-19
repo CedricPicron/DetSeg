@@ -46,8 +46,11 @@ class MMDetArch(nn.Module):
         self.arch.init_weights()
 
         # Replace backbone and core/neck with given input modules if requested
-        self.arch.backbone = backbone if overwrite_backbone else self.arch.backbone
-        self.arch.neck = core if overwrite_neck else self.arch.neck
+        if overwrite_backbone:
+            self.arch.backbone = backbone
+
+        if hasattr(self.arch, 'neck') and overwrite_neck:
+            self.arch.neck = core
 
     @staticmethod
     def get_param_families():
