@@ -10,7 +10,7 @@ import torch
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument('--curve_ids', nargs='*', default=[3, 0, 4, 5, 12], type=int, help='ids of models to use in curve')
+parser.add_argument('--curve_ids', nargs='*', default=[3, 0, 4, 5, 11], type=int, help='ids of models to use in curve')
 parser.add_argument('--metric', default='params', type=str, help='metric measuring how expensive a TPN model is')
 parser.add_argument('--plot_name', default='', type=str, help='name of plot (name of metric is used when missing)')
 parser.add_argument('--x_offsets', nargs='*', default=[0.0], type=float, help='X-offsets of TPN configuration names')
@@ -29,13 +29,14 @@ tpn_32 = {'cfg': (3, 2), 'ap': 40.0, 'params': 36.7, 'tfps': 1.64, 'tmem': 3.27,
 tpn_41 = {'cfg': (4, 1), 'ap': 39.6, 'params': 35.9, 'tfps': 1.77, 'tmem': 3.00, 'ifps': 5.64}
 tpn_51 = {'cfg': (5, 1), 'ap': 39.9, 'params': 37.1, 'tfps': 1.63, 'tmem': 3.22, 'ifps': 5.30}
 tpn_61 = {'cfg': (6, 1), 'ap': 40.2, 'params': 38.4, 'tfps': 1.51, 'tmem': 3.45, 'ifps': 4.98}
-tpn_24 = {'cfg': (2, 4), 'ap': 0, 'params': 37.6, 'tfps': 1.53, 'tmem': 3.53, 'ifps': 5.02}
-tpn_42 = {'cfg': (4, 2), 'ap': 0, 'params': 38.7, 'tfps': 1.46, 'tmem': 3.66, 'ifps': 4.85}
+tpn_24 = {'cfg': (2, 4), 'ap': 40.5, 'params': 37.6, 'tfps': 1.53, 'tmem': 3.53, 'ifps': 5.02}
+tpn_42 = {'cfg': (4, 2), 'ap': 40.4, 'params': 38.7, 'tfps': 1.46, 'tmem': 3.66, 'ifps': 4.85}
 tpn_71 = {'cfg': (7, 1), 'ap': 40.2, 'params': 39.6, 'tfps': 1.43, 'tmem': 3.68, 'ifps': 4.70}
 tpn_33 = {'cfg': (3, 3), 'ap': 40.5, 'params': 38.8, 'tfps': 1.44, 'tmem': 3.76, 'ifps': 4.75}
 
 # Get list with all TPN models
-tpn_models = [tpn_13, tpn_15, tpn_17, tpn_21, tpn_22, tpn_23, tpn_31, tpn_32, tpn_41, tpn_51, tpn_61, tpn_71, tpn_33]
+tpn_models = [tpn_13, tpn_15, tpn_17, tpn_21, tpn_22, tpn_23, tpn_31, tpn_32, tpn_41, tpn_51, tpn_61, tpn_24, tpn_42]
+tpn_models = [*tpn_models, tpn_71, tpn_33]
 
 # Get X-axis and Y-axis text offsets
 num_models = len(tpn_models)
