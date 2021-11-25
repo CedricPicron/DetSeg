@@ -25,19 +25,20 @@ def build_core(args):
 
     # Build core module
     if args.core_type == 'bifpn':
-        in_feat_sizes = args.backbone_feat_sizes
-        in_bot_layers = args.core_max_map_id - args.core_min_map_id - len(in_feat_sizes) + 1
+        in_ids = args.backbone_out_ids
+        in_sizes = args.backbone_out_sizes
+        core_ids = args.core_ids
 
         feat_size = args.bifpn_feat_size
         num_layers = args.bifpn_num_layers
         norm_type = args.bifpn_norm_type
         separable_conv = args.bifpn_separable_conv
-        core = BiFPN(in_feat_sizes, in_bot_layers, feat_size, num_layers, norm_type, separable_conv)
+        core = BiFPN(in_ids, in_sizes, core_ids, feat_size, num_layers, norm_type, separable_conv)
 
     elif args.core_type == 'dc':
-        in_feat_sizes = args.backbone_feat_sizes
-        in_bot_layers = args.core_max_map_id - args.core_min_map_id - len(in_feat_sizes) + 1
-        map_ids = list(range(args.core_min_map_id, args.core_max_map_id + 1))
+        in_ids = args.backbone_out_ids
+        in_sizes = args.backbone_out_sizes
+        core_ids = args.core_ids
 
         feat_size = args.dc_feat_size
         num_layers = args.dc_num_layers
@@ -51,18 +52,24 @@ def build_core(args):
 
         core_kwargs = {'prior_type': args.dc_prior_type, 'prior_factor': args.dc_prior_factor}
         core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs}
-        core = DeformableCore(in_feat_sizes, in_bot_layers, map_ids, feat_size, num_layers, da_dict, **core_kwargs)
+        core = DeformableCore(in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, **core_kwargs)
 
     elif args.core_type == 'fpn':
-        in_feat_sizes = args.backbone_feat_sizes
-        out_feat_sizes = [args.fpn_feat_size] * len(in_feat_sizes)
+        in_ids = args.backbone_out_ids
+        in_sizes = args.backbone_out_sizes
+        core_ids = args.core_ids
 
-        num_bottom_up_layers = args.core_max_map_id - args.core_min_map_id - len(in_feat_sizes) + 1
-        bottom_up_dict = {'feat_sizes': [args.fpn_feat_size] * num_bottom_up_layers}
-        core = FPN(in_feat_sizes, out_feat_sizes, args.fpn_fuse_type, bottom_up_dict)
+        feat_size = args.fpn_feat_size
+        fuse_type = args.fpn_fuse_type
+        core = FPN(in_ids, in_sizes, core_ids, feat_size, fuse_type)
 
     elif args.core_type == 'gc':
-        core = GC(args.gc_yaml)
+        in_ids = args.backbone_out_ids
+        in_sizes = args.backbone_out_sizes
+        core_ids = args.core_ids
+
+        yaml_file = args.gc_yaml
+        core = GC(in_ids, in_sizes, core_ids, yaml_file)
 
     elif args.core_type == 'mmdet':
         core = MMDetCore(args.mmdet_core_cfg_path)
@@ -70,7 +77,8 @@ def build_core(args):
     else:
         raise ValueError(f"Unknown core type {args.core_type} was provided.")
 
-    # Add core output feature sizes to args
-    args.core_feat_sizes = core.feat_sizes
+    # Add core output indices and output feature sizes to args
+    args.core_out_ids = core.out_ids
+    args.core_out_sizes = core.out_sizes
 
     return core

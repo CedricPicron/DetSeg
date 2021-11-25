@@ -15,67 +15,79 @@ class FPN(nn.Module):
     Attributes:
         lat_proj (Projector): Module computing lateral feature maps from input feature maps.
         out_proj (Projector): Module computing output feature maps from fused feature maps.
-        fuse_type (str): String of lateral with top-down fuse operation chosen from {'avg', 'sum'}.
-        bottom_up (ModuleList): List of size [num_bottom_up_layers] computing additional bottom-up output maps.
-        feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
+        bot_layers (ModuleList): Optional list [num_bottom_up_layers] with modules computing additional output maps.
+
+        fuse_type (str): String containing the FPN fuse operation chosen from {'avg', 'sum'}.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, in_feat_sizes, out_feat_sizes, fuse_type, bottom_up_dict=None):
+    def __init__(self, in_ids, in_sizes, core_ids, feat_size, fuse_type='sum'):
         """
         Initializes the FPN module.
 
         Args:
-            in_feat_sizes (List): List of size [num_in_maps] containing the feature size of each input map.
-            out_feat_sizes (List): List of size [num_in_maps] containing the feature size of sideways output maps.
-            fuse_type (str): String of lateral with top-down fuse operation chosen from {'avg', 'sum'}.
+            in_ids (List): List [num_in_maps] containing the indices of the input feature maps.
+            in_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
+            core_ids (List): List [num_maps] containing the indices of the core feature maps.
+            feat_size (int): Integer containing the feature size of the feature maps processed by this module.
+            fuse_type (str): String containing the FPN fuse operation (default='sum').
 
-            bottom_up_dict (Dict): Optional bottom-up dictionary containing following key:
-                - feat_sizes (List): bottom-up output feature sizes of size [num_bottom_up_layers].
+        Raises:
+            ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
+            ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
+            ValueError: Error when the fuse operation is not chosen from {'avg', 'sum'}.
         """
 
-        # Check whether fuse type input is valid
-        allowed_fuse_types = {'avg', 'sum'}
-        check = fuse_type in allowed_fuse_types
-        assert check, f"We support fuse types {allowed_fuse_types}, but got {fuse_type}."
+        # Check inputs
+        if len(in_ids) != len(in_sizes):
+            error_msg = f"The 'in_ids' length ({len(in_ids)}) must match the 'in_sizes' length ({len(in_sizes)})."
+            raise ValueError(error_msg)
+
+        if in_ids != core_ids[:len(in_ids)]:
+            error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
+            raise ValueError(error_msg)
+
+        if fuse_type not in ('avg', 'sum'):
+            error_msg = f"The fuse operation must be chosen from {{'avg', 'sum'}}, but got '{fuse_type}'."
+            raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
 
         # Initialize lateral projector
-        fixed_settings = {'proj_type': 'conv1', 'conv_stride': 1}
-        proj_dicts = []
-
-        for in_map_id, out_feat_size in enumerate(out_feat_sizes):
-            proj_dict = {'in_map_id': in_map_id, 'out_feat_size': out_feat_size, **fixed_settings}
-            proj_dicts.append(proj_dict)
-
-        self.lat_proj = Projector(in_feat_sizes, proj_dicts)
+        fixed_settings = {'out_feat_size': feat_size, 'proj_type': 'conv1', 'conv_stride': 1}
+        proj_dicts = [{'in_map_id': i, **fixed_settings} for i in range(len(in_ids))]
+        self.lat_proj = Projector(in_sizes, proj_dicts)
 
         # Initialize output projector
-        fixed_settings = {'proj_type': 'conv3', 'conv_stride': 1}
-        proj_dicts = []
+        fixed_settings = {'out_feat_size': feat_size, 'proj_type': 'conv3', 'conv_stride': 1}
+        proj_dicts = [{'in_map_id': i, **fixed_settings} for i in range(len(in_ids))]
+        self.out_proj = Projector([feat_size] * len(in_ids), proj_dicts)
 
-        for in_map_id, out_feat_size in enumerate(out_feat_sizes):
-            proj_dict = {'in_map_id': in_map_id, 'out_feat_size': out_feat_size, **fixed_settings}
-            proj_dicts.append(proj_dict)
+        # Initialize bottom-up layers
+        conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+        num_bottom_up_layers = len(core_ids) - len(in_ids)
+        self.bot_layers = nn.ModuleList() if num_bottom_up_layers > 0 else None
 
-        self.out_proj = Projector(out_feat_sizes, proj_dicts)
+        for i in range(num_bottom_up_layers):
+            if i == 0:
+                bot_layer = nn.Conv2d(in_sizes[-1], feat_size, **conv_kwargs)
+
+            else:
+                bot_layer = nn.Sequential()
+                bot_layer.add_module('act', nn.ReLU(inplace=False))
+                bot_layer.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
+
+            self.bot_layers.append(bot_layer)
 
         # Set fuse type attribute
         self.fuse_type = fuse_type
 
-        # Initialize bottom-up modules
-        if bottom_up_dict:
-            feat_sizes = [in_feat_sizes[-1], *bottom_up_dict['feat_sizes']]
-            conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
-            self.bottom_up = nn.ModuleList([nn.Conv2d(feat_sizes[0], feat_sizes[1], **conv_kwargs)])
-
-            for in_size, out_size in zip(feat_sizes[1:-1], feat_sizes[2:]):
-                layers = [nn.ReLU(), nn.Conv2d(in_size, out_size, **conv_kwargs)]
-                self.bottom_up.append(nn.Sequential(*layers))
-
-        # Set feature sizes attribute
-        self.feat_sizes = [*out_feat_sizes, *bottom_up_dict['feat_sizes']]
+        # Set attributes related to output feature maps
+        self.out_ids = core_ids
+        self.out_sizes = [feat_size] * len(core_ids)
 
         # Set default initial values of module parameters
         self.reset_parameters()

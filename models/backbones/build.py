@@ -25,13 +25,13 @@ def build_backbone(args):
         backbone = MMDetBackbone(args.mmdet_backbone_cfg_path)
 
     elif args.backbone_type == 'resnet':
-        return_layers = {f'layer{i-1}': str(i) for i in args.backbone_map_ids if i >= 2 and i <= 5}
-        backbone = ResNet(args.resnet_name, args.resnet_dilation, return_layers)
+        backbone = ResNet(args.resnet_name, args.resnet_out_ids, args.resnet_dilation)
 
     else:
         raise ValueError(f"Unknown backbone type {args.backbone_type} was provided.")
 
-    # Add backbone output feature sizes to args
-    args.backbone_feat_sizes = backbone.feat_sizes
+    # Add backbone output indices and output feature sizes to args
+    args.backbone_out_ids = backbone.out_ids
+    args.backbone_out_sizes = backbone.out_sizes
 
     return backbone

@@ -19,19 +19,36 @@ class ResNet(nn.Module):
     Attributes:
         in_norm_mean (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization means.
         in_norm_std (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization standard deviations.
-        feat_sizes (List): List of size [num_maps] containing the feature sizes of the returned feature maps.
+
         body (IntermediateLayerGetter): Module computing and returning the requested backbone feature maps.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, name, dilation, return_layers):
+    def __init__(self, name, out_ids, dilation=False):
         """
         Initializes the ResNet module.
 
         Args:
             name (str): String containing the full name of the desired ResNet model.
-            dilation (bool): Boolean indicating whether to use dilation instead of stride for the last ResNet layer.
-            return_layers (Dict): Dictionary mapping names of ResNet layers to be returned to new names.
+            out_ids (List): List of size [num_maps] containing the indices of the feature maps to return.
+            dilation (bool): Boolean indicating whether to use dilation last ResNet layer (default=False).
+
+        Raises:
+            ValueError: Error when the provided list of ResNet output indices is empty.
+            ValueError: Error when a provided ResNet output index does not lie between 2 and 5.
         """
+
+        # Check provided output indices
+        if len(out_ids) == 0:
+            error_msg = "The provided list of ResNet output indices must be non-empty."
+            raise ValueError(error_msg)
+
+        for i in out_ids:
+            if i < 2 or i > 5:
+                error_msg = f"The ResNet ouput indices must lie between 2 and 5 (got {i})."
+                raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
@@ -40,23 +57,29 @@ class ResNet(nn.Module):
         self.register_buffer('in_norm_mean', torch.tensor([0.485, 0.456, 0.406]))
         self.register_buffer('in_norm_std', torch.tensor([0.229, 0.224, 0.225]))
 
-        # Load ImageNet pretrained ResNet from torchvision
+        # Load ImageNet pretrained ResNet model from torchvision
         resnet_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'pretrained': True}
         resnet_kwargs = {**resnet_kwargs, 'norm_layer': FrozenBatchNorm2d}
         resnet = getattr(torchvision.models, name)(**resnet_kwargs)
 
         # Determine which backbone parameters should be trained
+        max_out_id = max(out_ids)
+
         for name, parameter in resnet.named_parameters():
             if 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
                 parameter.requires_grad_(False)
 
-        # Get feature sizes of returned feature maps
-        feat_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
-        feat_sizes = {f'layer{i+1}': feat_sizes[i] for i in range(4)}
-        self.feat_sizes = [feat_sizes[layer_name] for layer_name in return_layers]
+            elif int(name[5]) >= max_out_id:
+                parameter.requires_grad_(False)
 
         # Get body module computing and returning the requested ResNet feature maps
+        return_layers = {f'layer{i-1}': str(i) for i in out_ids}
         self.body = IntermediateLayerGetter(resnet, return_layers=return_layers)
+
+        # Set attributes related to output feature maps
+        self.out_ids = out_ids
+        out_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
+        self.out_sizes = [out_sizes[i-2] for i in out_ids]
 
     def load_from_original_detr(self, fb_detr_state_dict):
         """

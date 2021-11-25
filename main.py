@@ -69,12 +69,12 @@ def get_parser():
 
     # * ResNet
     parser.add_argument('--resnet_name', default='resnet50', type=str, help='full name of the desired ResNet model')
-    parser.add_argument('--resnet_dilation', action='store_true', help='use dilation for ResNet layer block')
+    parser.add_argument('--resnet_out_ids', nargs='*', default=[3, 4, 5], type=int, help='ResNet output map indices')
+    parser.add_argument('--resnet_dilation', action='store_true', help='whether to use dilation for last ResNet layer')
 
     # Core
     parser.add_argument('--core_type', default='fpn', type=str, help='type of core module')
-    parser.add_argument('--core_min_map_id', default=3, type=int, help='minimum map id of core feature maps')
-    parser.add_argument('--core_max_map_id', default=7, type=int, help='maximum map id of core feature maps')
+    parser.add_argument('--core_ids', nargs='*', default=[3, 4, 5, 6, 7], type=int, help='core feature map indices')
 
     # * BiFPN (Bidirectional FPN)
     parser.add_argument('--bifpn_feat_size', default=256, type=int, help='feature size of BiFPN output maps')

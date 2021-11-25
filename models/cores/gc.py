@@ -1,13 +1,13 @@
 """
 GC (Generalized Core) core.
 """
-
+from copy import deepcopy
 from pathlib import Path
 
 from torch import nn
 from yaml import safe_load
 
-from .operations import initialize_operation
+from .utils.gc_operations import initialize_operation
 
 
 class GC(nn.Module):
@@ -17,17 +17,34 @@ class GC(nn.Module):
     Attributes:
         modules_list (nn.ModuleList): List with modules used by the GC operations.
         operations (List): List with operations transforming input feature maps into output feature maps.
-        out_map_indices (List): List of size [num_out_maps] with indices selecting the output maps.
-        feat_sizes (List): List of size [num_out_maps] containing the feature size of each output map.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, yaml_file):
+    def __init__(self, in_ids, in_sizes, core_ids, yaml_file):
         """
         Initializes the GC module.
 
         Args:
+            in_ids (List): List [num_in_maps] containing the indices of the input feature maps.
+            in_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
+            core_ids (List): List [num_maps] containing the indices of the core feature maps.
             yaml_file (str): String containing the path of the yaml-file with the GC specification.
+
+        Raises:
+            ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
+            ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
         """
+
+        # Check inputs
+        if len(in_ids) != len(in_sizes):
+            error_msg = f"The 'in_ids' length ({len(in_ids)}) must match the 'in_sizes' length ({len(in_sizes)})."
+            raise ValueError(error_msg)
+
+        if in_ids != core_ids[:len(in_ids)]:
+            error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
+            raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
@@ -40,7 +57,7 @@ class GC(nn.Module):
             gc_dict = safe_load(stream)
 
         # Get expected feature sizes from input maps and get layers
-        feat_sizes = gc_dict['feat_sizes']
+        feat_sizes = deepcopy(in_sizes)
         layers = gc_dict.setdefault('layers', [])
 
         # Initialize modules and operations attributes
@@ -54,9 +71,14 @@ class GC(nn.Module):
             self.modules_list.extend(modules)
             self.operations.extend(sub_operations)
 
-        # Set output map indices and feature sizes attributes
-        self.out_map_ids = gc_dict['outputs']
-        self.feat_sizes = [feat_sizes[map_id] for map_id in self.out_map_ids]
+        # Append operation getting the final output feature maps
+        filter_ids = gc_dict['outputs']
+        self.operations.append({'filter_ids': filter_ids})
+        feat_sizes = [feat_sizes[i] for i in filter_ids]
+
+        # Set attributes related to output feature maps
+        self.out_ids = core_ids
+        self.out_sizes = feat_sizes
 
     def forward(self, in_feat_maps, **kwargs):
         """
@@ -66,7 +88,7 @@ class GC(nn.Module):
             in_feat_maps (List): Input feature maps [num_in_maps] of shape [batch_size, feat_size, fH, fW].
 
         Returns:
-            out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
+            feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
 
         Raises:
             ValueError: Error for operation dictionary without key from {'filter_ids', 'module_id', 'function'}.
@@ -100,7 +122,4 @@ class GC(nn.Module):
             else:
                 feat_maps.append(outputs)
 
-        # Get output feature maps
-        out_feat_maps = [feat_maps[map_id] for map_id in self.out_map_ids]
-
-        return out_feat_maps
+        return feat_maps

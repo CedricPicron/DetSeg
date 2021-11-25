@@ -98,7 +98,7 @@ class FeatureNorm(nn.Module):
         return out_feat_map
 
 
-class FrozenBatchNorm2d (FrozenBatchNorm2d):
+class FrozenBatchNorm2d(FrozenBatchNorm2d):
     """
     Two-dimensional batch normalization layer with frozen statistics.
 

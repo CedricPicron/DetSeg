@@ -12,7 +12,9 @@ class MMDetCore(nn.Module):
     Class implementing the MMDetCore module.
 
     Attributes:
-        feat_sizes (List): List of size [num_out_maps] containing the feature sizes of the output feature maps.
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
+
         body (nn.Module): Module computing the core output feature maps from the input feature maps.
     """
 
@@ -30,8 +32,9 @@ class MMDetCore(nn.Module):
         # Get config specifying the MMDetection core
         cfg = Config.fromfile(cfg_path)
 
-        # Get feature sizes of output feature maps
-        self.feat_sizes = cfg.core.pop('out_sizes')
+        # Set attributes related to output feature maps
+        self.out_ids = cfg.core.pop('out_ids')
+        self.out_sizes = cfg.core.pop('out_sizes')
 
         # Get core body
         self.body = build_core(cfg.core)

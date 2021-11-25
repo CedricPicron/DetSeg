@@ -3,6 +3,7 @@ core = dict(
         in_channels=[256, 512, 1024, 2048],
         out_channels=256,
         num_outs=5,
+        out_ids=(2, 3, 4, 5, 6),
         out_sizes=(256, 256, 256, 256, 256),
         rfp_steps=2,
         aspp_out_channels=64,

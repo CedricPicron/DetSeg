@@ -15,7 +15,10 @@ class MMDetBackbone(nn.Module):
     Attributes:
         in_norm_mean (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization means.
         in_norm_std (FloatTensor): Tensor (buffer) of shape [3] containing the input normalization standard deviations.
-        feat_sizes (List): List of size [num_maps] containing the feature sizes of the returned feature maps.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
+
         body (nn.Module): Module computing and returning the requested backbone feature maps.
     """
 
@@ -37,8 +40,9 @@ class MMDetBackbone(nn.Module):
         # Get config specifying the MMDetection backbone
         cfg = Config.fromfile(cfg_path)
 
-        # Get feature sizes of returned feature maps
-        self.feat_sizes = cfg.backbone.pop('out_sizes')
+        # Set attributes related to output feature maps
+        self.out_ids = [i+2 for i in cfg.backbone['out_indices']]
+        self.out_sizes = cfg.backbone.pop('out_sizes')
 
         # Get backbone body
         self.body = build_backbone(cfg.backbone)

@@ -100,12 +100,12 @@ elif profiling_args.model == 'bch_sbd':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bifpn':
-    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.backbone_out_ids = [3, 4, 5]
+    main_args.backbone_out_sizes = [512, 1024, 2048]
     main_args.core_type = 'bifpn'
-    main_args.core_min_map_id = 3
-    main_args.core_max_map_id = 7
+    main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.bifpn_num_layers = 7
-    main_args.bifpn_norm_type = 'batch'
+    main_args.bifpn_norm_type = 'group'
     main_args.bifpn_separable_conv = True
     model = build_core(main_args).to('cuda')
 
@@ -278,10 +278,10 @@ elif profiling_args.model == 'criterion':
     backward_stmt = "torch.stack([v for v in model(generate_out_list(), **inputs)[0].values()]).sum().backward()"
 
 elif profiling_args.model == 'dc':
-    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.backbone_out_ids = [3, 4, 5]
+    main_args.backbone_out_sizes = [512, 1024, 2048]
     main_args.core_type = 'dc'
-    main_args.core_min_map_id = 3
-    main_args.core_max_map_id = 7
+    main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.dc_num_layers = 6
     main_args.dc_da_version = 7
     main_args.dc_da_rad_pts = 4
@@ -401,10 +401,10 @@ elif profiling_args.model == 'encoder':
     backward_stmt = "model(**inputs).sum().backward()"
 
 elif profiling_args.model == 'fpn':
-    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.backbone_out_ids = [3, 4, 5]
+    main_args.backbone_out_sizes = [512, 1024, 2048]
     main_args.core_type = 'fpn'
-    main_args.core_min_map_id = 3
-    main_args.core_max_map_id = 7
+    main_args.core_ids = [3, 4, 5, 6, 7]
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
@@ -418,10 +418,10 @@ elif profiling_args.model == 'fpn':
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'gc':
-    main_args.backbone_feat_sizes = [512, 1024, 2048]
+    main_args.backbone_out_ids = [3, 4, 5]
+    main_args.backbone_out_sizes = [512, 1024, 2048]
     main_args.core_type = 'gc'
-    main_args.core_min_map_id = 3
-    main_args.core_max_map_id = 7
+    main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     model = build_core(main_args).to('cuda')
 
@@ -563,8 +563,8 @@ elif profiling_args.model == 'mmdet_core':
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'resnet':
-    main_args.backbone_map_ids = list(range(3, 8))
     main_args.backbone_type = 'resnet'
+    main_args.resnet_out_ids = [3, 4, 5]
     model = build_backbone(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')

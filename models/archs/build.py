@@ -31,27 +31,21 @@ def build_arch(args):
         ValueError: Error when unknown architecture type was provided.
     """
 
-    # Build architecture module and backbone map ids to args
+    # Build architecture module
     if args.arch_type == 'bch':
-        args.backbone_map_ids = list(range(args.core_min_map_id, args.core_max_map_id+1))
         backbone = build_backbone(args)
-
         core = build_core(args)
         heads = build_heads(args)
         arch = BCH(backbone, core, heads)
 
     elif args.arch_type == 'bvn':
-        args.backbone_map_ids = list(range(args.core_min_map_id, args.core_max_map_id+1))
         backbone = build_backbone(args)
-
         core = build_core(args)
         heads = build_heads(args)
         arch = BVN(backbone, core, args.bvn_step_mode, heads, args.bvn_sync_heads)
 
     elif args.arch_type == 'detr':
-        args.backbone_map_ids = [5]
         backbone = build_backbone(args)
-
         position_encoder = build_position_encoder(args)
         encoder = build_encoder(args)
         decoder = build_decoder(args)
@@ -65,10 +59,8 @@ def build_arch(args):
         arch = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
 
     elif args.arch_type == 'mmdet':
-        args.backbone_map_ids = list(range(args.core_min_map_id, args.core_max_map_id+1))
         backbone = build_backbone(args)
         core = build_core(args)
-
         arch = MMDetArch(args.mmdet_arch_cfg_path, backbone, core)
         args.requires_masks = arch.requires_masks
 

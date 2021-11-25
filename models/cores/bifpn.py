@@ -14,24 +14,38 @@ class BiFPN(nn.Module):
     Attributes:
         in_projs (nn.ModuleList): List [num_maps] with modules obtaining the initial feature pyramid from input maps.
         layers (nn.Sequential): Sequence of BiFPN layers updating their input feature pyramid.
-        feat_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, in_feat_sizes, in_bot_layers, feat_size, num_layers, norm_type='batch', separable_conv=False):
+    def __init__(self, in_ids, in_sizes, core_ids, feat_size, num_layers, norm_type='batch', separable_conv=False):
         """
         Initializes the BiFPN module.
 
         Args:
-            in_feat_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
-            in_bot_layers (int): Integer containing the number of bottom-up layers applied on last input feature map.
+            in_ids (List): List [num_in_maps] containing the indices of the input feature maps.
+            in_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
+            core_ids (List): List [num_maps] containing the indices of the core feature maps.
             feat_size (int): Integer containing the feature size of the feature maps processed by this module.
             num_layers (int): Integer containing the number of consecutive BiFPN layers.
             norm_type (str): String containing the type of BiFPN normalization layer (default='batch').
             separable_conv (bool): Boolean indicating whether separable convolutions should be used (default=False).
 
         Raises:
+            ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
+            ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
             ValueError: Error when invalid normalization layer is provided.
         """
+
+        # Check inputs
+        if len(in_ids) != len(in_sizes):
+            error_msg = f"The 'in_ids' length ({len(in_ids)}) must match the 'in_sizes' length ({len(in_sizes)})."
+            raise ValueError(error_msg)
+
+        if in_ids != core_ids[:len(in_ids)]:
+            error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
+            raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
@@ -51,30 +65,31 @@ class BiFPN(nn.Module):
 
         # Initialization of input projection layers
         conv_kwargs = {'kernel_size': 1, 'stride': 1, 'padding': 0}
-        self.in_projs = nn.ModuleList([nn.Conv2d(in_size, feat_size, **conv_kwargs) for in_size in in_feat_sizes])
+        self.in_projs = nn.ModuleList([nn.Conv2d(in_size, feat_size, **conv_kwargs) for in_size in in_sizes])
 
-        if in_bot_layers > 0:
-            conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+        conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+        num_bottom_up_layers = len(core_ids) - len(in_ids)
 
-            for i in range(in_bot_layers):
-                if i == 0:
-                    in_proj = nn.Conv2d(in_feat_sizes[-1], feat_size, **conv_kwargs)
-                    self.in_projs.append(in_proj)
-                    continue
+        for i in range(num_bottom_up_layers):
+            if i == 0:
+                in_proj = nn.Conv2d(in_sizes[-1], feat_size, **conv_kwargs)
 
+            else:
                 in_proj = nn.Sequential()
                 in_proj.add_module('norm', norm_layer(**norm_kwargs))
                 in_proj.add_module('act', nn.ReLU(inplace=True))
                 in_proj.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
-                self.in_projs.append(in_proj)
+
+            self.in_projs.append(in_proj)
 
         # Initialization of BiFPN layers
         num_maps = len(self.in_projs)
         bifpn_layer_args = (feat_size, num_maps, norm_layer, norm_kwargs, separable_conv)
         self.layers = nn.Sequential(*[BiFPNLayer(*bifpn_layer_args) for _ in range(num_layers)])
 
-        # Set feature sizes attribute
-        self.feat_sizes = [feat_size for _ in range(num_maps)]
+        # Set attributes related to output feature maps
+        self.out_ids = core_ids
+        self.out_sizes = [feat_size] * num_maps
 
     def forward(self, in_feat_maps, **kwargs):
         """

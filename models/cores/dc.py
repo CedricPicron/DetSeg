@@ -18,21 +18,23 @@ class DeformableCore(nn.Module):
         layers (nn.ModuleList): List [num_layers] of DeformableAttn layers updating their input feature pyramid.
         scale_encs (nn.Parameter): Optional parameter containing the scale encodings of shape [num_maps, feat_size].
 
-        map_ids (List): List [num_maps] containing the map ids (i.e. downsampling exponents) of each map.
+        map_ids (List): List [num_maps] containing the indices (i.e. downsampling exponents) of the feature maps.
         prior_type (str): String containing the type of used sample priors.
         prior_factor (float): Factor scaling the sample priors of type 'box'.
-        feat_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
+
+        out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
+        out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, in_feat_sizes, in_bot_layers, map_ids, feat_size, num_layers, da_dict, num_groups=8,
-                 prior_type='location', prior_factor=2.0, scale_encs=False):
+    def __init__(self, in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, num_groups=8, prior_type='location',
+                 prior_factor=2.0, scale_encs=False):
         """
         Initializes the DeformableCore module.
 
         Args:
-            in_feat_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
-            in_bot_layers (int): Integer containing the number of bottom-up layers applied on last input feature map.
-            map_ids (List): List [num_maps] containing the map ids (i.e. downsampling exponents) of each map.
+            in_ids (List): List [num_in_maps] containing the indices of the input feature maps.
+            in_sizes (List): List [num_in_maps] containing the feature sizes of the input feature maps.
+            core_ids (List): List [num_maps] containing the indices of the core feature maps.
             feat_size (int): Integer containing the feature size of the feature maps processed by this module.
             num_layers (int): Integer containing the number of consecutive DeformableAttn layers.
 
@@ -55,30 +57,43 @@ class DeformableCore(nn.Module):
             num_groups (int): Integer with the number of group normalization groups of bottom-up layers (default=8).
             prior_type (str): String containing the type of used sample priors (default='location').
             prior_factor (float): Factor scaling the sample priors of type 'box' (default=2.0).
-            scale_encs (bool): Boolean indicating whether scale encodings are used (default=False).
+            scale_encs (bool): Boolean indicating whether to use scale encodings (default=False).
+
+        Raises:
+            ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
+            ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
         """
+
+        # Check inputs
+        if len(in_ids) != len(in_sizes):
+            error_msg = f"The 'in_ids' length ({len(in_ids)}) must match the 'in_sizes' length ({len(in_sizes)})."
+            raise ValueError(error_msg)
+
+        if in_ids != core_ids[:len(in_ids)]:
+            error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
+            raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
 
         # Initialization of input projection layers
         conv_kwargs = {'kernel_size': 1, 'stride': 1, 'padding': 0}
-        self.in_projs = nn.ModuleList([nn.Conv2d(in_size, feat_size, **conv_kwargs) for in_size in in_feat_sizes])
+        self.in_projs = nn.ModuleList([nn.Conv2d(in_size, feat_size, **conv_kwargs) for in_size in in_sizes])
 
-        if in_bot_layers > 0:
-            conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+        conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+        num_bottom_up_layers = len(core_ids) - len(in_ids)
 
-            for i in range(in_bot_layers):
-                if i == 0:
-                    in_proj = nn.Conv2d(in_feat_sizes[-1], feat_size, **conv_kwargs)
-                    self.in_projs.append(in_proj)
-                    continue
+        for i in range(num_bottom_up_layers):
+            if i == 0:
+                in_proj = nn.Conv2d(in_sizes[-1], feat_size, **conv_kwargs)
 
+            else:
                 in_proj = nn.Sequential()
                 in_proj.add_module('norm', nn.GroupNorm(num_groups, feat_size))
                 in_proj.add_module('act', nn.ReLU(inplace=True))
                 in_proj.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
-                self.in_projs.append(in_proj)
+
+            self.in_projs.append(in_proj)
 
         # Initialization of DeformableAttn layers
         num_maps = len(self.in_projs)
@@ -89,11 +104,14 @@ class DeformableCore(nn.Module):
         if scale_encs:
             self.scale_encs = nn.Parameter(torch.zeros(num_maps, feat_size))
 
-        # Set additional attribute
-        self.map_ids = map_ids
+        # Set attributes related to sample priors
+        self.map_ids = core_ids
         self.prior_type = prior_type
         self.prior_factor = prior_factor
-        self.feat_sizes = [feat_size for _ in range(num_maps)]
+
+        # Set attributes related to output feature maps
+        self.out_ids = core_ids
+        self.out_sizes = [feat_size] * num_maps
 
     def forward(self, in_feat_maps, images=None, **kwargs):
         """
