@@ -133,11 +133,11 @@ class FPN(nn.Module):
         out_feat_maps = self.out_proj(fused_feat_maps)
 
         # Get additional bottom-up output maps
-        if hasattr(self, 'bottom_up'):
+        if hasattr(self, 'bot_layers'):
             bottom_up_feat_map = in_feat_maps[-1]
 
-            for module in self.bottom_up:
-                bottom_up_feat_map = module(bottom_up_feat_map)
+            for bot_layer in self.bot_layers:
+                bottom_up_feat_map = bot_layer(bottom_up_feat_map)
                 out_feat_maps.append(bottom_up_feat_map)
 
         return out_feat_maps

@@ -47,7 +47,7 @@ class DETR(nn.Module):
         super().__init__()
         self.backbone = backbone
 
-        self.projector = nn.Conv2d(backbone.feat_sizes[-1], encoder.feat_dim, kernel_size=1)
+        self.projector = nn.Conv2d(backbone.out_sizes[-1], encoder.feat_dim, kernel_size=1)
         self.projector.requires_grad_(train_dict['projector'])
 
         self.position_encoder = position_encoder

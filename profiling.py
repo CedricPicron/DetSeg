@@ -13,7 +13,6 @@ from main import get_parser
 from models.archs.build import build_arch
 from models.backbones.build import build_backbone
 from models.cores.build import build_core
-from models.modules.detr.criterion import build_criterion
 from models.modules.detr.decoder import build_decoder
 from models.modules.detr.encoder import build_encoder
 from models.heads.build import build_heads
@@ -22,10 +21,9 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'criterion', 'dc']
-model_choices = [*model_choices, 'detr', 'dfd', 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd']
-model_choices = [*model_choices, 'mmdet_arch', 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder']
-model_choices = [*model_choices, 'sbd', 'sem']
+model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'detr', 'dfd']
+model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'mmdet_arch']
+model_choices = [*model_choices, 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -121,7 +119,7 @@ elif profiling_args.model == 'bifpn':
 
 elif profiling_args.model == 'bin':
     main_args.heads = ['bin']
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.disputed_loss = True
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['bin'].to('cuda')
@@ -148,7 +146,7 @@ elif profiling_args.model == 'bin':
 
 elif profiling_args.model == 'brd':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['brd']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['brd'].to('cuda')
@@ -250,33 +248,6 @@ elif profiling_args.model == 'bvn_sem':
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)"
 
-elif profiling_args.model == 'criterion':
-    main_args.num_classes = 80
-    model = build_criterion(main_args).to('cuda')
-    batch_size = main_args.batch_size
-
-    def generate_out_list():
-        num_slots_total = batch_size * main_args.num_init_slots
-        logits = torch.randn(num_slots_total, main_args.num_classes+1, device='cuda', requires_grad=True)
-        boxes = torch.abs(torch.randn(num_slots_total, 4, device='cuda', requires_grad=True))
-        boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
-        sizes = torch.tensor([i*main_args.num_init_slots for i in range(batch_size+1)], device='cuda')
-        out_list = [{'logits': logits, 'boxes': boxes, 'sizes': sizes, 'layer_id': 6, 'iter_id': 1}]
-
-        return out_list
-
-    num_targets_total = 20
-    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
-    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
-    sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
-    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
-
-    inputs = {'tgt_dict': tgt_dict}
-    globals_dict = {'model': model, 'generate_out_list': generate_out_list, 'inputs': inputs}
-    forward_stmt = "model(generate_out_list(), **inputs)"
-    backward_stmt = "torch.stack([v for v in model(generate_out_list(), **inputs)[0].values()]).sum().backward()"
-
 elif profiling_args.model == 'dc':
     main_args.backbone_out_ids = [3, 4, 5]
     main_args.backbone_out_sizes = [512, 1024, 2048]
@@ -329,7 +300,7 @@ elif profiling_args.model == 'detr':
 
 elif profiling_args.model == 'dfd':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['dfd']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['dfd'].to('cuda')
@@ -356,7 +327,8 @@ elif profiling_args.model == 'dfd':
 
 elif profiling_args.model == 'dod':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_ids = [3, 4, 5, 6, 7]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['dod']
     main_args.dod_rel_preds = False
     main_args.dod_anchor_num_sizes = 3
@@ -452,7 +424,8 @@ elif profiling_args.model == 'global_decoder':
 
 elif profiling_args.model == 'mbd':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_ids = [3, 4, 5, 6, 7]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['mbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
@@ -513,8 +486,6 @@ elif profiling_args.model == 'mmdet_arch':
     main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/deformable_detr_v1.py'
     main_args.backbone_type = 'resnet'
     main_args.core_type = 'gc'
-    main_args.core_min_map_id = 3
-    main_args.core_max_map_id = 7
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     model = build_arch(main_args).to('cuda')
 
@@ -576,7 +547,8 @@ elif profiling_args.model == 'resnet':
 
 elif profiling_args.model == 'ret':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_ids = [3, 4, 5, 6, 7]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['ret']
     main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
@@ -594,8 +566,7 @@ elif profiling_args.model == 'ret':
     anchors = anchor_generator(feat_maps)
     model.anchors = [Boxes(map_anchors.tensor.to('cuda'), format='xyxy') for map_anchors in anchors]
 
-    min_id, max_id = (main_args.core_min_map_id, main_args.core_max_map_id+1)
-    num_anchors_total = sum(9 * 4**(10-i) for i in range(min_id, max_id))
+    num_anchors_total = sum(9 * 4**(10-i) for i in main_args.core_out_ids)
     anchor_labels = torch.randint(model.num_classes, size=(2, num_anchors_total)).to('cuda')
     anchor_deltas = torch.abs(torch.randn(2, num_anchors_total, 4)).to('cuda')
     tgt_dict = {'anchor_labels': anchor_labels, 'anchor_deltas': anchor_deltas}
@@ -622,7 +593,8 @@ elif profiling_args.model == 'sample_decoder':
 
 elif profiling_args.model == 'sbd':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_ids = [3, 4, 5, 6, 7]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
@@ -681,7 +653,7 @@ elif profiling_args.model == 'sbd':
 
 elif profiling_args.model == 'sem':
     main_args.num_classes = 80
-    main_args.core_feat_sizes = [256, 256, 256, 256, 256]
+    main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['sem']
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['sem'].to('cuda')

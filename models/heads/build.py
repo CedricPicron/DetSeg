@@ -37,12 +37,12 @@ def build_heads(args):
             args.requires_masks = True
             head_args = [args.disputed_loss, args.disputed_beta, args.bin_seg_weight]
 
-            bin_head = BinarySegHead(args.core_feat_sizes, *head_args)
+            bin_head = BinarySegHead(args.core_out_sizes, *head_args)
             heads[head_type] = bin_head
 
         elif head_type == 'brd':
             feat_size = args.brd_feat_size
-            assert all(feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            assert all(feat_size == core_out_size for core_out_size in args.core_out_sizes)
 
             policy_dict = {'num_groups': args.brd_num_groups, 'prior_prob': args.brd_prior_prob}
             policy_dict = {**policy_dict, 'inference_samples': args.brd_inference_samples}
@@ -76,8 +76,8 @@ def build_heads(args):
             heads[head_type] = brd_head
 
         elif head_type == 'dfd':
-            in_feat_size = args.core_feat_sizes[0]
-            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
+            in_feat_size = args.core_out_sizes[0]
+            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
 
             cls_dict = {'feat_size': args.dfd_cls_feat_size, 'norm': args.dfd_cls_norm}
             cls_dict = {**cls_dict, 'num_classes': args.num_classes, 'prior_prob': args.dfd_cls_prior_prob}
@@ -118,9 +118,9 @@ def build_heads(args):
             heads[head_type] = dfd_head
 
         elif head_type == 'dod':
-            in_feat_size = args.core_feat_sizes[0]
-            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
-            map_ids = list(range(args.core_min_map_id, args.core_min_map_id+len(args.core_feat_sizes)))
+            in_feat_size = args.core_out_sizes[0]
+            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
+            map_ids = args.core_out_ids
 
             if not isinstance(args.dod_anchor_asp_ratios, list):
                 args.dod_anchor_asp_ratios = [args.dod_anchor_asp_ratios]
@@ -156,9 +156,9 @@ def build_heads(args):
             heads[head_type] = dod_head
 
         elif head_type == 'mbd':
-            in_feat_size = args.core_feat_sizes[0]
-            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
-            num_levels = len(args.core_feat_sizes)
+            in_feat_size = args.core_out_sizes[0]
+            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
+            num_levels = len(args.core_out_sizes)
 
             if not isinstance(args.mbd_loss_seg_types, list):
                 args.mbd_loss_seg_types = [args.mbd_loss_seg_types]
@@ -209,9 +209,9 @@ def build_heads(args):
 
         elif head_type == 'ret':
             num_classes = args.num_classes
-            in_feat_sizes = args.core_feat_sizes
+            in_feat_sizes = args.core_out_sizes
 
-            map_ids = list(range(args.core_min_map_id, args.core_min_map_id+len(in_feat_sizes)))
+            map_ids = args.core_out_ids
             in_proj = any(feat_size != in_feat_sizes[0] for feat_size in in_feat_sizes)
 
             pred_head_dict = {'in_proj': in_proj, 'feat_size': args.ret_feat_size, 'num_convs': args.ret_num_convs}
@@ -230,9 +230,9 @@ def build_heads(args):
             heads[head_type] = ret_head
 
         elif head_type == 'sbd':
-            in_feat_size = args.core_feat_sizes[0]
-            assert all(in_feat_size == core_feat_size for core_feat_size in args.core_feat_sizes)
-            num_levels = len(args.core_feat_sizes)
+            in_feat_size = args.core_out_sizes[0]
+            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
+            num_levels = len(args.core_out_sizes)
 
             if not isinstance(args.sbd_match_box_types, list):
                 args.sbd_match_box_types = [args.sbd_match_box_types]
@@ -337,7 +337,7 @@ def build_heads(args):
             args.requires_masks = True
             head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, args.val_metadata]
 
-            sem_head = SemanticSegHead(args.core_feat_sizes, *head_args)
+            sem_head = SemanticSegHead(args.core_out_sizes, *head_args)
             heads[head_type] = sem_head
 
         else:
