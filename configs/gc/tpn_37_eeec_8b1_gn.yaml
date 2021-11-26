@@ -1,9 +1,4 @@
 ---
-feat_sizes:
-  - 128 # P3 map
-  - 256 # P4 map
-  - 512 # P5 map
-
 layers:
 
    # Top-down layer
