@@ -4,6 +4,7 @@ Deformable core.
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from structures.boxes import get_anchors
 from models.modules.attention import DeformableAttn
@@ -14,20 +15,21 @@ class DeformableCore(nn.Module):
     Class implementing the DeformableCore module.
 
     Attributes:
-        in_projs (nn.ModuleList): List [num_maps] with modules obtaining the initial feature pyramid from input maps.
+        in_projs (nn.ModuleList): List with modules used during computation of initial feature pyramid from input maps.
         layers (nn.ModuleList): List [num_layers] of DeformableAttn layers updating their input feature pyramid.
         scale_encs (nn.Parameter): Optional parameter containing the scale encodings of shape [num_maps, feat_size].
 
         map_ids (List): List [num_maps] containing the indices (i.e. downsampling exponents) of the feature maps.
         prior_type (str): String containing the type of used sample priors.
         prior_factor (float): Factor scaling the sample priors of type 'box'.
+        scale_invariant (bool): Boolean indicating whether core should be scale invariant.
 
         out_ids (List): List [num_out_maps] containing the indices of the output feature maps.
         out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
     def __init__(self, in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, num_groups=8, prior_type='location',
-                 prior_factor=2.0, scale_encs=False):
+                 prior_factor=2.0, scale_encs=False, scale_invariant=False):
         """
         Initializes the DeformableCore module.
 
@@ -58,10 +60,12 @@ class DeformableCore(nn.Module):
             prior_type (str): String containing the type of used sample priors (default='location').
             prior_factor (float): Factor scaling the sample priors of type 'box' (default=2.0).
             scale_encs (bool): Boolean indicating whether to use scale encodings (default=False).
+            scale_invariant (bool): Boolean indicating whether core should be scale invariant (default=False).
 
         Raises:
             ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
             ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
+            ValueError: Error when 'scale_invariant' is set and the 'in_ids' length is different from 1.
         """
 
         # Check inputs
@@ -73,6 +77,10 @@ class DeformableCore(nn.Module):
             error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
             raise ValueError(error_msg)
 
+        if scale_invariant and len(in_ids) != 1:
+            error_msg = f"The 'in_ids' length must be 1 (got {len(in_ids)}) when 'scale_invariant' is set."
+            raise ValueError(error_msg)
+
         # Initialization of default nn.Module
         super().__init__()
 
@@ -80,23 +88,24 @@ class DeformableCore(nn.Module):
         conv_kwargs = {'kernel_size': 1, 'stride': 1, 'padding': 0}
         self.in_projs = nn.ModuleList([nn.Conv2d(in_size, feat_size, **conv_kwargs) for in_size in in_sizes])
 
-        conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
-        num_bottom_up_layers = len(core_ids) - len(in_ids)
+        if not scale_invariant:
+            conv_kwargs = {'kernel_size': 3, 'stride': 2, 'padding': 1}
+            num_bottom_up_layers = len(core_ids) - len(in_ids)
 
-        for i in range(num_bottom_up_layers):
-            if i == 0:
-                in_proj = nn.Conv2d(in_sizes[-1], feat_size, **conv_kwargs)
+            for i in range(num_bottom_up_layers):
+                if i == 0:
+                    in_proj = nn.Conv2d(in_sizes[-1], feat_size, **conv_kwargs)
 
-            else:
-                in_proj = nn.Sequential()
-                in_proj.add_module('norm', nn.GroupNorm(num_groups, feat_size))
-                in_proj.add_module('act', nn.ReLU(inplace=True))
-                in_proj.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
+                else:
+                    in_proj = nn.Sequential()
+                    in_proj.add_module('norm', nn.GroupNorm(num_groups, feat_size))
+                    in_proj.add_module('act', nn.ReLU(inplace=True))
+                    in_proj.add_module('conv', nn.Conv2d(feat_size, feat_size, **conv_kwargs))
 
-            self.in_projs.append(in_proj)
+                self.in_projs.append(in_proj)
 
         # Initialization of DeformableAttn layers
-        num_maps = len(self.in_projs)
+        num_maps = len(core_ids)
         da_dict['num_levels'] = num_maps
         self.layers = nn.ModuleList([DeformableAttn(feat_size, feat_size, **da_dict) for _ in range(num_layers)])
 
@@ -108,6 +117,9 @@ class DeformableCore(nn.Module):
         self.map_ids = core_ids
         self.prior_type = prior_type
         self.prior_factor = prior_factor
+
+        # Set scale invariant attribute
+        self.scale_invariant = scale_invariant
 
         # Set attributes related to output feature maps
         self.out_ids = core_ids
@@ -132,11 +144,26 @@ class DeformableCore(nn.Module):
 
         # Get initial feature pyramid
         feat_maps = [self.in_projs[i](in_feat_map) for i, in_feat_map in enumerate(in_feat_maps)]
-        bu_feat_map = in_feat_maps[-1]
 
-        for in_proj in self.in_projs[len(in_feat_maps):]:
-            bu_feat_map = in_proj(bu_feat_map)
-            feat_maps.append(bu_feat_map)
+        if self.scale_invariant:
+            feat_map = feat_maps[0]
+
+            tensor_kwargs = {'dtype': feat_map.dtype, 'device': feat_map.device}
+            conv_kernel = torch.tensor([[[[1/16, 1/8, 1/16], [1/8, 1/4, 1/8], [1/16, 1/8, 1/16]]]], **tensor_kwargs)
+            batch_size, feat_size = feat_map.shape[:2]
+
+            for _ in range(len(self.map_ids)-1):
+                feat_map = feat_map.view(batch_size * feat_size, 1, *feat_map.shape[-2:])
+                feat_map = F.conv2d(feat_map, conv_kernel, stride=2, padding=1)
+                feat_map = feat_map.view(batch_size, feat_size, *feat_map.shape[-2:])
+                feat_maps.append(feat_map)
+
+        else:
+            feat_map = in_feat_maps[-1]
+
+            for in_proj in self.in_projs[len(in_feat_maps):]:
+                feat_map = in_proj(feat_map)
+                feat_maps.append(feat_map)
 
         # Check whether Images structure is provided
         if images is None:

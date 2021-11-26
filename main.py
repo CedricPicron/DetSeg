@@ -103,6 +103,7 @@ def get_parser():
     parser.add_argument('--dc_prior_type', default='location', type=str, help='type of used sample priors')
     parser.add_argument('--dc_prior_factor', default=2.0, type=float, help='factor scaling box-type sample priors')
     parser.add_argument('--dc_scale_encs', action='store_true', help='whether to use scale encodings')
+    parser.add_argument('--dc_scale_invariant', action='store_true', help='whether core should be scale invariant')
 
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')

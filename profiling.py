@@ -259,6 +259,7 @@ elif profiling_args.model == 'dc':
     main_args.dc_da_lvl_pts = 1
     main_args.dc_prior_type = 'location'
     main_args.dc_scale_encs = False
+    main_args.dc_scale_invariant = False
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')

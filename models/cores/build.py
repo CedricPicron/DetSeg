@@ -51,7 +51,7 @@ def build_core(args):
         da_dict = {**da_dict, 'val_with_pos': args.dc_da_val_with_pos, 'norm_z': args.dc_da_norm_z}
 
         core_kwargs = {'prior_type': args.dc_prior_type, 'prior_factor': args.dc_prior_factor}
-        core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs}
+        core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs, 'scale_invariant': args.dc_scale_invariant}
         core = DeformableCore(in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, **core_kwargs)
 
     elif args.core_type == 'fpn':
