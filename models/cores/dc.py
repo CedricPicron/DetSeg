@@ -65,7 +65,6 @@ class DeformableCore(nn.Module):
         Raises:
             ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
             ValueError: Error when the 'in_ids' list does not match the first elements of the 'core_ids' list.
-            ValueError: Error when 'scale_invariant' is set and the 'in_ids' length is different from 1.
         """
 
         # Check inputs
@@ -75,10 +74,6 @@ class DeformableCore(nn.Module):
 
         if in_ids != core_ids[:len(in_ids)]:
             error_msg = f"The 'in_ids' list ({in_ids}) must match the first elements of 'core_ids' list ({core_ids})."
-            raise ValueError(error_msg)
-
-        if scale_invariant and len(in_ids) != 1:
-            error_msg = f"The 'in_ids' length must be 1 (got {len(in_ids)}) when 'scale_invariant' is set."
             raise ValueError(error_msg)
 
         # Initialization of default nn.Module
@@ -146,15 +141,30 @@ class DeformableCore(nn.Module):
         feat_maps = [self.in_projs[i](in_feat_map) for i, in_feat_map in enumerate(in_feat_maps)]
 
         if self.scale_invariant:
-            feat_map = feat_maps[0]
+            feat_map = feat_maps[-1]
+            batch_size, feat_size = feat_map.shape[:2]
 
             tensor_kwargs = {'dtype': feat_map.dtype, 'device': feat_map.device}
             conv_kernel = torch.tensor([[[[1/16, 1/8, 1/16], [1/8, 1/4, 1/8], [1/16, 1/8, 1/16]]]], **tensor_kwargs)
-            batch_size, feat_size = feat_map.shape[:2]
+            conv_kwargs = {'weight': conv_kernel, 'stride': 2, 'padding': 1}
+
+            # Get base feature map of scale invariant feature pyramid
+            for lat_feat_map in reversed(feat_maps[:-1]):
+                out_padding = torch.tensor(lat_feat_map.shape[-2:])
+                out_padding = (out_padding + 1) % 2
+                out_padding = out_padding.tolist()
+
+                feat_map = feat_map.view(batch_size * feat_size, 1, *feat_map.shape[-2:])
+                feat_map = F.conv_transpose2d(feat_map, **conv_kwargs, output_padding=out_padding)
+                feat_map = feat_map.view(batch_size, feat_size, *feat_map.shape[-2:])
+                feat_map += lat_feat_map
+
+            # Construct scale invariant feature pyramid from base feature map
+            feat_maps = [feat_map]
 
             for _ in range(len(self.map_ids)-1):
                 feat_map = feat_map.view(batch_size * feat_size, 1, *feat_map.shape[-2:])
-                feat_map = F.conv2d(feat_map, conv_kernel, stride=2, padding=1)
+                feat_map = F.conv2d(feat_map, **conv_kwargs)
                 feat_map = feat_map.view(batch_size, feat_size, *feat_map.shape[-2:])
                 feat_maps.append(feat_map)
 
