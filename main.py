@@ -663,6 +663,7 @@ def main(args):
             param_dicts.pop(family_name)
 
     optimizer = torch.optim.AdamW(param_dicts.values(), weight_decay=args.weight_decay)
+    optimizer.param_group_names = list(param_dicts.keys())
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, args.lr_drops)
 
     # Update default optimizer and/or scheduler based on checkpoint

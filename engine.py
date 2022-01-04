@@ -66,10 +66,9 @@ def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
     metric_logger.synchronize_between_processes()
     train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
-    # Add epoch learning rates of different parameter families to training statistics
-    param_families = model.module.get_param_families() if hasattr(model, 'module') else model.get_param_families()
-    for i, param_family in enumerate(param_families):
-        train_stats[f'lr_{param_family}'] = optimizer.param_groups[i]['lr']
+    # Add epoch learning rates of different parameter groups to training statistics
+    for i, param_group_name in enumerate(optimizer.param_group_names):
+        train_stats[f'lr_{param_group_name}'] = optimizer.param_groups[i]['lr']
 
     return train_stats
 
