@@ -5,6 +5,7 @@ General build function for architecture modules.
 from .bch import BCH
 from .bvn import BVN
 from .detr import DETR
+from .gct import GCT
 from .mmdet import MMDetArch
 
 from models.backbones.build import build_backbone
@@ -57,6 +58,10 @@ def build_arch(args):
 
         metadata = args.val_metadata
         arch = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
+
+    elif args.arch_type == 'gct':
+        backbone = build_backbone(args)
+        arch = GCT(backbone)
 
     elif args.arch_type == 'mmdet':
         backbone = build_backbone(args)
