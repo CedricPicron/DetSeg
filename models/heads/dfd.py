@@ -595,7 +595,7 @@ class DFD(nn.Module):
             # Get ids of center feature for each target
             tgt_cts_i = tgt_boxes_i.to_format('cxcywh').boxes[:, :2]
             feat_wh_i = feat_wh[tgt_map_ids_i]
-            ct_feat_ids_i = (tgt_cts_i // feat_wh_i).to(torch.int64)
+            ct_feat_ids_i = torch.div(tgt_cts_i, feat_wh_i, rounding_mode='floor').to(torch.int64)
 
             numel_row_i = (1/feat_wh_i[:, 0]).to(torch.int64)
             ct_feat_ids_i = ct_feat_ids_i[:, 0] + numel_row_i * ct_feat_ids_i[:, 1]

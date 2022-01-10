@@ -273,7 +273,7 @@ class RetinaHead(nn.Module):
                 top_labels = top_ids % self.num_classes
 
                 # Get boxes of top predictions
-                anchor_ids = top_ids // self.num_classes
+                anchor_ids = torch.div(top_ids, self.num_classes, rounding_mode='floor')
                 top_deltas = img_delta_map[anchor_ids]
                 top_anchors = map_anchors[anchor_ids]
                 top_boxes = apply_box_deltas(top_deltas, top_anchors)

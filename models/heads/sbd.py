@@ -995,7 +995,7 @@ class SBD(nn.Module):
 
         # Get selected features
         feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-        feat_ids = [sel_ids_i // self.dod.num_cell_anchors for sel_ids_i in sel_ids]
+        feat_ids = [torch.div(sel_ids_i, self.dod.num_cell_anchors, rounding_mode='floor') for sel_ids_i in sel_ids]
         sel_feats = [feats[i, feat_ids[i], :] for i in range(batch_size)]
 
         # Get initial relative object states

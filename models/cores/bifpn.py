@@ -211,10 +211,10 @@ class BiFPNLayer(nn.Module):
 
         # Get normalized top-down and bottom-up weights
         td_weights = F.relu(self.td_weights)
-        td_weights /= td_weights.sum(dim=1, keepdim=True) + self.eps
+        td_weights = td_weights / (td_weights.sum(dim=1, keepdim=True) + self.eps)
 
         bu_weights = F.relu(self.bu_weights)
-        bu_weights /= bu_weights.sum(dim=1, keepdim=True) + self.eps
+        bu_weights = bu_weights / (bu_weights.sum(dim=1, keepdim=True) + self.eps)
 
         # Perform top-down processing
         td_maps = [in_maps[-1]]

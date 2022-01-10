@@ -62,7 +62,7 @@ class SinePositionEncoder(nn.Module):
 
         feature_size_per_dim = features.shape[1] // 2
         dim_t = torch.arange(feature_size_per_dim, dtype=torch.float32, device=features.device)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / feature_size_per_dim)
+        dim_t = self.temperature ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / feature_size_per_dim)
 
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t

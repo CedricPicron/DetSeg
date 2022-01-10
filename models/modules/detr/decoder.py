@@ -113,7 +113,8 @@ class GlobalDecoder(nn.Module):
         slots = torch.stack(slots_list, dim=0)
         slots = slots.transpose(1, 2).reshape(num_pred_sets, batch_size*self.num_slots, self.feat_dim)
 
-        batch_ids = torch.arange(batch_size*self.num_slots, device=slots.device) // self.num_slots
+        batch_ids = torch.arange(batch_size*self.num_slots, device=slots.device)
+        batch_ids = torch.div(batch_ids, self.num_slots, rounding_mode='floor')
         batch_ids = batch_ids[None, :].expand(num_pred_sets, -1)
         output_dict = {'slots': slots, 'batch_ids': batch_ids}
 
@@ -366,7 +367,8 @@ class SampleDecoder(nn.Module):
         device = pos_encodings.device
 
         # Uniform sampling of initial slots within non-padded regions
-        batch_ids = torch.arange(num_slots_total, device=device) // self.num_init_slots
+        batch_ids = torch.arange(num_slots_total, device=device)
+        batch_ids = torch.div(batch_ids, self.num_init_slots, rounding_mode='floor')
         modified_masks = feature_masks.view(batch_size, fH*fW)
         modified_masks = modified_masks * torch.randint(9, size=(batch_size, fH*fW), device=device)
         _, sorted_idx = torch.sort(modified_masks, dim=1, descending=True)
@@ -384,7 +386,8 @@ class SampleDecoder(nn.Module):
 
         curio_maps = torch.zeros(num_slots_total, 3*fH, 3*fW, device=device)
         slot_idx = torch.arange(num_slots_total)[:, None, None]
-        pos_idx = torch.stack([flat_pos_idx // fW, flat_pos_idx % fW], dim=0)[:, :, None, None]
+        pos_idx = torch.stack([torch.div(flat_pos_idx, fW, rounding_mode='floor'), flat_pos_idx % fW], dim=0)
+        pos_idx = pos_idx[:, :, None, None]
 
         curio_maps[slot_idx, pos_idx[0, :]+xy_grid[0]+fH, pos_idx[1, :]+xy_grid[1]+fW] = gauss_kernel
         curio_maps = curio_maps[:, fH:2*fH, fW:2*fW].contiguous()
