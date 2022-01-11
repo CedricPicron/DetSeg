@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.functional.loss import dice_loss
-from models.functional.net import get_net
+from models.functional.net import get_net_single
 from models.modules.container import Sequential
 from structures.boxes import box_iou, get_box_deltas, mask_to_box
 
@@ -120,16 +120,16 @@ class MBD (nn.Module):
 
         # Initialization of relative anchor encoding (RAE) network
         irae = nn.Linear(4, rae_dict['in_size'])
-        hrae = get_net(rae_dict)
+        hrae = get_net_single(rae_dict)
         self.rae = Sequential(OrderedDict([('in', irae), ('hidden', hrae)]))
 
         # Initialization of absolute anchor encoding (AAE) network
         iaae = nn.Linear(4, aae_dict['in_size'])
-        haae = get_net(aae_dict)
+        haae = get_net_single(aae_dict)
         self.aae = Sequential(OrderedDict([('in', iaae), ('hidden', haae)]))
 
         # Set CA-related attributes
-        self.ca = get_net(ca_dict)
+        self.ca = get_net_single(ca_dict)
         self.ca_type = ca_dict['type']
 
         if self.ca_type == 'deformable_attn':

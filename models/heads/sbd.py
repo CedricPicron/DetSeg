@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.functional.net import get_net
+from models.functional.net import get_net_single
 from models.modules.container import Sequential
 from structures.boxes import apply_box_deltas, Boxes, box_giou, box_iou, get_box_deltas
 
@@ -249,7 +249,7 @@ class SBD(nn.Module):
             setattr(self, f'state_{k}', v)
 
         # Initialization of object state initialization (OSI) networks
-        osi = get_net(osi_dict)
+        osi = get_net_single(osi_dict)
         self.osi = nn.ModuleList([deepcopy(osi) for _ in range(dod.num_cell_anchors)])
 
         # Initialization of anchor encoding (AE) network if needed
@@ -258,13 +258,13 @@ class SBD(nn.Module):
 
         if needs_ae:
             iae = nn.Linear(4, ae_dict['in_size'])
-            hae = get_net(ae_dict)
+            hae = get_net_single(ae_dict)
             self.ae = Sequential(OrderedDict([('in', iae), ('hidden', hae)]))
 
         # Initialization of scale encoding (SE) network if needed
         if se_dict.pop('needed'):
             ise = nn.Linear(2, se_dict['in_size'])
-            hse = get_net(se_dict)
+            hse = get_net_single(se_dict)
             self.se = Sequential(OrderedDict([('in', ise), ('hidden', hse)]))
 
         # Get number of prediction sets if needed
@@ -285,7 +285,7 @@ class SBD(nn.Module):
         num_classes = cls_dict.pop('num_classes')
         num_cls_labels = num_classes + 1
 
-        hcls = get_net(cls_dict)
+        hcls = get_net_single(cls_dict)
         ocls = nn.Linear(cls_dict['out_size'], num_cls_labels)
         cls_net = Sequential(OrderedDict([('hidden', hcls), ('out', ocls)]))
 
@@ -301,7 +301,7 @@ class SBD(nn.Module):
             raise ValueError(error_msg)
 
         # Initialization of bounding box prediction (BOX) networks
-        hbox = get_net(box_dict)
+        hbox = get_net_single(box_dict)
         obox = nn.Linear(cls_dict['out_size'], 4)
         box_net = Sequential(OrderedDict([('hidden', hbox), ('out', obox)]))
 
@@ -346,14 +346,14 @@ class SBD(nn.Module):
                     break
 
                 elif module_type == 'ca':
-                    module_dict['ca'] = get_net(ca_dict)
+                    module_dict['ca'] = get_net_single(ca_dict)
                     self.up_ca_type = ca_dict['type']
 
                 elif module_type == 'sa':
-                    module_dict['sa'] = get_net(sa_dict)
+                    module_dict['sa'] = get_net_single(sa_dict)
 
                 elif module_type == 'ffn':
-                    module_dict['ffn'] = get_net(ffn_dict)
+                    module_dict['ffn'] = get_net_single(ffn_dict)
 
                 else:
                     error_msg = f"Invalid module type '{module_type}' for update layer."

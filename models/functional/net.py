@@ -1,6 +1,7 @@
 """
-Function constructing network module from network dictionary.
+Functions constructing network module from one or multiple network dictionaries.
 """
+from collections import OrderedDict
 from copy import deepcopy
 
 from models.modules.attention import DeformableAttn, ParticleAttn, SelfAttn1d
@@ -8,9 +9,31 @@ from models.modules.container import Sequential
 from models.modules.mlp import OneStepMLP, TwoStepMLP
 
 
-def get_net(net_dict):
+def get_net_multi(net_dicts):
     """
-    Get network from network dictionary.
+    Get network module from multiple network dictionaries.
+
+    Args:
+        net_dicts (Dict | List): Dictionary or list of multiple network dictionaries.
+
+    Returns:
+        net (Sequential): Module implementing the network specified by the given network dictionaries.
+    """
+
+    # Transform input list to dictionary
+    if isinstance(net_dicts, list):
+        net_dicts = {str(i): net_dict for i, net_dict in enumerate(net_dicts)}
+
+    # Get network from concatenation of sub-networks
+    sub_nets = OrderedDict([(name, get_net_single(net_dict)) for name, net_dict in net_dicts.items()])
+    net = Sequential(sub_nets)
+
+    return net
+
+
+def get_net_single(net_dict):
+    """
+    Get network module from single network dictionary.
 
     Args:
         net_dict (Dict): Network dictionary, possibly containing following keys:
