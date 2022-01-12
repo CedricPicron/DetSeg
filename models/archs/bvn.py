@@ -7,9 +7,11 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 
+from models.build import MODELS
 from models.functional.downsample import downsample_masks
 
 
+@MODELS.register_module()
 class BVN(nn.Module):
     """
     Class implementing the BVN module.

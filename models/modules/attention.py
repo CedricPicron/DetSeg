@@ -10,11 +10,13 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+from models.build import MODELS
 from models.extensions.deformable.modules import MSDA3D
 from models.extensions.deformable.python.insert import pytorch_maps_insert_2d, pytorch_maps_insert_3d
 from models.extensions.deformable.python.sample import pytorch_maps_sample_2d, pytorch_maps_sample_3d
 
 
+@MODELS.register_module()
 class Attn2d(nn.Module):
     """
     Class implementing the Attn2d module.
@@ -217,6 +219,7 @@ class Attn2d(nn.Module):
         return out_feat_map
 
 
+@MODELS.register_module()
 class DeformableAttn(nn.Module):
     """
     Class implementing the DeformableAttn module.
@@ -397,6 +400,7 @@ class DeformableAttn(nn.Module):
         return out_feats
 
 
+@MODELS.register_module()
 class LegacySelfAttn1d(nn.Module):
     """
     Class implementing the LegacySelfAttn1d module.
@@ -2009,6 +2013,7 @@ class MSDAv6(nn.Module):
         return out_feats
 
 
+@MODELS.register_module()
 class ParticleAttn(nn.Module):
     """
     Class implementing the ParticleAttn module.
@@ -4600,6 +4605,7 @@ class PAv9(nn.Module):
         return out_feats
 
 
+@MODELS.register_module()
 class SelfAttn1d(nn.Module):
     """
     Class implementing the SelfAttn1d module.

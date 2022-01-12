@@ -6,7 +6,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class BiFPN(nn.Module):
     """
     Class implementing the BiFPN (Bidirectional FPN) module.

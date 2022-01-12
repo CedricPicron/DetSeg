@@ -8,7 +8,10 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class FeatureNorm(nn.Module):
     """
     Class implementing the FeatureNorm normalization module.
@@ -98,6 +101,7 @@ class FeatureNorm(nn.Module):
         return out_feat_map
 
 
+@MODELS.register_module()
 class FrozenBatchNorm2d(FrozenBatchNorm2d):
     """
     Two-dimensional batch normalization layer with frozen statistics.

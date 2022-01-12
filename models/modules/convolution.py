@@ -6,7 +6,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class BottleneckConv(nn.Module):
     """
     Class implementing the BottleneckConv module.
@@ -107,6 +110,7 @@ class BottleneckConv(nn.Module):
         return map_output
 
 
+@MODELS.register_module()
 class ProjConv(nn.Module):
     """
     Class implementing the ProjConv module.

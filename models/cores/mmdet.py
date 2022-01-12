@@ -6,7 +6,10 @@ from mmcv import Config
 from mmdet.models import build_neck as build_core
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class MMDetCore(nn.Module):
     """
     Class implementing the MMDetCore module.

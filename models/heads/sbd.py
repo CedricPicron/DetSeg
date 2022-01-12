@@ -13,11 +13,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.functional.net import get_net_single
 from models.modules.container import Sequential
 from structures.boxes import apply_box_deltas, Boxes, box_giou, box_iou, get_box_deltas
 
 
+@MODELS.register_module()
 class SBD(nn.Module):
     """
     Class implementing the State-Based Detector (SBD) head.

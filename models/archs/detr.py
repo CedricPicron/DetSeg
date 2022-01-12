@@ -8,11 +8,13 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
+from models.build import MODELS
 from models.modules.detr.decoder import GlobalDecoder
 from models.modules.detr.mlp import MLP
 from structures.boxes import Boxes
 
 
+@MODELS.register_module()
 class DETR(nn.Module):
     """
     Class implementing the DETR module.

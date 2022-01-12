@@ -8,7 +8,10 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class PolicyNet(nn.Module):
     """
     Class implementing the PolicyNet module.

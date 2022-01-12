@@ -4,7 +4,10 @@ Collection of container-type modules.
 
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class Sequential(nn.Sequential):
     """
     Class implementing the enhanced Sequential module.

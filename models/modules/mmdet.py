@@ -9,8 +9,11 @@ from mmdet.models.detectors import DETR, SingleStageDetector
 from mmdet.models.utils.builder import TRANSFORMER
 from mmdet.models.utils.transformer import DeformableDetrTransformer, Transformer
 
+from models.build import MODELS
+
 
 @DETECTORS.register_module()
+@MODELS.register_module()
 class DETRPlus(DETR):
     """
     Class implementing the DETRPlus module.
@@ -109,6 +112,7 @@ class DETRPlus(DETR):
         return preds
 
 
+@MODELS.register_module()
 @TRANSFORMER.register_module()
 class TransformerPlus(Transformer):
     """
@@ -149,6 +153,7 @@ class TransformerPlus(Transformer):
         self.embed_dims = self.decoder.embed_dims
 
 
+@MODELS.register_module()
 @TRANSFORMER.register_module()
 class DeformableDetrTransformerPlus(DeformableDetrTransformer):
     """

@@ -14,11 +14,13 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
+from models.build import MODELS
 from models.functional.position import sine_pos_encodings
 from models.modules.convolution import BottleneckConv, ProjConv
 from structures.boxes import apply_edge_dists, Boxes, box_iou, get_edge_dists, pts_inside_boxes
 
 
+@MODELS.register_module()
 class DFD(nn.Module):
     """
     Class implementing the Duplicate-Free Detector (DFD) head.

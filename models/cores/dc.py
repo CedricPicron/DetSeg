@@ -6,10 +6,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from structures.boxes import get_anchors
+from models.build import MODELS
 from models.modules.attention import DeformableAttn
+from structures.boxes import get_anchors
 
 
+@MODELS.register_module()
 class DeformableCore(nn.Module):
     """
     Class implementing the DeformableCore module.

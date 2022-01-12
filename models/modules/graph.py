@@ -2,18 +2,22 @@
 Collection of modules related to graphs.
 """
 
+import torch
 from torch import nn
 
+from models.build import MODELS
+from models.functional.graph import edge_dot_product
 from models.functional.net import get_net_multi
 
 
+@MODELS.register_module()
 class GraphToGraph(nn.Module):
     """
     Class implementing the Tree-based Graph-to-Graph module.
 
     Attributes:
-        node_score (Sequential): Module computing the node scores.
-        edge_score (Sequential): Module computing the edge scores.
+        node_score (Sequential): Module computing the unnormalized node scores.
+        edge_score (Sequential): Module computing the edge score features.
   """
 
     def __init__(self, node_score_dicts, edge_score_dicts):
@@ -28,8 +32,10 @@ class GraphToGraph(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Get networks computing the node and edge scores
+        # Get network computing the unnormalized node scores
         self.node_score = get_net_multi(node_score_dicts)
+
+        # Get network computing the edge score features
         self.edge_score = get_net_multi(edge_score_dicts)
 
     def forward(self, node_feats, node_xy, node_adj_ids, edge_ids, **kwargs):
@@ -44,8 +50,12 @@ class GraphToGraph(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
-        # Get node and edge scores
+        # Get node scores
         node_scores = self.node_score(node_feats)
-        edge_scores = self.edge_score(node_feats, node_adj_ids=node_adj_ids, edge_ids=edge_ids)
+        node_scores = torch.sigmoid(node_scores.squeeze(dim=1))
+
+        # Get edge scores
+        edge_score_feats = self.edge_score(node_feats, edge_ids=edge_ids)
+        edge_scores = torch.sigmoid(edge_dot_product(edge_score_feats, edge_score_feats, edge_ids))
 
         return node_scores, edge_scores

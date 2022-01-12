@@ -9,10 +9,12 @@ from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
 
+from models.build import MODELS
 from models.modules.convolution import BottleneckConv, ProjConv
 from structures.boxes import Boxes, box_iou, get_anchors
 
 
+@MODELS.register_module()
 class DOD(nn.Module):
     """
     Class implementing the Dense Object Discovery (DOD) head.

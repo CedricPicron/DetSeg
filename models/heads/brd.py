@@ -12,6 +12,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.functional.position import sine_pos_encodings
 from models.modules.attention import LegacySelfAttn1d
 from models.modules.container import Sequential
@@ -22,6 +23,7 @@ from structures.boxes import Boxes, box_giou
 from utils.distributed import get_world_size, is_dist_avail_and_initialized
 
 
+@MODELS.register_module()
 class BRD(nn.Module):
     """
     Class implementing the Base Reinforced Detector (BRD) module.

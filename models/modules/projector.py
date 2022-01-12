@@ -4,7 +4,10 @@ Projector module.
 
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class Projector(nn.Module):
     """
     Class implementing the Projector module.

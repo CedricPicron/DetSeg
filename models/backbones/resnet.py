@@ -9,9 +9,11 @@ import torch.nn.functional as F
 import torchvision
 from torchvision.models._utils import IntermediateLayerGetter
 
+from models.build import MODELS
 from models.modules.normalization import FrozenBatchNorm2d
 
 
+@MODELS.register_module()
 class ResNet(nn.Module):
     """
     Class implementing the ResNet module.

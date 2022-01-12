@@ -7,7 +7,10 @@ from itertools import chain
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class BCH(nn.Module):
     """
     Class implementing the BCH architecture, consisting of a backbone, a core and heads modules.

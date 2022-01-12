@@ -7,7 +7,10 @@ from mmdet.models import build_backbone
 import torch
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class MMDetBackbone(nn.Module):
     """
     Class implementing the MMDetBackbone module.

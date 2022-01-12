@@ -7,9 +7,11 @@ from pathlib import Path
 from torch import nn
 from yaml import safe_load
 
-from .utils.gc_operations import initialize_operation
+from models.build import MODELS
+from models.cores.utils.gc_operations import initialize_operation
 
 
+@MODELS.register_module()
 class GC(nn.Module):
     """
     Class implementing the GC (Generalized Core) module.

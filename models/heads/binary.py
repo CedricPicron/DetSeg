@@ -7,10 +7,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.functional.downsample import downsample_masks
 from models.modules.projector import Projector
 
 
+@MODELS.register_module()
 class BinarySegHead(nn.Module):
     """
     Class implementing the BinarySegHead module, segmenting objects from background.

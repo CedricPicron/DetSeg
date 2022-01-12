@@ -7,10 +7,12 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.functional.downsample import downsample_index_maps
 from models.modules.projector import Projector
 
 
+@MODELS.register_module()
 class SemanticSegHead(nn.Module):
     """
     Class implementing the SemanticSegHead module, performing semantic segmentation.

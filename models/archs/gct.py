@@ -1,31 +1,43 @@
 """
 Graph-Connecting Trees (GCT) architecture.
 """
+from collections.abc import Sequence
 
 from torch import nn
 
+from models.build import build_model, MODELS
+from models.functional.graph import map_to_graph
 
+
+@MODELS.register_module()
 class GCT(nn.Module):
     """
     Class implementing the Graph-Connecting Trees (GCT) architecture.
 
     Attributes:
-        backbone (nn.Module): Module implementing the backbone.
+        map (nn.Module): Module performing the initial map-based processing.
+        graph (nn.ModuleList): List of size [num_graph_modules] performing graph-based processing.
+        graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
     """
 
-    def __init__(self, backbone):
+    def __init__(self, map_cfg, graph_cfg):
         """
         Initializes the GCT module.
 
         Args:
-            backbone (nn.Module): Module implementing the backbone.
+            map_cfg (Dict): Configuration dictionary specifying the initial map-based processing module.
+            graph_cfg (Dict): Configuration dictionary specifying the graph-based processing modules.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set backbone attribute
-        self.backbone = backbone
+        # Build initial map-based processing module
+        self.map = build_model(map_cfg)
+
+        # Build graph-based processing modules
+        self.graph = None
+        self.graph_ids = None
 
     @staticmethod
     def get_param_families():
@@ -36,7 +48,7 @@ class GCT(nn.Module):
             List of strings containing the GCT parameter families.
         """
 
-        return ['backbone']
+        return ['map', 'graph']
 
     def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
         """
@@ -66,7 +78,12 @@ class GCT(nn.Module):
             error_msg = "An optimizer is provided, but no target dictionary to learn from."
             raise RuntimeError(error_msg)
 
-        # Apply backbone
-        backbone_feat_maps = self.backbone(images)
+        # Get last feature map before graph processing
+        feat_map = self.map(images)
+        feat_map = feat_map[-1] if isinstance(feat_map, Sequence) else feat_map
 
-        return backbone_feat_maps
+        # Get initial graph from feature map
+        graph = map_to_graph(feat_map)
+        graph_list = [graph]
+
+        return graph_list

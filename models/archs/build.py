@@ -2,12 +2,14 @@
 General build function for architecture modules.
 """
 
+from mmcv import Config
+
 from .bch import BCH
 from .bvn import BVN
 from .detr import DETR
-from .gct import GCT
 from .mmdet import MMDetArch
 
+from models.build import build_model
 from models.backbones.build import build_backbone
 from models.cores.build import build_core
 from models.heads.build import build_heads
@@ -60,8 +62,9 @@ def build_arch(args):
         arch = DETR(backbone, position_encoder, encoder, decoder, criterion, args.num_classes, train_dict, metadata)
 
     elif args.arch_type == 'gct':
-        backbone = build_backbone(args)
-        arch = GCT(backbone)
+        arch_cfg = Config.fromfile(args.gct_cfg_path)
+        args.requires_masks = arch_cfg.pop('requires_masks', False)
+        arch = build_model(arch_cfg)
 
     elif args.arch_type == 'mmdet':
         backbone = build_backbone(args)

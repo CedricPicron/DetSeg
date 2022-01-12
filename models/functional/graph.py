@@ -36,7 +36,7 @@ class EdgeDotProductPyCustom(Function):
         edge_dot_prods = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).view(-1)
 
         # Store desired tensors for the backward pass
-        ctx.save_for_backward(node_src_feats, node_tgt_feats, edge_ids, edge_dot_prods)
+        ctx.save_for_backward(node_src_feats, node_tgt_feats, edge_ids)
 
         return edge_dot_prods
 
@@ -56,15 +56,25 @@ class EdgeDotProductPyCustom(Function):
             grad_edge_ids (None): None.
         """
 
+        # Recover stored tensors
+        node_src_feats, node_tgt_feats, edge_ids = ctx.saved_tensors
+
+        # Recompute edge features
+        edge_src_feats = node_src_feats[edge_ids[0]]
+        edge_tgt_feats = node_tgt_feats[edge_ids[1]]
+
         # Get gradient tensors
-        grad_node_src_feats = None
-        grad_node_tgt_feats = None
+        grad_edge_src_feats = torch.bmm(grad_edge_dot_prods[:, None, None], edge_tgt_feats[:, None, :]).squeeze(1)
+        grad_edge_tgt_feats = torch.bmm(edge_src_feats[:, :, None], grad_edge_dot_prods[:, None, None]).squeeze(2)
+
+        grad_node_src_feats = torch.zeros_like(node_src_feats).index_add_(0, edge_ids[0], grad_edge_src_feats)
+        grad_node_tgt_feats = torch.zeros_like(node_tgt_feats).index_add_(0, edge_ids[1], grad_edge_tgt_feats)
         grad_edge_ids = None
 
         return grad_node_src_feats, grad_node_tgt_feats, grad_edge_ids
 
 
-def EdgeDotProduct(node_src_feats, node_tgt_feats, edge_ids, implementation='pytorch-naive'):
+def edge_dot_product(node_src_feats, node_tgt_feats, edge_ids, implementation='pytorch-custom'):
     """
     Function computing dot products between source and target features of edges.
 
@@ -72,7 +82,7 @@ def EdgeDotProduct(node_src_feats, node_tgt_feats, edge_ids, implementation='pyt
         node_src_feats (FloatTensor): Tensor containing the node source features of shape [num_nodes, src_feat_size].
         node_tgt_feats (FloatTensor): Tensor containing the node target features of shape [num_nodes, tgt_feat_size].
         edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
-        implementation (str): String containing the type of implementation (default='pytorch-naive').
+        implementation (str): String containing the type of implementation (default='pytorch-custom').
 
     Returns:
         edge_dot_prods (FloatTensor): Tensor containing the edge dot products of shape [num_edges].
@@ -91,22 +101,22 @@ def EdgeDotProduct(node_src_feats, node_tgt_feats, edge_ids, implementation='pyt
         raise ValueError(error_msg)
 
     # Compute edge dot products
-    if implementation == 'pytorch-naive':
+    if implementation == 'pytorch-custom':
+        edge_dot_prods = EdgeDotProductPyCustom.apply(node_src_feats, node_tgt_feats, edge_ids)
+
+    elif implementation == 'pytorch-naive':
         edge_src_feats = node_src_feats[edge_ids[0]]
         edge_tgt_feats = node_tgt_feats[edge_ids[1]]
         edge_dot_prods = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).view(-1)
 
-    elif implementation == 'pytorch-custom':
-        pass
-
     else:
-        error_msg = f"Invalid implementation string for the EdgeDotProduct function (got '{implementation}')."
+        error_msg = f"Invalid implementation string for the edge_dot_product function (got '{implementation}')."
         raise ValueError(error_msg)
 
     return edge_dot_prods
 
 
-def MapToGraph(feat_map):
+def map_to_graph(feat_map):
     """
     Function transforming features from map structure to graph structure.
 

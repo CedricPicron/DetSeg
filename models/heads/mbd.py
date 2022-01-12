@@ -9,12 +9,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.functional.loss import dice_loss
 from models.functional.net import get_net_single
 from models.modules.container import Sequential
 from structures.boxes import box_iou, get_box_deltas, mask_to_box
 
 
+@MODELS.register_module()
 class MBD (nn.Module):
     """
     Class implementing the Map-Based Detector (MBD) head.

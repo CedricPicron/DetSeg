@@ -58,6 +58,9 @@ def get_parser():
     parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BVN step mode')
     parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
 
+    # * GCT (Graph-Connecting Trees)
+    parser.add_argument('--gct_cfg_path', default='', type=str, help='path to GCT architecture config')
+
     # * MMDetection architecture
     parser.add_argument('--mmdet_arch_cfg_path', default='', type=str, help='path to MMDetection architecture config')
 

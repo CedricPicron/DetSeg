@@ -5,7 +5,10 @@ Feedforward network (FFN) module.
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class FFN(nn.Module):
     """
     Class implementing the FFN module.

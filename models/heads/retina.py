@@ -13,11 +13,13 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.modules.projector import Projector
 from structures.boxes import Boxes, apply_box_deltas, box_iou, get_box_deltas
 from utils.distributed import is_dist_avail_and_initialized, get_world_size
 
 
+@MODELS.register_module()
 class RetinaHead(nn.Module):
     """
     Class implementing the RetinaHead module.
@@ -571,6 +573,7 @@ class RetinaHead(nn.Module):
         return images_dict
 
 
+@MODELS.register_module()
 class RetinaPredHead(nn.Module):
     """
     Class implementing the RetinaPredHead module.

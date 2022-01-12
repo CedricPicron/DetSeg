@@ -8,9 +8,11 @@ import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
 
+from models.build import MODELS
 from structures.boxes import Boxes
 
 
+@MODELS.register_module()
 class MMDetArch(nn.Module):
     """
     Class implementing the MMDetArch module.

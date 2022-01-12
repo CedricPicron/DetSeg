@@ -5,7 +5,10 @@ Collection of modules implementing losses.
 import torch
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class SigmoidHillLoss(nn.Module):
     """
     Class implementing the sigmoid hill loss module.

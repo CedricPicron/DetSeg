@@ -5,7 +5,10 @@ from copy import deepcopy
 
 from torch import nn
 
+from models.build import MODELS
 
+
+@MODELS.register_module()
 class MLP(nn.Module):
     """
     Class implementing the MLP module.
@@ -63,6 +66,7 @@ class MLP(nn.Module):
         return out_feat_list
 
 
+@MODELS.register_module()
 class OneStepMLP(nn.Module):
     """
     Class implementing the one-step MLP module.
@@ -156,6 +160,7 @@ class OneStepMLP(nn.Module):
         return out_feats
 
 
+@MODELS.register_module()
 class TwoStepMLP(nn.Module):
     """
     Class implementing the two-step MLP module.

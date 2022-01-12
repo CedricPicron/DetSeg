@@ -5,9 +5,11 @@ FPN (Feature Pyramid Network) core.
 from torch import nn
 import torch.nn.functional as F
 
+from models.build import MODELS
 from models.modules.projector import Projector
 
 
+@MODELS.register_module()
 class FPN(nn.Module):
     """
     Class implementing the FPN (Feature Pyramid Network) module.
