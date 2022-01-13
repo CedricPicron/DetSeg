@@ -1,7 +1,6 @@
 """
 Graph-Connecting Trees (GCT) architecture.
 """
-from collections.abc import Sequence
 
 from torch import nn
 
@@ -16,17 +15,17 @@ class GCT(nn.Module):
 
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
-        graph (nn.ModuleList): List of size [num_graph_modules] performing graph-based processing.
         graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
+        graph (nn.ModuleList): List of size [num_graph_modules] performing graph-based processing.
     """
 
-    def __init__(self, map_cfg, graph_cfg):
+    def __init__(self, map_cfg, graph_cfgs):
         """
         Initializes the GCT module.
 
         Args:
             map_cfg (Dict): Configuration dictionary specifying the initial map-based processing module.
-            graph_cfg (Dict): Configuration dictionary specifying the graph-based processing modules.
+            graph_cfgs (List): List [num_graph_modules] of dictionaries specifying the graph-based processing modules.
         """
 
         # Initialization of default nn.Module
@@ -36,8 +35,8 @@ class GCT(nn.Module):
         self.map = build_model(map_cfg)
 
         # Build graph-based processing modules
-        self.graph = None
-        self.graph_ids = None
+        self.graph_ids = [graph_cfg.pop('graph_id') for graph_cfg in graph_cfgs]
+        self.graph = nn.ModuleList([build_model(graph_cfg) for graph_cfg in graph_cfgs])
 
     @staticmethod
     def get_param_families():
@@ -80,7 +79,7 @@ class GCT(nn.Module):
 
         # Get last feature map before graph processing
         feat_map = self.map(images)
-        feat_map = feat_map[-1] if isinstance(feat_map, Sequence) else feat_map
+        feat_map = feat_map[-1] if isinstance(feat_map, (list, tuple)) else feat_map
 
         # Get initial graph from feature map
         graph = map_to_graph(feat_map)

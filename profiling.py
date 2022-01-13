@@ -22,7 +22,7 @@ from structures.images import Images
 
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'detr', 'dfd']
-model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'global_decoder', 'mbd', 'mmdet_arch']
+model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'gct', 'global_decoder', 'mbd', 'mmdet_arch']
 model_choices = [*model_choices, 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
@@ -407,6 +407,27 @@ elif profiling_args.model == 'gc':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
+
+elif profiling_args.model == 'gct':
+    main_args.num_classes = 80
+    main_args.arch_type = 'gct'
+    main_args.gct_cfg_path = './configs/gct/test_v0.py'
+    model = build_arch(main_args).to('cuda')
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'global_decoder':
     main_args.decoder_type = 'global'

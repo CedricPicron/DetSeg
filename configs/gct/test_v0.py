@@ -1,0 +1,20 @@
+model = dict(
+    type='GCT',
+    requires_masks=False,
+    map_cfg=dict(
+        type='ResNet',
+        name='resnet50',
+        out_ids=[2]),
+    graph_cfgs=list(
+        dict(
+            graph_id=0,
+            type='GraphToGraph',
+            node_score_cfg=dict(
+                type=None
+            ),
+            edge_score_cfg=dict(
+                type=None
+            ),
+        ),
+    ),
+)

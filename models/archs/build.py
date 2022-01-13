@@ -63,8 +63,8 @@ def build_arch(args):
 
     elif args.arch_type == 'gct':
         arch_cfg = Config.fromfile(args.gct_cfg_path)
-        args.requires_masks = arch_cfg.pop('requires_masks', False)
-        arch = build_model(arch_cfg)
+        args.requires_masks = arch_cfg.model.pop('requires_masks', False)
+        arch = build_model(arch_cfg.model)
 
     elif args.arch_type == 'mmdet':
         backbone = build_backbone(args)

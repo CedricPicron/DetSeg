@@ -2,6 +2,7 @@
 Collection of functions related to graphs.
 """
 
+from torch_geometric.utils import grid
 import torch
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
@@ -125,51 +126,26 @@ def map_to_graph(feat_map):
 
     Returns:
         node_feats (FloatTensor): Graph node features of shape [num_nodes, feat_size].
-        node_xy (FloatTensor): Node locations in normalized (x, y) format of shape [num_nodes, 2].
-        node_adj_ids (List): List of size [num_nodes] with lists of adjacent node indices (including itself).
         edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
-
-    Raises:
-        NotImplementedError: Error when batch size is larger than 1.
+        node_xy (FloatTensor): Node locations in normalized (x, y) format of shape [num_nodes, 2].
+        batch_ids (LongTensor): Tensor containing the batch indices of the nodes of shape [num_nodes].
     """
 
     # Get shape of input feature map
     batch_size, feat_size, fH, fW = feat_map.size()
 
-    # Check whether batch size is larger than 1
-    if batch_size > 1:
-        error_msg = f"We currently only support a batch size of 1, but got {batch_size}."
-        raise NotImplementedError(error_msg)
-
     # Get node features
-    node_feats = feat_map.permute(0, 2, 3, 1).view(fH * fW, feat_size)
+    node_feats = feat_map.permute(0, 2, 3, 1).reshape(batch_size * fH * fW, feat_size)
 
-    # Get node indices in (y, x) format
-    node_y_ids = torch.arange(fH, dtype=torch.int64)
-    node_x_ids = torch.arange(fW, dtype=torch.int64)
-    node_yx_ids = torch.meshgrid([node_y_ids, node_x_ids], indexing='ij')
-    node_yx_ids = torch.stack(node_yx_ids, dim=2).view(fH * fW, 2)
+    # Get edge indices and normalized node locations
+    edge_ids, node_xy = grid(fH, fW, device=node_feats.device)
+    edge_ids = torch.cat([edge_ids + i*fH*fW for i in range(batch_size)], dim=1)
 
-    # Get node locations in normalized (x, y) format
-    node_xy = node_yx_ids.fliplr()
-    node_xy = (node_xy + 0.5) / torch.tensor([fW, fH])
+    node_xy[:, 1] = node_xy[:, 1].flip(dims=[0])
+    node_xy = (node_xy + 0.5) / torch.tensor([fW, fH], device=node_feats.device)
+    node_xy = node_xy.repeat(batch_size, 1)
 
-    # Get node adjacency indices
-    node_offsets = torch.arange(-1, 2, dtype=torch.int64)
-    node_offsets = torch.meshgrid([node_offsets, node_offsets], indexing='ij')
-    node_offsets = torch.stack(node_offsets, dim=2).view(9, 2)
+    # Get batch indices
+    batch_ids = torch.arange(batch_size, device=node_feats.device).repeat_interleave(fH * fW)
 
-    node_adj_ids = node_yx_ids[:, None, :] + node_offsets
-
-    masks_y = (node_adj_ids[:, :, 0] >= 0) & (node_adj_ids[:, :, 0] <= fH-1)
-    masks_x = (node_adj_ids[:, :, 1] >= 0) & (node_adj_ids[:, :, 1] <= fW-1)
-    masks = masks_y & masks_x
-
-    node_adj_ids = node_adj_ids[:, :, 0] * fW + node_adj_ids[:, :, 1]
-    node_adj_ids = [node_adj_ids[i][masks[i]].tolist() for i in range(fH * fW)]
-
-    # Get edge indices
-    edge_ids = [[j, i] for i, adj_i in enumerate(node_adj_ids) for j in adj_i]
-    edge_ids = torch.tensor(edge_ids, dtype=torch.int64, device=node_feats.device).t().contiguous()
-
-    return node_feats, node_xy, node_adj_ids, edge_ids
+    return node_feats, edge_ids, node_xy, batch_ids

@@ -2,10 +2,14 @@
 Function building registered models.
 """
 
+from mmdet.models.builder import MODELS as MMDET_MODELS
 from mmcv.utils import Registry
 
-
+# Create registry
 MODELS = Registry('models')
+
+# Add modules from MMDetection
+MODELS._add_children(MMDET_MODELS)
 
 
 def build_model(cfg):
