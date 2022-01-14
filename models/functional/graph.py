@@ -125,10 +125,11 @@ def map_to_graph(feat_map):
         feat_map (FloatTensor): Features in map structure of shape [batch_size, feat_size, fH, fW].
 
     Returns:
-        node_feats (FloatTensor): Graph node features of shape [num_nodes, feat_size].
-        edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
-        node_xy (FloatTensor): Node locations in normalized (x, y) format of shape [num_nodes, 2].
-        batch_ids (LongTensor): Tensor containing the batch indices of the nodes of shape [num_nodes].
+        graph (Dict): Graph dictionary containing following keys:
+            node_feats (FloatTensor): node features of shape [num_nodes, feat_size];
+            edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
+            node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
+            node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
     """
 
     # Get shape of input feature map
@@ -136,16 +137,20 @@ def map_to_graph(feat_map):
 
     # Get node features
     node_feats = feat_map.permute(0, 2, 3, 1).reshape(batch_size * fH * fW, feat_size)
+    graph = {'node_feats': node_feats}
 
     # Get edge indices and normalized node locations
     edge_ids, node_xy = grid(fH, fW, device=node_feats.device)
     edge_ids = torch.cat([edge_ids + i*fH*fW for i in range(batch_size)], dim=1)
+    graph['edge_ids'] = edge_ids
 
     node_xy[:, 1] = node_xy[:, 1].flip(dims=[0])
     node_xy = (node_xy + 0.5) / torch.tensor([fW, fH], device=node_feats.device)
     node_xy = node_xy.repeat(batch_size, 1)
+    graph['node_xy'] = node_xy
 
-    # Get batch indices
-    batch_ids = torch.arange(batch_size, device=node_feats.device).repeat_interleave(fH * fW)
+    # Get node batch indices
+    node_batch_ids = torch.arange(batch_size, device=node_feats.device).repeat_interleave(fH * fW)
+    graph['node_batch_ids'] = node_batch_ids
 
-    return node_feats, edge_ids, node_xy, batch_ids
+    return graph

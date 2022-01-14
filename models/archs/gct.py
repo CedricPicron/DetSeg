@@ -15,8 +15,9 @@ class GCT(nn.Module):
 
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
-        graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
-        graph (nn.ModuleList): List of size [num_graph_modules] performing graph-based processing.
+        in_graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
+        out_graph_ids (List): List of size [num_graph_modules] determining where to place output graph in graph list.
+        graph (nn.ModuleList): List of size [num_graph_modules] with modules performing graph-based processing.
     """
 
     def __init__(self, map_cfg, graph_cfgs):
@@ -35,7 +36,8 @@ class GCT(nn.Module):
         self.map = build_model(map_cfg)
 
         # Build graph-based processing modules
-        self.graph_ids = [graph_cfg.pop('graph_id') for graph_cfg in graph_cfgs]
+        self.in_graph_ids = [graph_cfg.pop('in_graph_id') for graph_cfg in graph_cfgs]
+        self.out_graph_ids = [graph_cfg.pop('out_graph_id') for graph_cfg in graph_cfgs]
         self.graph = nn.ModuleList([build_model(graph_cfg) for graph_cfg in graph_cfgs])
 
     @staticmethod
@@ -70,6 +72,7 @@ class GCT(nn.Module):
 
         Raises:
             RuntimeError: Error when an optimizer is provided, but no target dictionary.
+            ValueError: Error when the output graph index is larger than graph list length.
         """
 
         # Check inputs
@@ -77,12 +80,31 @@ class GCT(nn.Module):
             error_msg = "An optimizer is provided, but no target dictionary to learn from."
             raise RuntimeError(error_msg)
 
-        # Get last feature map before graph processing
+        # Perform map-based processing
         feat_map = self.map(images)
         feat_map = feat_map[-1] if isinstance(feat_map, (list, tuple)) else feat_map
 
         # Get initial graph from feature map
         graph = map_to_graph(feat_map)
         graph_list = [graph]
+
+        # Perform graph-based processing
+        for in_graph_id, graph_module, out_graph_id in zip(self.in_graph_ids, self.graph, self.out_graph_ids):
+
+            # Get output graph
+            in_graph = graph_list[in_graph_id]
+            out_graph = graph_module(in_graph)
+
+            # Place output graph into graph list
+            if out_graph_id < len(graph_list):
+                graph_list[out_graph_id] = out_graph
+
+            elif out_graph_id == len(graph_list):
+                graph_list.append(out_graph)
+
+            else:
+                id, length = (out_graph_id, len(graph_list))
+                error_msg = f"The output graph index ({id}) is larger than the graph list length ({length})."
+                raise ValueError(error_msg)
 
         return graph_list

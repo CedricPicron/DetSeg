@@ -1,6 +1,7 @@
 """
 Collection of container-type modules.
 """
+from inspect import signature
 
 from torch import nn
 
@@ -13,8 +14,8 @@ class Sequential(nn.Sequential):
     Class implementing the enhanced Sequential module.
 
     It adds following two features to the forward method:
-        1) It allows the use of keyword arguments to be passed to each of its sub-modules.
-        2) It adds the possibility to return all intermediate outputs from each of its sub-modules.
+        1) It allows the use of keyword arguments to be passed to the sub-modules depending on their forward signature.
+        2) It adds the possibility to return all intermediate outputs from each of the sub-modules.
     """
 
     def forward(self, input, return_intermediate=False, **kwargs):
@@ -39,7 +40,8 @@ class Sequential(nn.Sequential):
 
         # Iterate over all sub-modules
         for module in self:
-            input = module(input, **kwargs)
+            module_kwargs = {name: kwargs[name] for name in signature(module.forward).parameters if name in kwargs}
+            input = module(input, **module_kwargs)
             output.append(input)
 
         # Select output from final sub-module if requested

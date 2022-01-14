@@ -90,21 +90,32 @@ class GraphToGraph(nn.Module):
         self.node_score = build_model(node_score_cfg)
         self.edge_score = build_model(edge_score_cfg)
 
-    def forward(self, node_feats, node_xy, node_adj_ids, edge_ids, **kwargs):
+    def forward(self, in_graph):
         """
         Forward method of the GraphToGraph module.
 
         Args:
-            node_feats (FloatTensor): Graph node features of shape [num_nodes, feat_size].
-            node_xy (FloatTensor): Node locations in normalized (x, y) format of shape [num_nodes, 2].
-            node_adj_ids (List): List of size [num_nodes] with lists of adjacent node indices (including itself).
-            edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            in_graph (Dict): Input graph dictionary containing at least following keys:
+                node_feats (FloatTensor): node features of shape [num_nodes, feat_size];
+                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
+                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
+                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
+
+        Returns:
+            out_graph (Dict): Output graph dictionary containing following keys:
+                node_feats (FloatTensor): node features of shape [num_nodes, feat_size];
+                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
+                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
+                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
         """
 
+        # 0. Unpack input graph dictionary
+        in_node_feats = in_graph['node_feats']
+        in_edge_ids = in_graph['edge_ids']
+
         # 1. Get normalized node and edge scores
-        node_scores = torch.sigmoid(self.node_score(node_feats.squeeze(dim=1)))
-        edge_scores = torch.sigmoid(self.edge_score(node_feats, edge_ids=edge_ids))
+        node_scores = torch.sigmoid(self.node_score(in_node_feats)).squeeze(dim=1)
+        edge_scores = torch.sigmoid(self.edge_score(in_node_feats, edge_ids=in_edge_ids))
 
         # 2. Perform node grouping
 
