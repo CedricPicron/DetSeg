@@ -2,6 +2,7 @@
 Graph-Connecting Trees (GCT) architecture.
 """
 
+import torch
 from torch import nn
 
 from models.build import build_model, MODELS
@@ -15,17 +16,19 @@ class GCT(nn.Module):
 
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
+        struc (nn.Module): Module computing the initial structure features from normalized node locations.
         in_graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
         out_graph_ids (List): List of size [num_graph_modules] determining where to place output graph in graph list.
         graph (nn.ModuleList): List of size [num_graph_modules] with modules performing graph-based processing.
     """
 
-    def __init__(self, map_cfg, graph_cfgs):
+    def __init__(self, map_cfg, struc_cfg, graph_cfgs):
         """
         Initializes the GCT module.
 
         Args:
             map_cfg (Dict): Configuration dictionary specifying the initial map-based processing module.
+            struc_cfg (Dict): Configuration dictionary specifying the module computing the initial structure features.
             graph_cfgs (List): List [num_graph_modules] of dictionaries specifying the graph-based processing modules.
         """
 
@@ -34,6 +37,9 @@ class GCT(nn.Module):
 
         # Build initial map-based processing module
         self.map = build_model(map_cfg)
+
+        # Build module computing the initial structure features
+        self.struc = build_model(struc_cfg)
 
         # Build graph-based processing modules
         self.in_graph_ids = [graph_cfg.pop('in_graph_id') for graph_cfg in graph_cfgs]
@@ -49,7 +55,7 @@ class GCT(nn.Module):
             List of strings containing the GCT parameter families.
         """
 
-        return ['map', 'graph']
+        return ['map', 'struc', 'graph']
 
     def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
         """
@@ -86,6 +92,16 @@ class GCT(nn.Module):
 
         # Get initial graph from feature map
         graph = map_to_graph(feat_map)
+        graph['con_feats'] = graph.pop('node_feats')
+
+        # Get initial structure features
+        graph['struc_feats'] = self.struc(graph['node_xy'])
+
+        # Get initial edge weights
+        num_edges = graph['edge_ids'].size(dim=1)
+        graph['edge_weights'] = torch.ones(num_edges, dtype=torch.float, device=feat_map.device)
+
+        # Get graph list with initial graph
         graph_list = [graph]
 
         # Perform graph-based processing

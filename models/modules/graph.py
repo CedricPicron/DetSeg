@@ -2,48 +2,106 @@
 Collection of modules related to graphs.
 """
 
-import torch
 from torch import nn
 
 from models.build import build_model, MODELS
-from models.functional.graph import edge_dot_product
+from models.functional.graph import node_to_edge
 
 
 @MODELS.register_module()
-class EdgeDotProduct(nn.Module):
+class GraphToGraph(nn.Module):
     """
-    Class implementing the EdgeDotProduct module computing dot products between source and target features of edges.
+    Class implementing the GraphToGraph module.
 
     Attributes:
-        implementation (str): String containing the type of implementation (default='pytorch-custom').
-    """
+        edge_score (nn.Module): Module implementing the edge score network.
+  """
 
-    def __init__(self, implementation='pytorch-custom'):
+    def __init__(self, edge_score_cfg):
         """
-        Initializes the EdgeDotProduct module.
+        Initializes the GraphToGraph module.
 
         Args:
+            edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build edge score network
+        self.edge_score = build_model(edge_score_cfg)
+
+    def forward(self, in_graph):
+        """
+        Forward method of the GraphToGraph module.
+
+        Args:
+            in_graph (Dict): Input graph dictionary containing at least following keys:
+                con_feats (FloatTensor): content features of shape [num_nodes, con_feat_size];
+                struc_feats (FloatTensor): structure features of shape [num_nodes, struc_feat_size];
+                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
+                edge_weights (FloatTensor): weights for each (directed) edge of shape [num_edges];
+                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
+                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
+
+        Returns:
+            out_graph (Dict): Output graph dictionary containing following keys:
+                con_feats (FloatTensor): content features of shape [num_nodes, con_feat_size];
+                struc_feats (FloatTensor): structure features of shape [num_nodes, struc_feat_size];
+                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
+                edge_weights (FloatTensor): weights for each (directed) edge of shape [num_edges];
+                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
+                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
+        """
+
+        # Unpack input graph dictionary
+        con_feats = in_graph['con_feats']
+        edge_ids = in_graph['edge_ids']
+
+        # Compute edge scores
+        pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
+        edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids)
+
+        return edge_scores
+
+
+@MODELS.register_module()
+class NodeToEdge(nn.Module):
+    """
+    Class implementing the NodesToEdge module computing edge features from node source and target features.
+
+    Attributes:
+        reduction (str): String containing the reduction operation.
+        implementation (str): String containing the type of implementation.
+    """
+
+    def __init__(self, reduction='mul', implementation='pytorch-custom'):
+        """
+        Initializes the NodeToEdge module.
+
+        Args:
+            reduction (str): String containing the reduction operation (default='mul').
             implementation (str): String containing the type of implementation (default='pytorch-custom').
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set implementation attribute
+        # Set reduction and implementation attributes
+        self.reduction = reduction
         self.implementation = implementation
 
-    def forward(self, node_src_feats, node_tgt_feats=None, edge_ids=None, **kwargs):
+    def forward(self, node_src_feats, node_tgt_feats=None, edge_ids=None):
         """
-        Forward method of the EdgeDotProduct module.
+        Forward method of the NodeToEdge module.
 
         Args:
             node_src_feats (FloatTensor): Node source features of shape [num_nodes, src_feat_size].
             node_tgt_feats (FloatTensor): Node target features of shape [num_nodes, tgt_feat_size] (default=None).
             edge_ids (LongTensor): Node indices for each (directed) edge of shape [2, num_edges] (default=None).
-            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            edge_dot_prods (FloatTensor): Tensor containing the edge dot products of shape [num_edges].
+            edge_feats (FloatTensor): Tensor containing the edge features of shape [num_edges, edge_feat_size].
 
         Raises:
             ValueError: Error when no 'edge_ids' are provided.
@@ -58,69 +116,7 @@ class EdgeDotProduct(nn.Module):
             error_msg = "The 'edge_ids' input argument must be provided, but is missing."
             raise ValueError(error_msg)
 
-        # Compute edge dot products
-        edge_dot_prods = edge_dot_product(node_src_feats, node_tgt_feats, edge_ids, self.implementation)
+        # Get edge features
+        edge_feats = node_to_edge(node_src_feats, node_tgt_feats, edge_ids, self.reduction, self.implementation)
 
-        return edge_dot_prods
-
-
-@MODELS.register_module()
-class GraphToGraph(nn.Module):
-    """
-    Class implementing the Tree-based Graph-to-Graph module.
-
-    Attributes:
-        node_score (nn.Module): Module computing the unnormalized node scores.
-        edge_score (nn.Module): Module computing the unnormalized edge scores.
-  """
-
-    def __init__(self, node_score_cfg, edge_score_cfg):
-        """
-        Initializes the GraphToGraph module.
-
-        Args:
-            node_score_cfg (Dict): Configuration dictionary specifying the node score network.
-            edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
-        """
-
-        # Initialization of default nn.Module
-        super().__init__()
-
-        # Build networks computing the unnormalized node and edge scores
-        self.node_score = build_model(node_score_cfg)
-        self.edge_score = build_model(edge_score_cfg)
-
-    def forward(self, in_graph):
-        """
-        Forward method of the GraphToGraph module.
-
-        Args:
-            in_graph (Dict): Input graph dictionary containing at least following keys:
-                node_feats (FloatTensor): node features of shape [num_nodes, feat_size];
-                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
-                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
-                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
-
-        Returns:
-            out_graph (Dict): Output graph dictionary containing following keys:
-                node_feats (FloatTensor): node features of shape [num_nodes, feat_size];
-                edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_edges];
-                node_xy (FloatTensor): node locations in normalized (x, y) format of shape [num_nodes, 2];
-                node_batch_ids (LongTensor): node batch indices of shape [num_nodes].
-        """
-
-        # 0. Unpack input graph dictionary
-        in_node_feats = in_graph['node_feats']
-        in_edge_ids = in_graph['edge_ids']
-
-        # 1. Get normalized node and edge scores
-        node_scores = torch.sigmoid(self.node_score(in_node_feats)).squeeze(dim=1)
-        edge_scores = torch.sigmoid(self.edge_score(in_node_feats, edge_ids=in_edge_ids))
-
-        # 2. Perform node grouping
-
-        # 3. Get new node features
-
-        # 4. Get new edges
-
-        return node_scores, edge_scores
+        return edge_feats

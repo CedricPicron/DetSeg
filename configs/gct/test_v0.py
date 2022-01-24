@@ -6,44 +6,32 @@ model = dict(
         name='resnet50',
         out_ids=[2],
     ),
+    struc_cfg=dict(
+        type='PosEncoder',
+        net_cfg=dict(
+            type='nn.Linear',
+            in_features=2,
+            out_features=64,
+            bias=True,
+        ),
+    ),
     graph_cfgs=[
         dict(
             type='GraphToGraph',
             in_graph_id=0,
             out_graph_id=1,
-            node_score_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=96,
-                    bias=True,
-                    ),
-                dict(
-                    type='TwoStepMLP',
-                    num_layers=1,
-                    in_size=96,
-                    hidden_size=384,
-                    out_size=96,
-                    norm1='layer',
-                    norm2='',
-                    act_fn1='',
-                    act_fn2='relu',
-                    skip=True,
-                ),
-            ],
             edge_score_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=96,
+                    out_features=64,
                     bias=True,
                 ),
                 dict(
                     type='TwoStepMLP',
                     num_layers=1,
-                    in_size=96,
-                    hidden_size=384,
-                    out_size=96,
+                    in_size=64,
+                    hidden_size=128,
                     norm1='layer',
                     norm2='',
                     act_fn1='',
@@ -51,8 +39,15 @@ model = dict(
                     skip=True,
                 ),
                 dict(
-                    type='EdgeDotProduct',
+                    type='NodeToEdge',
+                    reduction='mul',
                     implementation='pytorch-custom',
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=64,
+                    out_features=1,
+                    bias=True,
                 ),
             ],
         ),
