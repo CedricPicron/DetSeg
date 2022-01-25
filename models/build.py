@@ -2,6 +2,7 @@
 Function building registered models.
 """
 
+from mmcv.cnn import initialize
 from mmcv.utils import build_from_cfg, Registry
 from mmdet.models.builder import MODELS as MMDET_MODELS
 from torch import nn
@@ -24,10 +25,18 @@ def build_model_from_cfg(cfg, registry, default_args=None):
         model (nn.Module): Model built from the given configuration dictionary.
     """
 
-    # Build sub-modules
-    build_args = (registry, default_args)
+    # Some preparation
     cfg = [cfg] if not isinstance(cfg, list) else cfg
-    modules = [build_from_cfg(cfg_i, *build_args) for cfg_i in cfg for _ in range(cfg_i.pop('num_layers', 1))]
+    modules = []
+
+    # Build sub-modules
+    for cfg_i in cfg:
+        init_cfg = cfg_i.pop('init_cfg', None)
+
+        for _ in range(cfg_i.pop('num_layers', 1)):
+            module = build_from_cfg(cfg_i, registry, default_args)
+            initialize(module, init_cfg) if init_cfg is not None else None
+            modules.append(module)
 
     # Concatenate sub-modules if needed
     seq_module = registry.get('Sequential')

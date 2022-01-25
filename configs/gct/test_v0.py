@@ -48,6 +48,7 @@ model = dict(
                     in_features=64,
                     out_features=1,
                     bias=True,
+                    init_cfg=dict(type='Constant', layer='Linear', val=0.1, bias=-3),
                 ),
             ],
         ),

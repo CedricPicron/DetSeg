@@ -2,7 +2,10 @@
 Collection of modules related to graphs.
 """
 
+import torch
 from torch import nn
+from torch_geometric.utils import add_self_loops
+from torch_scatter import scatter
 
 from models.build import build_model, MODELS
 from models.functional.graph import node_to_edge
@@ -15,14 +18,16 @@ class GraphToGraph(nn.Module):
 
     Attributes:
         edge_score (nn.Module): Module implementing the edge score network.
+        max_group_iters (int): Maximum number of iterations during node grouping.
   """
 
-    def __init__(self, edge_score_cfg):
+    def __init__(self, edge_score_cfg, max_group_iters=100):
         """
         Initializes the GraphToGraph module.
 
         Args:
             edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
+            max_group_iters (int): Maximum number of iterations during node grouping (default=100).
         """
 
         # Initialization of default nn.Module
@@ -30,6 +35,9 @@ class GraphToGraph(nn.Module):
 
         # Build edge score network
         self.edge_score = build_model(edge_score_cfg)
+
+        # Set additional attributes
+        self.max_group_iters = max_group_iters
 
     def forward(self, in_graph):
         """
@@ -60,7 +68,22 @@ class GraphToGraph(nn.Module):
 
         # Compute edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
-        edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids)
+        edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids).squeeze(dim=1)
+
+        # Perform node grouping
+        num_nodes = len(con_feats)
+        group_edge_ids = pruned_edge_ids[:, edge_scores >= 0]
+        group_edge_ids = add_self_loops(group_edge_ids, num_nodes=num_nodes)[0]
+        group_ids = torch.arange(num_nodes, device=edge_ids.device)
+
+        for _ in range(self.max_group_iters):
+            old_group_ids = group_ids.clone()
+            group_ids = scatter(group_ids[group_edge_ids[0]], group_edge_ids[1], dim=0, reduce='min')
+
+            if torch.equal(old_group_ids, group_ids):
+                break
+
+        group_ids = torch.unique(group_ids, return_inverse=True)[1]
 
         return edge_scores
 
