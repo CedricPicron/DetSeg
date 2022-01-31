@@ -4,11 +4,12 @@ Collection of modules related to graphs.
 
 import torch
 from torch import nn
-from torch_geometric.utils import add_self_loops
+import torch.nn.functional as F
 from torch_scatter import scatter
 
 from models.build import build_model, MODELS
 from models.functional.graph import node_to_edge
+from models.functional.sparse import sparse_dense_mm
 
 
 @MODELS.register_module()
@@ -18,15 +19,17 @@ class GraphToGraph(nn.Module):
 
     Attributes:
         edge_score (nn.Module): Module implementing the edge score network.
+        num_node_updates (int): Number of node feature updates using the normalized edge score matrix.
         max_group_iters (int): Maximum number of iterations during node grouping.
   """
 
-    def __init__(self, edge_score_cfg, max_group_iters=100):
+    def __init__(self, edge_score_cfg, num_node_updates=5, max_group_iters=100):
         """
         Initializes the GraphToGraph module.
 
         Args:
             edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
+            num_node_updates (int): Number of node feature updates using the normalized edge score matrix (default=5).
             max_group_iters (int): Maximum number of iterations during node grouping (default=100).
         """
 
@@ -37,6 +40,7 @@ class GraphToGraph(nn.Module):
         self.edge_score = build_model(edge_score_cfg)
 
         # Set additional attributes
+        self.num_node_updates = num_node_updates
         self.max_group_iters = max_group_iters
 
     def forward(self, in_graph):
@@ -64,17 +68,43 @@ class GraphToGraph(nn.Module):
 
         # Unpack input graph dictionary
         con_feats = in_graph['con_feats']
+        struc_feats = in_graph['struc_feats']
         edge_ids = in_graph['edge_ids']
 
-        # Compute edge scores
+        # Get useful graph properties
+        num_nodes = len(con_feats)
+        device = edge_ids.device
+
+        # Get unnormalized edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
         edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids).squeeze(dim=1)
+        edge_scores = F.relu(edge_scores, inplace=True)
 
-        # Perform node grouping
-        num_nodes = len(con_feats)
-        group_edge_ids = pruned_edge_ids[:, edge_scores >= 0]
-        group_edge_ids = add_self_loops(group_edge_ids, num_nodes=num_nodes)[0]
-        group_ids = torch.arange(num_nodes, device=edge_ids.device)
+        # Get different tensors with edge indices
+        comp_edge_ids = pruned_edge_ids.flipud()
+        self_edge_ids = torch.arange(num_nodes, device=device).unsqueeze(dim=0).expand(2, -1)
+
+        group_edge_ids = pruned_edge_ids[:, edge_scores > 0]
+        group_edge_ids = torch.cat([group_edge_ids, self_edge_ids], dim=1)
+
+        # Get normalized edge scores
+        edge_ids = torch.cat([pruned_edge_ids, comp_edge_ids, self_edge_ids], dim=1)
+        edge_scores = torch.cat([edge_scores, edge_scores, torch.ones(num_nodes, device=device)], dim=0)
+
+        sort_ids = torch.argsort(edge_ids[0] * num_nodes + edge_ids[1], dim=0)
+        edge_ids = edge_ids[:, sort_ids]
+        edge_scores = edge_scores[sort_ids]
+
+        node_sums = scatter(edge_scores, edge_ids[0], dim=0, reduce='sum')
+        edge_scores = edge_scores / node_sums[edge_ids[0]]
+
+        # Get new content and structure features
+        for _ in range(self.num_node_updates):
+            con_feats = sparse_dense_mm(edge_ids, edge_scores, (num_nodes, num_nodes), con_feats)
+            struc_feats = sparse_dense_mm(edge_ids, edge_scores, (num_nodes, num_nodes), struc_feats)
+
+        # Aggregate new content and structure features
+        group_ids = torch.arange(num_nodes, device=device)
 
         for _ in range(self.max_group_iters):
             old_group_ids = group_ids.clone()
@@ -84,8 +114,15 @@ class GraphToGraph(nn.Module):
                 break
 
         group_ids = torch.unique(group_ids, return_inverse=True)[1]
+        con_feats = scatter(con_feats, group_ids, dim=0, reduce='mean')
+        struc_feats = scatter(struc_feats, group_ids, dim=0, reduce='mean')
 
-        return edge_scores
+        # Construct output graph dictionary
+        out_graph = {}
+        out_graph['con_feats'] = con_feats
+        out_graph['struc_feats'] = struc_feats
+
+        return out_graph
 
 
 @MODELS.register_module()

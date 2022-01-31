@@ -20,6 +20,8 @@ model = dict(
             type='GraphToGraph',
             in_graph_id=0,
             out_graph_id=1,
+            num_node_updates=5,
+            max_group_iters=100,
             edge_score_cfg=[
                 dict(
                     type='nn.Linear',
@@ -48,7 +50,7 @@ model = dict(
                     in_features=64,
                     out_features=1,
                     bias=True,
-                    init_cfg=dict(type='Constant', layer='Linear', val=0.1, bias=-3),
+                    init_cfg=dict(type='Constant', layer='Linear', val=0.2, bias=-3),
                 ),
             ],
         ),
