@@ -17,8 +17,6 @@ class GCT(nn.Module):
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
         struc (nn.Module): Module computing the initial structure features from normalized node locations.
-        in_graph_ids (List): List of size [num_graph_modules] determining on which graph each graph module is applied.
-        out_graph_ids (List): List of size [num_graph_modules] determining where to place output graph in graph list.
         graph (nn.ModuleList): List of size [num_graph_modules] with modules performing graph-based processing.
     """
 
@@ -42,8 +40,6 @@ class GCT(nn.Module):
         self.struc = build_model(struc_cfg)
 
         # Build graph-based processing modules
-        self.in_graph_ids = [graph_cfg.pop('in_graph_id') for graph_cfg in graph_cfgs]
-        self.out_graph_ids = [graph_cfg.pop('out_graph_id') for graph_cfg in graph_cfgs]
         self.graph = nn.ModuleList([build_model(graph_cfg) for graph_cfg in graph_cfgs])
 
     @staticmethod
@@ -95,7 +91,7 @@ class GCT(nn.Module):
         graph['con_feats'] = graph.pop('node_feats')
 
         # Get initial structure features
-        graph['struc_feats'] = self.struc(graph['node_xy'])
+        graph['struc_feats'] = self.struc(graph.pop('node_xy'))
 
         # Get initial edge weights
         num_edges = graph['edge_ids'].size(dim=1)
@@ -104,23 +100,9 @@ class GCT(nn.Module):
         # Get graph list with initial graph
         graph_list = [graph]
 
-        # Perform graph-based processing
-        for in_graph_id, graph_module, out_graph_id in zip(self.in_graph_ids, self.graph, self.out_graph_ids):
-
-            # Get output graph
-            in_graph = graph_list[in_graph_id]
-            out_graph = graph_module(in_graph)
-
-            # Place output graph into graph list
-            if out_graph_id < len(graph_list):
-                graph_list[out_graph_id] = out_graph
-
-            elif out_graph_id == len(graph_list):
-                graph_list.append(out_graph)
-
-            else:
-                id, length = (out_graph_id, len(graph_list))
-                error_msg = f"The output graph index ({id}) is larger than the graph list length ({length})."
-                raise ValueError(error_msg)
+        # Perform graph-based processing and add graphs to graph list
+        for graph_module in self.graph:
+            graph = graph_module(graph)
+            graph_list.append(graph)
 
         return graph_list
