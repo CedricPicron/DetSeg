@@ -16,7 +16,7 @@ class NodeToEdgePyCustom(Function):
     """
 
     @staticmethod
-    def forward(ctx, node_src_feats, node_tgt_feats, edge_ids, reduction='mul'):
+    def forward(ctx, node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_groups=1):
         """
         Forward method of the NodeToEdgePyCustom autograd function.
 
@@ -26,6 +26,7 @@ class NodeToEdgePyCustom(Function):
             node_tgt_feats (FloatTensor): Tensor with the node target features of shape [num_nodes, tgt_feat_size].
             edge_ids (LongTensor): Tensor with the node indices for each (directed) edge of shape [2, num_edges].
             reduction (str): String containing the reduction operation (default='mul').
+            num_groups (int): Integer containing the number of groups during 'mul-sum' reduction (default=1).
 
         Returns:
             edge_feats (FloatTensor): Tensor containing the edge features of shape [num_edges, edge_feat_size].
@@ -40,10 +41,18 @@ class NodeToEdgePyCustom(Function):
 
         if reduction == 'dot':
             edge_feats = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).squeeze(dim=2)
+
         elif reduction == 'mul':
             edge_feats = edge_src_feats * edge_tgt_feats
+
+        elif reduction == 'mul-sum':
+            feat_size = edge_src_feats.size(dim=1)
+            edge_feats = edge_src_feats * edge_tgt_feats
+            edge_feats = edge_feats.view(-1, num_groups, feat_size // num_groups).sum(dim=2)
+
         elif reduction == 'sum':
             edge_feats = edge_src_feats + edge_tgt_feats
+
         else:
             error_msg = f"Invalid reduction string for the NodeToEdgePyCustom autograd function (got '{reduction}')."
             raise ValueError(error_msg)
@@ -69,6 +78,7 @@ class NodeToEdgePyCustom(Function):
             grad_node_tgt_feats (FloatTensor): Gradients of node target features of shape [num_nodes, tgt_feat_size].
             grad_edge_ids (None): None.
             grad_reduction (None): None.
+            grad_num_groups (None): None.
         """
 
         # Recover stored tensors and reduction string from forward pass
@@ -88,6 +98,16 @@ class NodeToEdgePyCustom(Function):
             grad_edge_src_feats = grad_edge_feats * edge_tgt_feats
             grad_edge_tgt_feats = grad_edge_feats * edge_src_feats
 
+        elif reduction == 'mul-sum':
+            feat_size = edge_src_feats.size(dim=1)
+            num_groups = grad_edge_feats.size(dim=1)
+
+            grad_edge_feats = grad_edge_feats[:, :, None].expand(-1, -1, feat_size // num_groups)
+            grad_edge_feats = grad_edge_feats.reshape(-1, feat_size)
+
+            grad_edge_src_feats = grad_edge_feats * edge_tgt_feats
+            grad_edge_tgt_feats = grad_edge_feats * edge_src_feats
+
         elif reduction == 'sum':
             grad_edge_src_feats = grad_edge_feats
             grad_edge_tgt_feats = grad_edge_feats
@@ -97,8 +117,9 @@ class NodeToEdgePyCustom(Function):
 
         grad_edge_ids = None
         grad_reduction = None
+        grad_num_groups = None
 
-        return grad_node_src_feats, grad_node_tgt_feats, grad_edge_ids, grad_reduction
+        return grad_node_src_feats, grad_node_tgt_feats, grad_edge_ids, grad_reduction, grad_num_groups
 
 
 class SparseDenseMmPyCustom(Function):

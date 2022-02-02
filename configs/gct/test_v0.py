@@ -20,31 +20,18 @@ model = dict(
             type='GraphToGraph',
             node_weight_iters=5,
             max_group_iters=100,
-            con_cfg=[
+            con_cross_cfg=[
                 dict(
-                    type='TwoStepMLP',
-                    num_layers=1,
+                    type='GraphAttnFull',
                     in_size=256,
-                    hidden_size=256,
-                    norm1='layer',
-                    norm2='',
-                    act_fn1='',
-                    act_fn2='relu',
+                    struc_size=64,
+                    norm='layer',
+                    act_fn='',
+                    qk_size=64,
+                    val_size=64,
+                    num_heads=8,
                     skip=True,
-                )
-            ],
-            struc_cfg=[
-                dict(
-                    type='TwoStepMLP',
-                    num_layers=1,
-                    in_size=64,
-                    hidden_size=128,
-                    norm1='layer',
-                    norm2='',
-                    act_fn1='',
-                    act_fn2='relu',
-                    skip=True,
-                )
+                ),
             ],
             edge_score_cfg=[
                 dict(
@@ -76,6 +63,30 @@ model = dict(
                     bias=True,
                     init_cfg=dict(type='Constant', layer='Linear', val=0.1, bias=-3),
                 ),
+            ],
+            con_self_cfg=[
+                dict(
+                    type='TwoStepMLP',
+                    in_size=256,
+                    hidden_size=256,
+                    norm1='layer',
+                    norm2='',
+                    act_fn1='',
+                    act_fn2='relu',
+                    skip=True,
+                )
+            ],
+            struc_self_cfg=[
+                dict(
+                    type='TwoStepMLP',
+                    in_size=64,
+                    hidden_size=128,
+                    norm1='layer',
+                    norm2='',
+                    act_fn1='',
+                    act_fn2='relu',
+                    skip=True,
+                )
             ],
         ),
     ],

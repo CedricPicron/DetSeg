@@ -47,7 +47,8 @@ def map_to_graph(feat_map):
     return graph
 
 
-def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', implementation='pytorch-custom'):
+def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_groups=1,
+                 implementation='pytorch-custom'):
     """
     Function computing edge features from node source and target features using the specified reduction operation.
 
@@ -56,6 +57,7 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', impl
         node_tgt_feats (FloatTensor): Tensor containing the node target features of shape [num_nodes, tgt_feat_size].
         edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
         reduction (str): String containing the reduction operation (default='mul').
+        num_groups (int): Integer containing the number of groups during 'mul-sum' reduction (default=1).
         implementation (str): String containing the type of implementation (default='pytorch-custom').
 
     Returns:
@@ -63,6 +65,7 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', impl
 
     Raises:
         ValueError: Error when the source and target feature size are not the same.
+        ValueError: Error when the number of groups does not divide the feature size during 'mul-sum' reduction.
         ValueError: Error when an invalid reduction string is provided.
         ValueError: Error when an invalid implementation string is provided.
     """
@@ -75,9 +78,15 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', impl
         error_msg = f"The source and target feature size must be equal (got {src_feat_size} and {tgt_feat_size})."
         raise ValueError(error_msg)
 
+    # Check number of mul-sum groups if needed
+    if reduction == 'mul-sum' and src_feat_size % num_groups != 0:
+        error_msg = f"The number of groups ({num_groups}) must divide the feature size ({src_feat_size}) during "
+        error_msg += "'mul-sum' reduction."
+        raise ValueError(error_msg)
+
     # Compute edge features
     if implementation == 'pytorch-custom':
-        edge_feats = NodeToEdgePyCustom.apply(node_src_feats, node_tgt_feats, edge_ids, reduction)
+        edge_feats = NodeToEdgePyCustom.apply(node_src_feats, node_tgt_feats, edge_ids, reduction, num_groups)
 
     elif implementation == 'pytorch-naive':
         edge_src_feats = node_src_feats[edge_ids[0]]
@@ -85,10 +94,17 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', impl
 
         if reduction == 'dot':
             edge_feats = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).view(-1, 1)
+
         elif reduction == 'mul':
             edge_feats = edge_src_feats * edge_tgt_feats
+
+        elif reduction == 'mul-sum':
+            edge_feats = edge_src_feats * edge_tgt_feats
+            edge_feats = edge_feats.view(-1, num_groups, src_feat_size // num_groups).sum(dim=2)
+
         elif reduction == 'sum':
             edge_feats = edge_src_feats + edge_tgt_feats
+
         else:
             error_msg = f"Invalid reduction string for the node_to_edge function (got '{reduction}')."
             raise ValueError(error_msg)
