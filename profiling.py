@@ -411,7 +411,7 @@ elif profiling_args.model == 'gc':
 elif profiling_args.model == 'gct':
     main_args.num_classes = 80
     main_args.arch_type = 'gct'
-    main_args.gct_cfg_path = './configs/gct/test_v0.py'
+    main_args.gct_cfg_path = './configs/gct/r50_l1_v0.py'
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')

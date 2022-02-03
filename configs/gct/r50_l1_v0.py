@@ -6,23 +6,24 @@ model = dict(
         name='resnet50',
         out_ids=[2],
     ),
-    struc_cfg=dict(
-        type='PosEncoder',
-        net_cfg=dict(
-            type='nn.Linear',
-            in_features=2,
-            out_features=64,
-            bias=True,
+    graph_cfg=dict(
+        type='Stage',
+        num_blocks=2,
+        return_intermediate=True,
+        in_proj_cfg=dict(
+            type='GraphProjector',
+            con_in_size=256,
+            con_out_size=256,
+            struc_in_size=2,
+            struc_out_size=64,
         ),
-    ),
-    graph_cfgs=[
-        dict(
+        block_cfg=dict(
             type='GraphToGraph',
             node_weight_iters=5,
             max_group_iters=100,
             con_cross_cfg=[
                 dict(
-                    type='GraphAttnFull',
+                    type='GraphAttn',
                     in_size=256,
                     struc_size=64,
                     norm='layer',
@@ -89,5 +90,5 @@ model = dict(
                 )
             ],
         ),
-    ],
+    ),
 )

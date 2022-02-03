@@ -17,17 +17,16 @@ class GCT(nn.Module):
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
         struc (nn.Module): Module computing the initial structure features from normalized node locations.
-        graph (nn.ModuleList): List of size [num_graph_modules] with modules performing graph-based processing.
+        graph (nn.Module): Module performing the subsequent graph-based processing.
     """
 
-    def __init__(self, map_cfg, struc_cfg, graph_cfgs):
+    def __init__(self, map_cfg, graph_cfg):
         """
         Initializes the GCT module.
 
         Args:
             map_cfg (Dict): Configuration dictionary specifying the initial map-based processing module.
-            struc_cfg (Dict): Configuration dictionary specifying the module computing the initial structure features.
-            graph_cfgs (List): List [num_graph_modules] of dictionaries specifying the graph-based processing modules.
+            graph_cfg (Dict): Configuration dictionary specifying the subsequent graph-based processing module.
         """
 
         # Initialization of default nn.Module
@@ -36,11 +35,8 @@ class GCT(nn.Module):
         # Build initial map-based processing module
         self.map = build_model(map_cfg)
 
-        # Build module computing the initial structure features
-        self.struc = build_model(struc_cfg)
-
-        # Build graph-based processing modules
-        self.graph = nn.ModuleList([build_model(graph_cfg) for graph_cfg in graph_cfgs])
+        # Build subsequent graph-based processing module
+        self.graph = build_model(graph_cfg)
 
     @staticmethod
     def get_param_families():
@@ -51,7 +47,7 @@ class GCT(nn.Module):
             List of strings containing the GCT parameter families.
         """
 
-        return ['map', 'struc', 'graph']
+        return ['map', 'graph']
 
     def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
         """
@@ -91,18 +87,13 @@ class GCT(nn.Module):
         graph['con_feats'] = graph.pop('node_feats')
 
         # Get initial structure features
-        graph['struc_feats'] = self.struc(graph.pop('node_xy'))
+        graph['struc_feats'] = graph.pop('node_xy')
 
         # Get initial edge weights
         num_edges = graph['edge_ids'].size(dim=1)
         graph['edge_weights'] = torch.ones(num_edges, dtype=torch.float, device=feat_map.device)
 
-        # Get graph list with initial graph
-        graph_list = [graph]
-
-        # Perform graph-based processing and add graphs to graph list
-        for graph_module in self.graph:
-            graph = graph_module(graph)
-            graph_list.append(graph)
+        # Get list with graphs
+        graph_list = self.graph(graph)
 
         return graph_list

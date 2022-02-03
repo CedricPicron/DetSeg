@@ -135,7 +135,7 @@ class SparseDenseMmPyCustom(Function):
         Args:
             ctx (FunctionCtx): Context object storing additional data.
             sparse_ids (LongTensor): Tensor containing the indices of the sparse input matrix of shape [2, num_elems].
-            sparse_vals (FloatTensor): Tensor containing the values of the sparse input matrix of shape [num_elems].
+            sparse_vals (FloatTensor): Values of the sparse input matrix of shape [num_elems, num_heads].
             sparse_size (Tuple): Tuple containing the size of the sparse input matrix [M, N].
             dense_matrix (FloatTensor): Dense input matrix of shape [N, P].
 
@@ -144,11 +144,15 @@ class SparseDenseMmPyCustom(Function):
         """
 
         # Perform sparse-dense matrix multiplication
-        inter_matrix = sparse_vals[:, None] * dense_matrix[sparse_ids[1]]
-        src_ids = sparse_ids[0][:, None].expand_as(inter_matrix)
+        num_elems, num_heads = sparse_vals.size()
+        inter_matrix = dense_matrix[sparse_ids[1]].view(num_elems, num_heads, -1)
+        inter_matrix = sparse_vals[:, :, None] * inter_matrix
+        inter_matrix = inter_matrix.view(num_elems, -1)
 
         out_size = (sparse_size[0], dense_matrix.size(dim=1))
         out_matrix = torch.zeros(out_size, dtype=dense_matrix.dtype, device=dense_matrix.device)
+
+        src_ids = sparse_ids[0][:, None].expand_as(inter_matrix)
         out_matrix.scatter_add_(dim=0, index=src_ids, src=inter_matrix)
 
         # Store input tensors and source indices for backward pass
@@ -179,12 +183,15 @@ class SparseDenseMmPyCustom(Function):
         src_ids = ctx.src_ids
 
         # Get gradient tensors
+        num_elems, num_heads = sparse_vals.size()
         grad_inter_matrix = grad_out_matrix.gather(dim=0, index=src_ids)
+        grad_inter_matrix = grad_inter_matrix.view(num_elems, num_heads, -1)
 
-        grad_sparse_vals = grad_inter_matrix * dense_matrix[sparse_ids[1]]
-        grad_sparse_vals = grad_sparse_vals.sum(dim=1)
+        grad_sparse_vals = grad_inter_matrix * dense_matrix[sparse_ids[1]].view(num_elems, num_heads, -1)
+        grad_sparse_vals = grad_sparse_vals.sum(dim=2)
 
-        grad_dense_matrix = grad_inter_matrix * sparse_vals[:, None]
+        grad_dense_matrix = grad_inter_matrix * sparse_vals[:, :, None]
+        grad_dense_matrix = grad_dense_matrix.view(num_elems, -1)
         grad_dense_matrix = torch.zeros_like(dense_matrix).index_add_(0, sparse_ids[1], grad_dense_matrix)
 
         grad_sparse_ids = None

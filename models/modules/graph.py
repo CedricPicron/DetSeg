@@ -16,9 +16,9 @@ from models.functional.sparse import sparse_dense_mm
 
 
 @MODELS.register_module()
-class GraphAttnFull(nn.Module):
+class GraphAttn(nn.Module):
     """
-    Class implementing the GraphAttnFull module.
+    Class implementing the GraphAttn module.
 
     Attributes:
         norm (nn.Module): Optional pre-normalization module.
@@ -37,7 +37,7 @@ class GraphAttnFull(nn.Module):
     def __init__(self, in_size, struc_size=None, norm='', act_fn='', qk_size=-1, val_size=-1, out_size=-1, num_heads=8,
                  skip=True):
         """
-        Initializes the GraphAttnFull module.
+        Initializes the GraphAttn module.
 
         Args:
             in_size (int): Size of input features.
@@ -68,7 +68,7 @@ class GraphAttnFull(nn.Module):
         elif norm == 'layer':
             self.norm = nn.LayerNorm(in_size)
         else:
-            error_msg = f"The GraphAttnFull module does not support the '{norm}' normalization type."
+            error_msg = f"The GraphAttn module does not support the '{norm}' normalization type."
             raise ValueError(error_msg)
 
         # Initialization of optional module with activation function
@@ -79,7 +79,7 @@ class GraphAttnFull(nn.Module):
         elif act_fn == 'relu':
             self.act_fn = nn.ReLU(inplace=False) if not norm and skip else nn.ReLU(inplace=True)
         else:
-            error_msg = f"The GraphAttnFull module does not support the '{act_fn}' activation function."
+            error_msg = f"The GraphAttn module does not support the '{act_fn}' activation function."
 
         # Get and check query and key feature size
         qk_size = qk_size if qk_size != -1 else in_size
@@ -132,7 +132,7 @@ class GraphAttnFull(nn.Module):
 
     def forward(self, in_feats, edge_ids, edge_weights=None, struc_feats=None):
         """
-        Forward method of the GraphAttnFull module.
+        Forward method of the GraphAttn module.
 
         Args:
             in_feats (FloatTensor): Input node features of shape [num_nodes, in_size].
@@ -182,22 +182,63 @@ class GraphAttnFull(nn.Module):
             attn_weights = edge_weights[:, None] * attn_weights
 
         # Get weighted value features
-        attn_ids = edge_ids[:, :, None].expand(-1, -1, self.num_heads)
-        attn_ids = torch.arange(self.num_heads, device=attn_ids.device) * attn_ids
-        attn_ids = attn_ids.view(2, -1)
-
-        attn_weights = attn_weights.view(-1)
-        attn_size = num_nodes * self.num_heads
-
-        val_feats = val_feats.view(attn_size, -1)
-        val_feats = sparse_dense_mm(attn_ids, attn_weights, (attn_size, attn_size), val_feats)
-        val_feats = val_feats.view(num_nodes, -1)
+        val_feats = sparse_dense_mm(edge_ids, attn_weights, (num_nodes, num_nodes), val_feats)
 
         # Get output features
         delta_feats = self.out_proj(val_feats)
         out_feats = in_feats + delta_feats if self.skip else delta_feats
 
         return out_feats
+
+
+@MODELS.register_module()
+class GraphProjector(nn.Module):
+    """
+    Class implementing the GraphProjector module.
+
+    Attributes:
+        con_proj (nn.Linear): Linear module projecting input content features to output content features.
+        struc_proj (nn.Linear): Linear module projecting input structure features to output structure features.
+    """
+
+    def __init__(self, con_in_size, con_out_size, struc_in_size, struc_out_size):
+        """
+        Initializes the GraphProjector module.
+
+        Args:
+            con_in_size (int): Integer containing the input content feature size.
+            con_out_size (int): Integer containing the output content feature size.
+            struc_in_size (int): Integer containing the input structure feature size.
+            struc_out_size (int): Integer containing the output structure feature size.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build linear projection modules
+        self.con_proj = nn.Linear(con_in_size, con_out_size)
+        self.struc_proj = nn.Linear(struc_in_size, struc_out_size)
+
+    def forward(self, in_graph):
+        """
+        Forward method of the GraphProjector module.
+
+        Args:
+            in_graph (Dict): Input graph dictionary containing at least following keys:
+                con_feats (FloatTensor): input content features of shape [num_nodes, con_in_size];
+                struc_feats (FloatTensor): input structure features of shape [num_nodes, struc_in_size].
+
+            out_graph (Dict): Output graph dictionary containing at least following keys:
+                con_feats (FloatTensor): output content features of shape [num_nodes, con_out_size];
+                struc_feats (FloatTensor): output structure features of shape [num_nodes, struc_out_size].
+        """
+
+        # Get output content and structure features
+        out_graph = in_graph.copy()
+        out_graph['con_feats'] = self.con_proj(in_graph['con_feats'])
+        out_graph['struc_feats'] = self.struc_proj(in_graph['struc_feats'])
+
+        return out_graph
 
 
 @MODELS.register_module()
