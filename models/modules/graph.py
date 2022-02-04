@@ -155,13 +155,13 @@ class GraphAttn(nn.Module):
         delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
         delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
 
-        # Add (projected) structure features to input features if provided
+        # Get structure-enhanced delta features
         if struc_feats is not None:
             if hasattr(self, 'struc_proj'):
-                delta_feats = delta_feats + self.struc_proj(struc_feats)
+                delta_struc_feats = delta_feats + self.struc_proj(struc_feats)
 
             elif in_feats.size(dim=1) == struc_feats.size(dim=1):
-                delta_feats = delta_feats + struc_feats
+                delta_struc_feats = delta_feats + struc_feats
 
             else:
                 error_msg = "The input and structure feature sizes must be equal when no structure feature size was "
@@ -169,8 +169,8 @@ class GraphAttn(nn.Module):
                 raise ValueError(error_msg)
 
         # Get query, key and value features
-        qry_feats = self.qry_proj(delta_feats)
-        key_feats = self.key_proj(delta_feats)
+        qry_feats = self.qry_proj(delta_struc_feats)
+        key_feats = self.key_proj(delta_struc_feats)
         val_feats = self.val_proj(delta_feats)
 
         # Get attention weights
