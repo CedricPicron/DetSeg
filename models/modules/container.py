@@ -61,10 +61,10 @@ class Stage(nn.Module):
     with support for input and output projection modules.
 
     Attributes:
-        blocks (Sequential): Sequence of block modules.
-        return_inter_blocks (bool): Boolean indicating whether intermediate block outputs should be returned.
         in_proj (nn.Module): Optional module implementing the input projection module (None when missing).
+        blocks (Sequential): Sequence of block modules.
         out_proj (nn.Module): Optional module implementing the output projection module (None when missing).
+        return_inter_blocks (bool): Boolean indicating whether intermediate block outputs should be returned.
     """
 
     def __init__(self, block_cfg, num_blocks=1, return_inter_blocks=False, in_proj_cfg=None, out_proj_cfg=None):
@@ -82,16 +82,13 @@ class Stage(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build block modules
-        blocks = [build_model(block_cfg) for _ in range(num_blocks)]
-        self.blocks = Sequential(*blocks)
+        # Build sub-modules
+        self.in_proj = build_model(in_proj_cfg) if in_proj_cfg is not None else None
+        self.blocks = Sequential(*[build_model(block_cfg) for _ in range(num_blocks)])
+        self.out_proj = build_model(out_proj_cfg) if out_proj_cfg is not None else None
 
         # Set return_inter_blocks attribute
         self.return_inter_blocks = return_inter_blocks
-
-        # Build optional input and output projection modules if provided
-        self.in_proj = build_model(in_proj_cfg) if in_proj_cfg is not None else None
-        self.out_proj = build_model(out_proj_cfg) if out_proj_cfg is not None else None
 
     def forward(self, input):
         """
@@ -136,15 +133,17 @@ class Net(nn.Module):
         return_inter_blocks (bool): Boolean indicating whether intermediate block outputs should be returned.
     """
 
-    def __init__(self, base_stage_cfg, blocks_per_stage, scale_factors, scale_tags, return_inter_stages=False):
+    def __init__(self, base_stage_cfg, blocks_per_stage, scale_factors, scale_tags, scale_overwrites=None,
+                 return_inter_stages=False):
         """
         Initializes the Net module.
 
         Args:
             base_stage_cfg (Dict): Configuration dictionary specifying the base stage module.
-            blocks_per_stage (Tuple): Tuple [num_stages] containing the number of blocks per stage.
-            scale_factors (Tuple): Tuple [num_stages] containing the factors scaling the base stage feature sizes.
-            scale_tags (Tuple): Tuple [num_tags] of strings tagging keys from base stage configuration to be scaled.
+            blocks_per_stage (List): List [num_stages] containing the number of blocks per stage.
+            scale_factors (List): List [num_stages] containing the factors scaling the base stage feature sizes.
+            scale_tags (List): List [num_tags] of strings tagging keys from base stage configuration to be scaled.
+            scale_overwrites (List): List [num_overwrites] of lists with stage-specific overwrites (default=None).
             return_inter_stages (bool): Whether intermediate stage outputs should be returned (default=False).
         """
 
@@ -152,25 +151,47 @@ class Net(nn.Module):
         super().__init__()
 
         # Build stage modules
+        num_stages = len(blocks_per_stage)
         return_inter_blocks = base_stage_cfg.pop('return_inter_blocks', False)
+        scale_overwrites = [] if scale_overwrites is None else scale_overwrites
         stages = []
 
-        for num_blocks, scale_factor in zip(blocks_per_stage, scale_factors):
+        for stage_id in range(num_stages):
+            num_blocks = blocks_per_stage[stage_id]
+            scale_factor = scale_factors[stage_id]
+
+            def cfg_scaling(cfg, scale, tags):
+                if isinstance(cfg, dict):
+                    for k, v in cfg.items():
+                        if isinstance(v, (dict, list)):
+                            cfg_scaling(v, scale, tags)
+                            continue
+
+                        for tag in tags:
+                            if tag in k:
+                                cfg[k] = scale * v
+
+                elif isinstance(cfg, list):
+                    for cfg_i in cfg:
+                        cfg_scaling(cfg_i, scale, tags)
+
             stage_cfg = deepcopy(base_stage_cfg)
+            cfg_scaling(stage_cfg, scale_factor, scale_tags)
+
+            for overwrite in scale_overwrites:
+                if overwrite[0] == stage_id:
+                    item = stage_cfg
+
+                    for key in overwrite[1:-2]:
+                        item = item[key]
+
+                    key, value = overwrite[-2:]
+                    item[key] = value
 
             block_cfg = stage_cfg.pop('block_cfg')
             in_proj_cfg = stage_cfg.pop('in_proj_cfg', None)
             out_proj_cfg = stage_cfg.pop('out_proj_cfg', None)
-            cfg_list = [block_cfg, in_proj_cfg, out_proj_cfg]
 
-            for tag in scale_tags:
-                for cfg in cfg_list:
-                    if cfg is not None:
-                        for k, v in cfg.items():
-                            if tag in k:
-                                cfg[k] = scale_factor * v
-
-            block_cfg, in_proj_cfg, out_proj_cfg = cfg_list
             stage = Stage(block_cfg, num_blocks, return_inter_blocks, in_proj_cfg, out_proj_cfg)
             stages.append(stage)
 
@@ -200,12 +221,14 @@ class Net(nn.Module):
 
             if self.return_inter_blocks:
                 input = stage_output[-1]
+            else:
+                input = stage_output
 
-                if self.return_inter_stages:
+            if self.return_inter_stages:
+                if self.return_inter_blocks:
                     output.extend(stage_output)
-
-            elif self.return_inter_stages:
-                output.append(stage_output)
+                else:
+                    output.append(stage_output)
 
         if not self.return_inter_stages:
             output = stage_output

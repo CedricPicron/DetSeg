@@ -124,7 +124,7 @@ class GraphAttn(nn.Module):
         zeros_(self.val_proj.bias)
 
         self.out_proj = nn.Linear(val_size, out_size, bias=False)
-        xavier_uniform_(self.out_proj.weight)
+        zeros_(self.out_proj.weight)
 
         # Set additional attributes
         self.num_heads = num_heads

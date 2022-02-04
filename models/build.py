@@ -1,6 +1,7 @@
 """
 Function building registered models.
 """
+from copy import deepcopy
 
 from mmcv.cnn import initialize
 from mmcv.utils import build_from_cfg, Registry
@@ -31,6 +32,7 @@ def build_model_from_cfg(cfg, registry, default_args=None):
 
     # Build sub-modules
     for cfg_i in cfg:
+        cfg_i = deepcopy(cfg_i)
         init_cfg = cfg_i.pop('init_cfg', None)
 
         for _ in range(cfg_i.pop('num_layers', 1)):
