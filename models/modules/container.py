@@ -42,7 +42,10 @@ class Sequential(nn.Sequential):
         # Iterate over all sub-modules
         for module in self:
             module_kwargs = {name: kwargs[name] for name in signature(module.forward).parameters if name in kwargs}
+            module_kwargs = kwargs if 'kwargs' in signature(module.forward).parameters else module_kwargs
+
             input = module(input, **module_kwargs)
+            kwargs.update(module_kwargs)
             output.append(input)
 
         # Select output from final sub-module if requested

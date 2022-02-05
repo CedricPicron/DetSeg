@@ -59,7 +59,7 @@ class GC(nn.Module):
             gc_dict = safe_load(stream)
 
         # Get expected feature sizes from input maps and get layers
-        feat_sizes = deepcopy(in_sizes)
+        feat_sizes = list(deepcopy(in_sizes))
         layers = gc_dict.setdefault('layers', [])
 
         # Initialize modules and operations attributes

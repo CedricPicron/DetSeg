@@ -63,11 +63,13 @@ if profiling_args.model == 'bch_dod':
 elif profiling_args.model == 'bch_sbd':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
-    main_args.backbone_type = 'resnet'
+    main_args.backbone_type = 'mmdet'
+    main_args.mmdet_backbone_cfg_path = './configs/mmdet/backbones/resnext_101_dcn_v1.py'
     main_args.core_type = 'gc'
+    main_args.core_ids = [2, 3, 4, 5, 6, 7]
     main_args.dc_num_layers = 6
     main_args.dc_da_num_points = 4
-    main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
+    main_args.gc_yaml = './configs/gc/tpn_27_3x2_gn_dcn.yaml'
     main_args.heads = ['sbd']
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
@@ -78,7 +80,7 @@ elif profiling_args.model == 'bch_sbd':
     main_args.sbd_update_types = ['ca', 'sa', 'ffn']
     main_args.sbd_update_layers = 6
     main_args.sbd_ca_version = 0
-    main_args.sbd_ca_num_points = 4
+    main_args.sbd_ca_num_points = 1
     main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
