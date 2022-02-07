@@ -31,6 +31,7 @@ model = dict(
             ),
             block_cfg=dict(
                 type='GraphToGraph',
+                zero_grad_thr=-0.1,
                 node_weight_iters=5,
                 max_group_iters=100,
                 con_cross_cfg=[

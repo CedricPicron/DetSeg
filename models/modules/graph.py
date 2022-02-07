@@ -5,12 +5,12 @@ import math
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 from torch.nn.init import xavier_uniform_, zeros_
 from torch_scatter import scatter
 from torch_sparse import coalesce, spmm
 
 from models.build import build_model, MODELS
+from models.functional.activation import custom_relu
 from models.functional.graph import node_to_edge
 from models.functional.sparse import sparse_dense_mm
 
@@ -251,12 +251,13 @@ class GraphToGraph(nn.Module):
         edge_score (nn.Module): Module implementing the edge score network.
         con_self (nn.Module): Module implementing the content self-update network.
         struc_self (nn.Module): Module implementing the structure self-update network.
+        zero_grad_thr (float): Zero gradient threshold of the custom ReLU activation function.
         node_weight_iters (int): Number of iterations during node weight computation.
         max_group_iters (int): Maximum number of iterations during node grouping.
   """
 
-    def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, node_weight_iters=5,
-                 max_group_iters=100):
+    def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, zero_grad_thr=-0.1,
+                 node_weight_iters=5, max_group_iters=100):
         """
         Initializes the GraphToGraph module.
 
@@ -265,6 +266,7 @@ class GraphToGraph(nn.Module):
             edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
             con_self_cfg (Dict): Configuration dictionary specifying the content self-update network.
             struc_self_cfg (Dict): Configuration dictionary specifying the structure self-update network.
+            zero_grad_thr (float): Zero gradient threshold of the custom ReLU activation function (default=-0.1).
             node_weight_iters (int): Number of iterations during node weight computation (default=5).
             max_group_iters (int): Maximum number of iterations during node grouping (default=100).
         """
@@ -279,6 +281,7 @@ class GraphToGraph(nn.Module):
         self.struc_self = build_model(struc_self_cfg)
 
         # Set additional attributes
+        self.zero_grad_thr = zero_grad_thr
         self.node_weight_iters = node_weight_iters
         self.max_group_iters = max_group_iters
 
@@ -321,7 +324,7 @@ class GraphToGraph(nn.Module):
         # Get unnormalized edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
         edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids).squeeze(dim=1)
-        edge_scores = F.relu(edge_scores, inplace=True)
+        edge_scores = custom_relu(edge_scores, zero_grad_thr=self.zero_grad_thr)
 
         # Get normalized edge scores
         comp_edge_ids = pruned_edge_ids.flipud()

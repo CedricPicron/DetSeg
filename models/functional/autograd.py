@@ -5,6 +5,67 @@ Collection of custom autograd functions.
 import torch
 from torch.autograd import Function
 from torch.autograd.function import once_differentiable
+import torch.nn.functional as F
+
+
+class CustomReLU(Function):
+    """
+    Class implementing the CustomReLU autograd function.
+
+    This custom autograd function alters the backward pass by only setting an input gradient to zero if the input is
+    lower than the zero gradient threshold and higher input values would result in a higher loss.
+    """
+
+    @staticmethod
+    def forward(ctx, in_tensor, zero_grad_thr=0.0):
+        """
+        Forward method of the CustomReLU autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            in_tensor (FloatTensor): Input tensor of arbitrary shape.
+            zero_grad_thr (float): Value containing the zero gradient threshold (default=0.0).
+
+        Returns:
+            out_tensor (FloatTensor): Output tensor of same shape as input tensor.
+        """
+
+        # Apply ReLU
+        out_tensor = F.relu(in_tensor, inplace=False)
+
+        # Save input tensor and zero gradient threshold for backward pass
+        ctx.save_for_backward(in_tensor)
+        ctx.zero_grad_thr = zero_grad_thr
+
+        return out_tensor
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_out_tensor):
+        """
+        Backward method of the CustomReLU autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_out_tensor (FloatTensor): Gradient w.r.t. the output tensor.
+
+        Returns:
+            grad_in_tensor (FloatTensor): Gradient w.r.t. the input tensor.
+            grad_zero_grad_thr (None): None.
+        """
+
+        # Recover stored input tensor and zero gradient threshold
+        in_tensor = ctx.saved_tensors[0]
+        zero_grad_thr = ctx.zero_grad_thr
+
+        # Get gradient tensors
+        zero_mask = (in_tensor < zero_grad_thr) & (grad_out_tensor > 0)
+        zero_tensor = torch.zeros_like(grad_out_tensor)
+
+        grad_in_tensor = torch.where(zero_mask, zero_tensor, grad_out_tensor)
+        grad_zero_grad_thr = None
+
+        return grad_in_tensor, grad_zero_grad_thr
 
 
 class NodeToEdgePyCustom(Function):
