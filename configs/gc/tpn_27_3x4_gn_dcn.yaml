@@ -295,7 +295,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 2
+        num_layers: 4
         in:
           - - 0  # P7
           - - 6  # P6
@@ -342,7 +342,7 @@ layers:
       # Bottleneck layer
       - type: 'layer'
         name: 'bottleneck'
-        num_layers: 2
+        num_layers: 4
         in:
           - - 16 # P2
           - - 17 # P3
