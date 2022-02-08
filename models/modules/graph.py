@@ -367,12 +367,27 @@ class GraphToGraph(nn.Module):
         con_feats = scatter(node_weights * con_feats, group_ids, dim=0, reduce='sum')
         struc_feats = scatter(node_weights * struc_feats, group_ids, dim=0, reduce='sum')
 
+        new_edge_ids = group_ids[edge_ids]
+        diff_group = new_edge_ids[0] != new_edge_ids[1]
+
+        if diff_group.sum() > 0:
+            sparse_ids = new_edge_ids[:, diff_group]
+            sparse_vals = edge_scores[diff_group]
+            sparse_ids, sparse_vals = coalesce(sparse_ids, sparse_vals, num_groups, num_groups, op='add')
+            sparse_ids = sparse_ids.flipud()
+
+            delta_con_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), con_feats)
+            delta_struc_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), struc_feats)
+
+            con_feats = con_feats + delta_con_feats
+            struc_feats = struc_feats + delta_struc_feats
+
         con_feats = self.con_self(con_feats)
         struc_feats = self.struc_self(struc_feats)
 
         # Get new edge indices and edge weights
         edge_weights = node_weights[edge_ids[0]].squeeze(dim=1) * edge_weights
-        edge_ids, edge_weights = coalesce(group_ids[edge_ids], edge_weights, num_groups, num_groups, op='add')
+        edge_ids, edge_weights = coalesce(new_edge_ids, edge_weights, num_groups, num_groups, op='add')
 
         # Get new node batch indices
         node_batch_ids = scatter(node_batch_ids, group_ids, dim=0, reduce='min')
