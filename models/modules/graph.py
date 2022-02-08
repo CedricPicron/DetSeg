@@ -290,29 +290,37 @@ class GraphToGraph(nn.Module):
         Forward method of the GraphToGraph module.
 
         Args:
-            in_graph (Dict): Input graph dictionary containing at least following keys:
+            in_graph (Dict): Input graph dictionary containing following keys:
+                graph_id (int): integer containing the graph index;
                 con_feats (FloatTensor): content features of shape [num_in_nodes, con_feat_size];
                 struc_feats (FloatTensor): structure features of shape [num_in_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_in_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_in_edges];
-                node_batch_ids (LongTensor): node batch indices of shape [num_in_nodes].
+                node_batch_ids (LongTensor): node batch indices of shape [num_in_nodes];
+                seg_maps (LongTensor): graph-based segmentation maps of shape [batch_size, fH, fW];
+                analysis_dict (Dict): dictionary of different analyses used for logging purposes only.
 
         Returns:
             out_graph (Dict): Output graph dictionary containing following keys:
+                graph_id (int): integer containing the graph index;
                 con_feats (FloatTensor): content features of shape [num_out_nodes, con_feat_size];
                 struc_feats (FloatTensor): structure features of shape [num_out_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_out_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_out_edges];
                 node_batch_ids (LongTensor): node batch indices of shape [num_out_nodes];
-                group_ids (LongTensor): group (i.e. output node) indices of input nodes of shape [num_in_nodes].
+                seg_maps (LongTensor): graph-based segmentation maps of shape [batch_size, fH, fW];
+                analysis_dict (Dict): dictionary of different analyses used for logging purposes only.
         """
 
         # Unpack input graph dictionary
+        graph_id = in_graph['graph_id']
         con_feats = in_graph['con_feats']
         struc_feats = in_graph['struc_feats']
         edge_ids = in_graph['edge_ids']
         edge_weights = in_graph['edge_weights']
         node_batch_ids = in_graph['node_batch_ids']
+        seg_maps = in_graph['seg_maps']
+        analysis_dict = in_graph['analysis_dict']
 
         # Get useful graph properties
         num_nodes = len(con_feats)
@@ -350,7 +358,7 @@ class GraphToGraph(nn.Module):
         group_edge_ids = edge_ids[:, edge_scores > 0]
         group_ids = torch.arange(num_nodes, device=device)
 
-        for _ in range(self.max_group_iters):
+        for iter_id in range(self.max_group_iters):
             old_group_ids = group_ids.clone()
             group_ids = scatter(group_ids[group_edge_ids[0]], group_edge_ids[1], dim=0, reduce='min')
 
@@ -359,6 +367,9 @@ class GraphToGraph(nn.Module):
 
         group_ids, group_sizes = torch.unique(group_ids, return_inverse=True, return_counts=True)[1:]
         num_groups = len(group_sizes)
+
+        analysis_dict[f'group_iters_{graph_id+1}'] = iter_id + 1
+        analysis_dict[f'num_nodes_{graph_id+1}'] = num_groups
 
         # Get normalized node weights
         node_weights = node_weights / group_sizes[group_ids, None]
@@ -392,14 +403,19 @@ class GraphToGraph(nn.Module):
         # Get new node batch indices
         node_batch_ids = scatter(node_batch_ids, group_ids, dim=0, reduce='min')
 
+        # Get new graph-based segmentation maps
+        seg_maps = group_ids[seg_maps]
+
         # Construct output graph dictionary
         out_graph = {}
+        out_graph['graph_id'] = graph_id + 1
         out_graph['con_feats'] = con_feats
         out_graph['struc_feats'] = struc_feats
         out_graph['edge_ids'] = edge_ids
         out_graph['edge_weights'] = edge_weights
         out_graph['node_batch_ids'] = node_batch_ids
-        out_graph['group_ids'] = group_ids
+        out_graph['seg_maps'] = seg_maps
+        out_graph['analysis_dict'] = analysis_dict
 
         return out_graph
 

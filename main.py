@@ -500,6 +500,8 @@ def get_parser():
 
     # * Learning rates (BCH and BVN)
     parser.add_argument('--lr_core', default=1e-4, type=float, help='core learning rate')
+
+    # * Learning rates (BCH, BVN and GCT)
     parser.add_argument('--lr_heads', default=1e-4, type=float, help='heads learning rate')
 
     # * Learning rates (Deformable DETR)
@@ -511,6 +513,10 @@ def get_parser():
     parser.add_argument('--lr_decoder', default=1e-4, type=float, help='DETR decoder learning rate')
     parser.add_argument('--lr_class_head', default=1e-4, type=float, help='DETR classification head learning rate')
     parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
+
+    # * Learning rates (GCT)
+    parser.add_argument('--lr_map', default=1e-5, type=float, help='GCT map learning rate')
+    parser.add_argument('--lr_graph', default=1e-4, type=float, help='GCT graph learning rate')
 
     # * Learning rates (MMDetArch)
     parser.add_argument('--lr_neck', default=1e-4, type=float, help='neck learning rate')

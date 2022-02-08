@@ -19,9 +19,9 @@ model = dict(
             [2, 'block_cfg', 'edge_score_cfg', 3, 'out_features', 1],
             [2, 'block_cfg', 'edge_score_cfg', 3, 'init_cfg', 'val', 0.0026],
         ],
-        return_inter_stages=True,
+        return_inter_stages=False,
         base_stage_cfg=dict(
-            return_inter_blocks=True,
+            return_inter_blocks=False,
             in_proj_cfg=dict(
                 type='GraphProjector',
                 con_in_size=128,
@@ -95,6 +95,48 @@ model = dict(
                         skip=True,
                     )
                 ],
+            ),
+        ),
+    ),
+    heads=dict(
+        graph_seg=dict(
+            struc_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=64,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=2,
+                    in_size=64,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+            ],
+            pos_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=2,
+                    out_features=64,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=2,
+                    in_size=64,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+            ],
+            loss_cfg=dict(
+                type='SigmoidFocalLoss',
+                alpha=0.25,
+                gamma=2.0,
+                weight=1.0,
             ),
         ),
     ),

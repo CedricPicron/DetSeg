@@ -429,7 +429,7 @@ elif profiling_args.model == 'gct':
     inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
-    backward_stmt = "sum([v.sum() for k, v in model(**inputs)[-1].items() if 'feats' in k]).backward()"
+    backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'global_decoder':
     main_args.decoder_type = 'global'

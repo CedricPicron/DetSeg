@@ -2,10 +2,67 @@
 Collection of modules implementing losses.
 """
 
+from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
 
 from models.build import MODELS
+
+
+@MODELS.register_module()
+class SigmoidFocalLoss(nn.Module):
+    """
+    Class implementing the sigmoid focal loss module.
+
+    Attributes:
+        alpha (float): Alpha value of the sigmoid focal loss function.
+        gamma (float): Gamma value of the sigmoid focal loss function.
+        weight (float): Factor weighting the sigmoid focal loss.
+    """
+
+    def __init__(self, alpha=0.25, gamma=2.0, weight=1.0):
+        """
+        Initializes the SigmoidFocalLoss module.
+
+        Args:
+            alpha (float): Alpha value of the sigmoid focal loss function (default=0.25).
+            gamma (float): Gamma valud of the sigmoid focal loss function (default=2.0).
+            weight (float): Factor weighting the sigmoid focal loss (default=1.0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.alpha = alpha
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, pred_logits, tgt_labels, reduction='none'):
+        """
+        Forward method of the SigmoidFocalLoss module.
+
+        Args:
+            pred_logits (FloatTensor): Tensor with prediction logits of shape [*].
+            tgt_labels (Tensor): Tensor with binary classification labels of shape [*].
+            reduction (str): String specifying the reduction operation applied on element-wise losses (default='none').
+
+        Returns:
+            * If reduction is 'none':
+                loss (FloatTensor): Tensor with element-wise sigmoid focal losses of shape [*]
+
+            * If reduction is 'mean':
+                loss (FloatTensor): Mean of tensor with element-wise sigmoid focal losses of shape [1].
+
+            * If reduction is 'sum':
+                loss (FloatTensor): Sum of tensor with element-wise sigmoid focal losses of shape [1].
+        """
+
+        # Get weighted sigmoid focal loss
+        tgt_labels = tgt_labels.to(pred_logits.dtype)
+        loss = self.weight * sigmoid_focal_loss(pred_logits, tgt_labels, self.alpha, self.gamma, reduction)
+
+        return loss
 
 
 @MODELS.register_module()
