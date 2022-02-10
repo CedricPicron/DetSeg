@@ -8,6 +8,58 @@ from torch.autograd.function import once_differentiable
 import torch.nn.functional as F
 
 
+class CustomClamp(Function):
+    """
+    Class implementing the CustomClamp autograd function.
+
+    This custom autograd function alters the backward pass by computing gradients as if no clamping occurred in the
+    forward pass.
+    """
+
+    @staticmethod
+    def forward(ctx, in_tensor, min=None, max=None):
+        """
+        Forward method of the CustomClamp autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            in_tensor (FloatTensor): Input tensor of arbitrary shape.
+            min (float): Minimum value of clamped tensor (default=None).
+            max (float): Maximum value of clamped tensor (default=None).
+
+        Returns:
+            out_tensor (FloatTensor): Clamped output tensor of same shape as input tensor.
+        """
+
+        # Get clamped output tensor
+        out_tensor = torch.clamp(in_tensor, min=min, max=max)
+
+        return out_tensor
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_out_tensor):
+        """
+        Backward method of the CustomClamp autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_out_tensor (FloatTensor): Gradient w.r.t. the output tensor.
+
+        Returns:
+            grad_in_tensor (FloatTensor): Gradient w.r.t. the input tensor.
+            grad_min (None): None.
+            grad_max (None): None.
+        """
+
+        # Get gradient tensors
+        grad_in_tensor = grad_out_tensor
+        grad_min = None
+        grad_max = None
+
+        return grad_in_tensor, grad_min, grad_max
+
+
 class CustomReLU(Function):
     """
     Class implementing the CustomReLU autograd function.

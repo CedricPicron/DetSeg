@@ -1,6 +1,7 @@
 """
 Collection of modules related to graphs.
 """
+from copy import deepcopy
 import math
 
 import torch
@@ -226,17 +227,22 @@ class GraphProjector(nn.Module):
         Args:
             in_graph (Dict): Input graph dictionary containing at least following keys:
                 con_feats (FloatTensor): input content features of shape [num_nodes, con_in_size];
-                struc_feats (FloatTensor): input structure features of shape [num_nodes, struc_in_size].
+                dyn_struc_feats (FloatTensor): input dynamic structure features of shape [num_nodes, struc_in_size];
+                sta_struc_feats (FloatTensor): input static structure features of shape [num_nodes, struc_in_size].
 
             out_graph (Dict): Output graph dictionary containing at least following keys:
                 con_feats (FloatTensor): output content features of shape [num_nodes, con_out_size];
-                struc_feats (FloatTensor): output structure features of shape [num_nodes, struc_out_size].
+                dyn_struc_feats (FloatTensor): output dynamic structure features of shape [num_nodes, struc_out_size];
+                sta_struc_feats (FloatTensor): output static structure features of shape [num_nodes, struc_out_size].
         """
 
         # Get output content and structure features
         out_graph = in_graph.copy()
         out_graph['con_feats'] = self.con_proj(in_graph['con_feats'])
-        out_graph['struc_feats'] = self.struc_proj(in_graph['struc_feats'])
+        out_graph['sta_struc_feats'] = self.struc_proj(in_graph['sta_struc_feats'])
+
+        frozen_struc_proj = deepcopy(self.struc_proj).requires_grad_(False)
+        out_graph['dyn_struc_feats'] = frozen_struc_proj(in_graph['dyn_struc_feats'])
 
         return out_graph
 
@@ -293,7 +299,8 @@ class GraphToGraph(nn.Module):
             in_graph (Dict): Input graph dictionary containing following keys:
                 graph_id (int): integer containing the graph index;
                 con_feats (FloatTensor): content features of shape [num_in_nodes, con_feat_size];
-                struc_feats (FloatTensor): structure features of shape [num_in_nodes, struc_feat_size];
+                dyn_struc_feats (FloatTensor): dynamic structure features of shape [num_in_nodes, struc_feat_size];
+                sta_struc_feats (FloatTensor): static structure features of shape [num_in_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_in_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_in_edges];
                 node_batch_ids (LongTensor): node batch indices of shape [num_in_nodes];
@@ -304,7 +311,8 @@ class GraphToGraph(nn.Module):
             out_graph (Dict): Output graph dictionary containing following keys:
                 graph_id (int): integer containing the graph index;
                 con_feats (FloatTensor): content features of shape [num_out_nodes, con_feat_size];
-                struc_feats (FloatTensor): structure features of shape [num_out_nodes, struc_feat_size];
+                dyn_struc_feats (FloatTensor): dynamic structure features of shape [num_out_nodes, struc_feat_size];
+                sta_struc_feats (FloatTensor): static structure features of shape [num_out_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_out_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_out_edges];
                 node_batch_ids (LongTensor): node batch indices of shape [num_out_nodes];
@@ -315,7 +323,8 @@ class GraphToGraph(nn.Module):
         # Unpack input graph dictionary
         graph_id = in_graph['graph_id']
         con_feats = in_graph['con_feats']
-        struc_feats = in_graph['struc_feats']
+        dyn_struc_feats = in_graph['dyn_struc_feats']
+        sta_struc_feats = in_graph['sta_struc_feats']
         edge_ids = in_graph['edge_ids']
         edge_weights = in_graph['edge_weights']
         node_batch_ids = in_graph['node_batch_ids']
@@ -327,7 +336,8 @@ class GraphToGraph(nn.Module):
         device = edge_ids.device
 
         # Update content features using neighboring features
-        con_feats = self.con_cross(con_feats, edge_ids=edge_ids, edge_weights=edge_weights, struc_feats=struc_feats)
+        cross_kwargs = {'edge_ids': edge_ids, 'edge_weights': edge_weights, 'struc_feats': dyn_struc_feats.detach()}
+        con_feats = self.con_cross(con_feats, **cross_kwargs)
 
         # Get unnormalized edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
@@ -376,7 +386,8 @@ class GraphToGraph(nn.Module):
 
         # Get new content and structure features
         con_feats = scatter(node_weights * con_feats, group_ids, dim=0, reduce='sum')
-        struc_feats = scatter(node_weights * struc_feats, group_ids, dim=0, reduce='sum')
+        dyn_struc_feats = scatter(node_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
+        sta_struc_feats = scatter(node_weights.detach() * sta_struc_feats, group_ids, dim=0, reduce='sum')
 
         new_edge_ids = group_ids[edge_ids]
         diff_group = new_edge_ids[0] != new_edge_ids[1]
@@ -388,13 +399,17 @@ class GraphToGraph(nn.Module):
             sparse_ids = sparse_ids.flipud()
 
             delta_con_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), con_feats)
-            delta_struc_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), struc_feats)
+            delta_struc_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), dyn_struc_feats)
 
             con_feats = con_feats + delta_con_feats
-            struc_feats = struc_feats + delta_struc_feats
+            dyn_struc_feats = dyn_struc_feats + delta_struc_feats
+            sta_struc_feats = sta_struc_feats + delta_struc_feats.detach()
 
         con_feats = self.con_self(con_feats)
-        struc_feats = self.struc_self(struc_feats)
+        sta_struc_feats = self.struc_self(sta_struc_feats)
+
+        frozen_struc_self = deepcopy(self.struc_self).requires_grad_(False)
+        dyn_struc_feats = frozen_struc_self(dyn_struc_feats)
 
         # Get new edge indices and edge weights
         edge_weights = node_weights[edge_ids[0]].squeeze(dim=1) * edge_weights
@@ -410,7 +425,8 @@ class GraphToGraph(nn.Module):
         out_graph = {}
         out_graph['graph_id'] = graph_id + 1
         out_graph['con_feats'] = con_feats
-        out_graph['struc_feats'] = struc_feats
+        out_graph['dyn_struc_feats'] = dyn_struc_feats
+        out_graph['sta_struc_feats'] = sta_struc_feats
         out_graph['edge_ids'] = edge_ids
         out_graph['edge_weights'] = edge_weights
         out_graph['node_batch_ids'] = node_batch_ids

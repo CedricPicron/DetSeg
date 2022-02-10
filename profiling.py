@@ -425,7 +425,7 @@ elif profiling_args.model == 'gct':
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
 
-    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    optimizer = torch.optim.AdamW(model.parameters())
     inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"

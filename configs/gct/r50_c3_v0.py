@@ -99,6 +99,36 @@ model = dict(
         ),
     ),
     heads=dict(
+        graph_box=dict(
+            pred_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=64,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=2,
+                    in_size=64,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=64,
+                    out_features=4,
+                    bias=True,
+                ),
+            ],
+            loss_cfg=dict(
+                type='SmoothL1Loss',
+                reduction='sum',
+                beta=0.0,
+                weight=1.0,
+            ),
+        ),
         graph_seg=dict(
             struc_cfg=[
                 dict(

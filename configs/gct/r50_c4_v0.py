@@ -15,7 +15,7 @@ model = dict(
             [0, 'in_proj_cfg', 'con_in_size', 1024],
             [0, 'in_proj_cfg', 'struc_in_size', 2],
             [0, 'block_cfg', 'edge_score_cfg', 3, 'out_features', 1],
-            [0, 'block_cfg', 'edge_score_cfg', 3, 'init_cfg', 'val', 0.0024],
+            [0, 'block_cfg', 'edge_score_cfg', 3, 'init_cfg', 'val', 0.003],
         ],
         return_inter_stages=False,
         base_stage_cfg=dict(
@@ -66,7 +66,7 @@ model = dict(
                         in_features=64,
                         out_features=1,
                         bias=True,
-                        init_cfg=dict(type='Constant', layer='Linear', val=0.01, bias=-0.59),
+                        init_cfg=dict(type='Constant', layer='Linear', val=0.01, bias=-0.6),
                     ),
                 ],
                 con_self_cfg=[
@@ -97,6 +97,36 @@ model = dict(
         ),
     ),
     heads=dict(
+        graph_box=dict(
+            pred_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=64,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=2,
+                    in_size=64,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=64,
+                    out_features=4,
+                    bias=True,
+                ),
+            ],
+            loss_cfg=dict(
+                type='SmoothL1Loss',
+                reduction='sum',
+                beta=0.0,
+                weight=1.0,
+            ),
+        ),
         graph_seg=dict(
             struc_cfg=[
                 dict(

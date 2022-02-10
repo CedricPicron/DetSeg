@@ -8,6 +8,8 @@ from torch.nn.utils import clip_grad_norm_
 
 from models.build import build_model, MODELS
 from models.functional.graph import map_to_graph
+from models.functional.utils import custom_clamp
+from structures.boxes import Boxes, box_iou
 
 
 @MODELS.register_module()
@@ -119,7 +121,8 @@ class GCT(nn.Module):
 
         # Get initial structure features
         node_xy = graph.pop('node_xy')
-        graph['struc_feats'] = node_xy
+        graph['dyn_struc_feats'] = node_xy
+        graph['sta_struc_feats'] = node_xy
 
         # Get initial edge weights
         num_edges = graph['edge_ids'].size(dim=1)
@@ -136,13 +139,13 @@ class GCT(nn.Module):
         graph = self.graph(graph)
 
         # Unpack final graph dictionary
-        struc_feats = graph['struc_feats']
+        sta_struc_feats = graph['sta_struc_feats']
         graph_seg_maps = graph['seg_maps']
         node_batch_ids = graph['node_batch_ids']
         analysis_dict = graph['analysis_dict']
 
         # Get useful final graph properties
-        num_nodes = len(struc_feats)
+        num_nodes = len(sta_struc_feats)
         img_node_xy = node_xy.view(batch_size, -1, 2)[0]
         _, nodes_per_img = torch.unique_consecutive(node_batch_ids, return_counts=True)
         cum_nodes_per_img = torch.tensor([0, *nodes_per_img.cumsum(dim=0)])
@@ -150,11 +153,53 @@ class GCT(nn.Module):
         # Apply the various heads
         for head_type, head_dict in self.heads.items():
 
+            # Apply graph-box head
+            if head_type == 'graph_box':
+
+                # Get prediction boxes
+                pred_boxes = head_dict['pred'](sta_struc_feats)
+
+                pred_boxes_cxcy = custom_clamp(pred_boxes[:, :2], min=0.0, max=1.0)
+                pred_boxes_wh = custom_clamp(pred_boxes[:, 2:], min=1e-6, max=1.0)
+                pred_boxes = torch.cat([pred_boxes_cxcy, pred_boxes_wh], dim=1)
+
+                box_kwargs = {'normalized': 'img_with_padding', 'boxes_per_img': nodes_per_img}
+                pred_boxes = Boxes(pred_boxes, format='cxcywh', **box_kwargs)
+
+                # Get target boxes
+                tgt_boxes = []
+                pixel_size = torch.tensor([1/fW, 1/fH], device=feat_map.device)
+
+                for i in range(batch_size):
+                    graph_seg_map = graph_seg_maps[i]
+                    range_obj = range(cum_nodes_per_img[i], cum_nodes_per_img[i+1])
+
+                    for j in range_obj:
+                        tgt_xy = img_node_xy[(graph_seg_map == j).view(-1)]
+                        tgt_box_ij = torch.cat([tgt_xy.amin(dim=0), tgt_xy.amax(dim=0) + pixel_size], dim=0)
+                        tgt_boxes.append(tgt_box_ij)
+
+                tgt_boxes = torch.stack(tgt_boxes, dim=0)
+                tgt_boxes = Boxes(tgt_boxes, format='xyxy', **box_kwargs)
+                tgt_boxes = tgt_boxes.to_format('cxcywh')
+
+                # Get graph-box loss
+                loss = head_dict['loss'](pred_boxes.boxes, tgt_boxes.boxes)
+
+                if tgt_dict is not None:
+                    loss_dict[f'{head_type}_loss'] = loss
+                else:
+                    analysis_dict[f'{head_type}_loss'] = loss
+
+                # Get graph-box IoU
+                avg_iou = box_iou(pred_boxes, tgt_boxes).diag().mean()
+                analysis_dict[f'{head_type}_iou'] = 100 * avg_iou
+
             # Apply graph-segmentation head
-            if head_type == 'graph_seg':
+            elif head_type == 'graph_seg':
 
                 # Get prediction maps
-                struc_seg_feats = head_dict['struc'](struc_feats)
+                struc_seg_feats = head_dict['struc'](sta_struc_feats)
                 pos_feats = head_dict['pos'](img_node_xy)
                 pred_maps = torch.mm(struc_seg_feats, pos_feats.t()).view(num_nodes, fH, fW)
 
@@ -171,17 +216,23 @@ class GCT(nn.Module):
                 tgt_masks = torch.cat(tgt_masks, dim=0)
 
                 # Get graph-segmentation loss
-                loss = head_dict['loss'](pred_maps, tgt_masks, reduction='sum')
+                loss = head_dict['loss'](pred_maps, tgt_masks)
+                loss = loss / (fH * fW)
 
                 if tgt_dict is not None:
                     loss_dict[f'{head_type}_loss'] = loss
                 else:
                     analysis_dict[f'{head_type}_loss'] = loss
 
-                # Get graph-segmentation accuracy
+                # Get graph-segmentation IoU
                 pred_masks = pred_maps >= 0
-                accuracy = torch.eq(pred_masks, tgt_masks).sum() / pred_masks.numel()
-                analysis_dict[f'{head_type}_acc'] = 100 * accuracy
+                pred_masks = pred_masks.view(num_nodes, fH * fW)
+                tgt_masks = tgt_masks.view(num_nodes, fH * fW)
+
+                inter = (pred_masks & tgt_masks).sum(dim=1)
+                union = pred_masks.sum(dim=1) + tgt_masks.sum(dim=1) - inter
+                avg_iou = (inter / union).mean(dim=0, keepdim=True)
+                analysis_dict[f'{head_type}_iou'] = 100 * avg_iou
 
             else:
                 error_msg = f"The GCT heads dictionary contains an unknown head type '{head_type}'."

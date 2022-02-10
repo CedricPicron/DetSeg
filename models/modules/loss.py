@@ -5,6 +5,7 @@ Collection of modules implementing losses.
 from fvcore.nn import sigmoid_focal_loss
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 from models.build import MODELS
 
@@ -17,16 +18,18 @@ class SigmoidFocalLoss(nn.Module):
     Attributes:
         alpha (float): Alpha value of the sigmoid focal loss function.
         gamma (float): Gamma value of the sigmoid focal loss function.
+        reduction (str): String specifying the reduction operation applied on element-wise losses.
         weight (float): Factor weighting the sigmoid focal loss.
     """
 
-    def __init__(self, alpha=0.25, gamma=2.0, weight=1.0):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='mean', weight=1.0):
         """
         Initializes the SigmoidFocalLoss module.
 
         Args:
             alpha (float): Alpha value of the sigmoid focal loss function (default=0.25).
             gamma (float): Gamma valud of the sigmoid focal loss function (default=2.0).
+            reduction (str): String specifying the reduction operation applied on element-wise losses (default='mean').
             weight (float): Factor weighting the sigmoid focal loss (default=1.0).
         """
 
@@ -36,31 +39,31 @@ class SigmoidFocalLoss(nn.Module):
         # Set attributes
         self.alpha = alpha
         self.gamma = gamma
+        self.reduction = reduction
         self.weight = weight
 
-    def forward(self, pred_logits, tgt_labels, reduction='none'):
+    def forward(self, pred_logits, tgt_labels):
         """
         Forward method of the SigmoidFocalLoss module.
 
         Args:
             pred_logits (FloatTensor): Tensor with prediction logits of shape [*].
             tgt_labels (Tensor): Tensor with binary classification labels of shape [*].
-            reduction (str): String specifying the reduction operation applied on element-wise losses (default='none').
 
         Returns:
-            * If reduction is 'none':
+            * If self.reduction is 'none':
                 loss (FloatTensor): Tensor with element-wise sigmoid focal losses of shape [*]
 
-            * If reduction is 'mean':
+            * If self.reduction is 'mean':
                 loss (FloatTensor): Mean of tensor with element-wise sigmoid focal losses of shape [1].
 
-            * If reduction is 'sum':
+            * If self.reduction is 'sum':
                 loss (FloatTensor): Sum of tensor with element-wise sigmoid focal losses of shape [1].
         """
 
         # Get weighted sigmoid focal loss
         tgt_labels = tgt_labels.to(pred_logits.dtype)
-        loss = self.weight * sigmoid_focal_loss(pred_logits, tgt_labels, self.alpha, self.gamma, reduction)
+        loss = self.weight * sigmoid_focal_loss(pred_logits, tgt_labels, self.alpha, self.gamma, self.reduction)
 
         return loss
 
@@ -327,3 +330,57 @@ class SigmoidHillLoss(nn.Module):
         else:
             error_msg = f"Invalid reduction string '{reduction}'."
             raise ValueError(error_msg)
+
+
+@MODELS.register_module()
+class SmoothL1Loss(nn.Module):
+    """
+    Class implementing the smooth L1 loss module.
+
+    Attributes:
+        beta (float): Beta value of the smooth L1 loss function.
+        reduction (str): String specifying the reduction operation applied on element-wise losses.
+        weight (float): Factor weighting the smooth L1 loss.
+    """
+
+    def __init__(self, beta=1.0, reduction='mean', weight=1.0):
+        """
+        Initializes the SmoothL1Loss module.
+
+        Args:
+            beta (float): Beta value of the smooth L1 loss function (default=1.0).
+            reduction (str): String specifying the reduction operation applied on element-wise losses (default='mean').
+            weight (float): Factor weighting the smooth L1 loss (default=1.0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.beta = beta
+        self.reduction = reduction
+        self.weight = weight
+
+    def forward(self, predictions, targets):
+        """
+        Forward method of the SmoothL1Loss module.
+
+        Args:
+            predictions (FloatTensor): Tensor containing the predictions of shape [*].
+            targets (FloatTensor): Tensor containing the targets of shape [*].
+
+        Returns:
+            * If self.reduction is 'none':
+                loss (FloatTensor): Tensor with element-wise smooth L1 losses of shape [*]
+
+            * If self.reduction is 'mean':
+                loss (FloatTensor): Mean of tensor with element-wise smooth L1 losses of shape [1].
+
+            * If self.reduction is 'sum':
+                loss (FloatTensor): Sum of tensor with element-wise smooth L1 losses of shape [1].
+        """
+
+        # Get weighted smooth L1 loss
+        loss = self.weight * F.smooth_l1_loss(predictions, targets, beta=self.beta, reduction=self.reduction)
+
+        return loss
