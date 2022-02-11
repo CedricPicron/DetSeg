@@ -8,10 +8,10 @@ import torch
 from torch import nn
 from torch.nn.init import xavier_uniform_, zeros_
 from torch_scatter import scatter
-from torch_sparse import coalesce, spmm
+from torch_sparse import coalesce
 
 from models.build import build_model, MODELS
-from models.functional.activation import custom_relu
+from models.functional.activation import custom_step
 from models.functional.graph import node_to_edge
 from models.functional.sparse import sparse_dense_mm
 
@@ -257,13 +257,16 @@ class GraphToGraph(nn.Module):
         edge_score (nn.Module): Module implementing the edge score network.
         con_self (nn.Module): Module implementing the content self-update network.
         struc_self (nn.Module): Module implementing the structure self-update network.
-        zero_grad_thr (float): Zero gradient threshold of the custom ReLU activation function.
+        left_zero_grad_thr (float): Left zero gradient threshold of the custom step function.
+        right_zero_grad_thr (float): Right zero gradient threshold of the custom step function.
         node_weight_iters (int): Number of iterations during node weight computation.
         max_group_iters (int): Maximum number of iterations during node grouping.
+        con_temp (int): Temperature of the softmax function during content feature aggregation.
+        struc_temp (int): Temperature of the softmax function during structure feature aggregation.
   """
 
-    def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, zero_grad_thr=-0.1,
-                 node_weight_iters=5, max_group_iters=100):
+    def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, left_zero_grad_thr=-0.1,
+                 right_zero_grad_thr=0.1, node_weight_iters=5, max_group_iters=100, con_temp=1.0, struc_temp=1.0):
         """
         Initializes the GraphToGraph module.
 
@@ -272,9 +275,12 @@ class GraphToGraph(nn.Module):
             edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
             con_self_cfg (Dict): Configuration dictionary specifying the content self-update network.
             struc_self_cfg (Dict): Configuration dictionary specifying the structure self-update network.
-            zero_grad_thr (float): Zero gradient threshold of the custom ReLU activation function (default=-0.1).
+            left_zero_grad_thr (float): Left zero gradient threshold of the custom step function (default=-0.1).
+            right_zero_grad_thr (float): Right zero gradient threshold of the custom step function (default=0.1).
             node_weight_iters (int): Number of iterations during node weight computation (default=5).
             max_group_iters (int): Maximum number of iterations during node grouping (default=100).
+            con_temp (int): Temperature of the softmax function during content feature aggregation (default=1.0).
+            struc_temp (int): Temperature of the softmax function during structure feature aggregation (default=1.0).
         """
 
         # Initialization of default nn.Module
@@ -287,9 +293,12 @@ class GraphToGraph(nn.Module):
         self.struc_self = build_model(struc_self_cfg)
 
         # Set additional attributes
-        self.zero_grad_thr = zero_grad_thr
+        self.left_zero_grad_thr = left_zero_grad_thr
+        self.right_zero_grad_thr = right_zero_grad_thr
         self.node_weight_iters = node_weight_iters
         self.max_group_iters = max_group_iters
+        self.con_temp = con_temp
+        self.struc_temp = struc_temp
 
     def forward(self, in_graph):
         """
@@ -339,30 +348,22 @@ class GraphToGraph(nn.Module):
         cross_kwargs = {'edge_ids': edge_ids, 'edge_weights': edge_weights, 'struc_feats': dyn_struc_feats.detach()}
         con_feats = self.con_cross(con_feats, **cross_kwargs)
 
-        # Get unnormalized edge scores
+        # Get edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
         edge_scores = self.edge_score(con_feats, edge_ids=pruned_edge_ids).squeeze(dim=1)
-        edge_scores = custom_relu(edge_scores, zero_grad_thr=self.zero_grad_thr)
 
-        # Get normalized edge scores
+        step_kwargs = {'left_zero_grad_thr': self.left_zero_grad_thr, 'right_zero_grad_thr': self.right_zero_grad_thr}
+        edge_scores = custom_step(edge_scores, **step_kwargs)
+
         comp_edge_ids = pruned_edge_ids.flipud()
         self_edge_ids = torch.arange(num_nodes, device=device).unsqueeze(dim=0).expand(2, -1)
 
         edge_ids = torch.cat([pruned_edge_ids, comp_edge_ids, self_edge_ids], dim=1)
         edge_scores = torch.cat([edge_scores, edge_scores, torch.ones(num_nodes, device=device)], dim=0)
 
-        sort_ids = torch.argsort(edge_ids[0] + num_nodes * edge_ids[1], dim=0)
+        sort_ids = torch.argsort(edge_ids[0] * num_nodes + edge_ids[1], dim=0)
         edge_ids = edge_ids[:, sort_ids]
         edge_scores = edge_scores[sort_ids]
-
-        node_sums = scatter(edge_scores, edge_ids[1], dim=0, reduce='sum')
-        edge_scores = edge_scores / node_sums[edge_ids[1]]
-
-        # Get unnormalized node weights
-        node_weights = torch.ones(num_nodes, 1, device=device)
-
-        for _ in range(self.node_weight_iters):
-            node_weights = spmm(edge_ids, edge_scores, num_nodes, num_nodes, node_weights)
 
         # Get group indices, group sizes and number of groups
         group_edge_ids = edge_ids[:, edge_scores > 0]
@@ -381,38 +382,40 @@ class GraphToGraph(nn.Module):
         analysis_dict[f'group_iters_{graph_id+1}'] = iter_id + 1
         analysis_dict[f'num_nodes_{graph_id+1}'] = num_groups
 
-        # Get normalized node weights
-        node_weights = node_weights / group_sizes[group_ids, None]
-
-        # Get new content and structure features
-        con_feats = scatter(node_weights * con_feats, group_ids, dim=0, reduce='sum')
-        dyn_struc_feats = scatter(node_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
-        sta_struc_feats = scatter(node_weights.detach() * sta_struc_feats, group_ids, dim=0, reduce='sum')
-
+        # Get new (uncoalesced) edge indices
         new_edge_ids = group_ids[edge_ids]
-        diff_group = new_edge_ids[0] != new_edge_ids[1]
 
-        if diff_group.sum() > 0:
-            sparse_ids = new_edge_ids[:, diff_group]
-            sparse_vals = edge_scores[diff_group]
-            sparse_ids, sparse_vals = coalesce(sparse_ids, sparse_vals, num_groups, num_groups, op='add')
-            sparse_ids = sparse_ids.flipud()
+        # Get aggregated content and structure features (part 1)
+        same_group = new_edge_ids[0] == new_edge_ids[1]
+        node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='mean')
+        node_scores = node_scores[:, None]
 
-            delta_con_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), con_feats)
-            delta_struc_feats = sparse_dense_mm(sparse_ids, sparse_vals, (num_groups, num_groups), dyn_struc_feats)
+        con_weights = torch.exp(con_feats / self.con_temp)
+        con_sums = scatter(con_weights, group_ids, dim=0, reduce='sum')
+        con_weights = con_weights / con_sums[group_ids, :]
 
-            con_feats = con_feats + delta_con_feats
-            dyn_struc_feats = dyn_struc_feats + delta_struc_feats
-            sta_struc_feats = sta_struc_feats + delta_struc_feats.detach()
+        struc_weights = torch.exp(sta_struc_feats / self.struc_temp)
+        struc_sums = scatter(struc_weights, group_ids, dim=0, reduce='sum')
+        struc_weights = struc_weights / struc_sums[group_ids, :]
 
+        con_weights = node_scores.detach() * con_weights
+        dyn_struc_weights = node_scores * struc_weights.detach()
+        sta_struc_weights = node_scores.detach() * struc_weights
+
+        con_feats = scatter(con_weights * con_feats, group_ids, dim=0, reduce='sum')
+        dyn_struc_feats = scatter(dyn_struc_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
+        sta_struc_feats = scatter(sta_struc_weights * sta_struc_feats, group_ids, dim=0, reduce='sum')
+
+        # Get aggregated content and structure features (part 2)
+
+        # Apply self-update networks on content and structure features
         con_feats = self.con_self(con_feats)
         sta_struc_feats = self.struc_self(sta_struc_feats)
 
         frozen_struc_self = deepcopy(self.struc_self).requires_grad_(False)
         dyn_struc_feats = frozen_struc_self(dyn_struc_feats)
 
-        # Get new edge indices and edge weights
-        edge_weights = node_weights[edge_ids[0]].squeeze(dim=1) * edge_weights
+        # Get new (coalesced) edge indices and edge weights
         edge_ids, edge_weights = coalesce(new_edge_ids, edge_weights, num_groups, num_groups, op='add')
 
         # Get new node batch indices

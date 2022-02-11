@@ -82,7 +82,7 @@ class CustomReLU(Function):
             out_tensor (FloatTensor): Output tensor of same shape as input tensor.
         """
 
-        # Apply ReLU
+        # Get output tensor
         out_tensor = F.relu(in_tensor, inplace=False)
 
         # Save input tensor and zero gradient threshold for backward pass
@@ -118,6 +118,75 @@ class CustomReLU(Function):
         grad_zero_grad_thr = None
 
         return grad_in_tensor, grad_zero_grad_thr
+
+
+class CustomStep(Function):
+    """
+    Class implementing the CustomStep autograd function.
+
+    This custom autograd function alters the backward pass by only setting an input gradient to zero if the input is
+    lower than the left zero gradient threshold and higher input values would result in a higher loss, or if the input
+    is higher than the right zero gradient threshold and lower input values would result in a higher loss.
+    """
+
+    @staticmethod
+    def forward(ctx, in_tensor, left_zero_grad_thr=0.0, right_zero_grad_thr=0.0):
+        """
+        Forward method of the CustomStep autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            in_tensor (FloatTensor): Input tensor of arbitrary shape.
+            left_zero_grad_thr (float): Value containing the left zero gradient threshold (default=0.0).
+            right_zero_grad_thr (float): Value containing the right zero gradient threshold (default=0.0).
+
+        Returns:
+            out_tensor (FloatTensor): Output tensor of same shape as input tensor.
+        """
+
+        # Get output tensor
+        out_tensor = torch.where(in_tensor >= 0, 1.0, 0.0)
+
+        # Save input tensor and zero gradient thresholds for backward pass
+        ctx.save_for_backward(in_tensor)
+        ctx.left_zero_grad_thr = left_zero_grad_thr
+        ctx.right_zero_grad_thr = right_zero_grad_thr
+
+        return out_tensor
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_out_tensor):
+        """
+        Backward method of the CustomStep autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_out_tensor (FloatTensor): Gradient w.r.t. the output tensor.
+
+        Returns:
+            grad_in_tensor (FloatTensor): Gradient w.r.t. the input tensor.
+            grad_left_zero_grad_thr (None): None.
+            grad_right_zero_grad_thr (None): None.
+        """
+
+        # Recover stored input tensor and zero gradient thresholds
+        in_tensor = ctx.saved_tensors[0]
+        left_zero_grad_thr = ctx.left_zero_grad_thr
+        right_zero_grad_thr = ctx.right_zero_grad_thr
+
+        # Get gradient tensors
+        left_zero_mask = (in_tensor < left_zero_grad_thr) & (grad_out_tensor > 0)
+        right_zero_mask = (in_tensor > right_zero_grad_thr) & (grad_out_tensor < 0)
+
+        zero_mask = left_zero_mask | right_zero_mask
+        zero_tensor = torch.zeros_like(grad_out_tensor)
+
+        grad_in_tensor = torch.where(zero_mask, zero_tensor, grad_out_tensor)
+        grad_left_zero_grad_thr = None
+        grad_right_zero_grad_thr = None
+
+        return grad_in_tensor, grad_left_zero_grad_thr, grad_right_zero_grad_thr
 
 
 class NodeToEdgePyCustom(Function):
