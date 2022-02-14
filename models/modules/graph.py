@@ -7,7 +7,7 @@ import math
 import torch
 from torch import nn
 from torch.nn.init import xavier_uniform_, zeros_
-from torch_scatter import scatter
+from torch_scatter import scatter, scatter_max, scatter_mean, scatter_min
 from torch_sparse import coalesce
 
 from models.build import build_model, MODELS
@@ -260,14 +260,16 @@ class GraphToGraph(nn.Module):
         struc_self (nn.Module): Module implementing the structure self-update network.
         left_zero_grad_thr (float): Left zero gradient threshold of the custom step function.
         right_zero_grad_thr (float): Right zero gradient threshold of the custom step function.
-        node_weight_iters (int): Number of iterations during node weight computation.
         max_group_iters (int): Maximum number of iterations during node grouping.
-        con_temp (int): Temperature of the softmax function during content feature aggregation.
-        struc_temp (int): Temperature of the softmax function during structure feature aggregation.
+        con_agg_type (str): String containing the content aggregation type.
+        struc_agg_type (str): String containing the structure aggregation type.
+        con_weight (nn.Module): Optional module specifying the content weight network.
+        struc_weight (nn.Module): Optional module specifying the structure weight network.
   """
 
     def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, left_zero_grad_thr=-0.1,
-                 right_zero_grad_thr=0.1, node_weight_iters=5, max_group_iters=100, con_temp=1.0, struc_temp=1.0):
+                 right_zero_grad_thr=0.1, max_group_iters=100, con_agg_type='mean', struc_agg_type='mean',
+                 con_weight_cfg=None, struc_weight_cfg=None):
         """
         Initializes the GraphToGraph module.
 
@@ -278,16 +280,17 @@ class GraphToGraph(nn.Module):
             struc_self_cfg (Dict): Configuration dictionary specifying the structure self-update network.
             left_zero_grad_thr (float): Left zero gradient threshold of the custom step function (default=-0.1).
             right_zero_grad_thr (float): Right zero gradient threshold of the custom step function (default=0.1).
-            node_weight_iters (int): Number of iterations during node weight computation (default=5).
             max_group_iters (int): Maximum number of iterations during node grouping (default=100).
-            con_temp (int): Temperature of the softmax function during content feature aggregation (default=1.0).
-            struc_temp (int): Temperature of the softmax function during structure feature aggregation (default=1.0).
+            con_agg_type (str): String containing the content aggregation type (default='mean').
+            struc_agg_type (str): String containing the structure aggregation type (defaul='mean').
+            con_weight_cfg (Dict): Configuration dictionary specifying the content weight network (default=None).
+            struc_weight_cfg (Dict): Configuration dictionary specifying the structure weight network (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build sub-networks
+        # Build mandatory sub-networks
         self.con_cross = build_model(con_cross_cfg)
         self.edge_score = build_model(edge_score_cfg)
         self.con_self = build_model(con_self_cfg)
@@ -296,10 +299,26 @@ class GraphToGraph(nn.Module):
         # Set additional attributes
         self.left_zero_grad_thr = left_zero_grad_thr
         self.right_zero_grad_thr = right_zero_grad_thr
-        self.node_weight_iters = node_weight_iters
         self.max_group_iters = max_group_iters
-        self.con_temp = con_temp
-        self.struc_temp = struc_temp
+        self.con_agg_type = con_agg_type
+        self.struc_agg_type = struc_agg_type
+
+        # Build optional sub-networks
+        if con_agg_type == 'weighted_sum':
+            if con_weight_cfg is not None:
+                self.con_weight = build_model(con_weight_cfg)
+            else:
+                error_msg = "A content weight configuration dictionary must be specified when using the "
+                error_msg += "'weighted_sum' content aggregation type."
+                raise ValueError(error_msg)
+
+        if struc_agg_type == 'weighted_sum':
+            if struc_weight_cfg is not None:
+                self.struc_weight = build_model(struc_weight_cfg)
+            else:
+                error_msg = "A structure weight configuration dictionary must be specified when using the "
+                error_msg += "'weighted_sum' structure aggregation type."
+                raise ValueError(error_msg)
 
     def forward(self, in_graph):
         """
@@ -328,6 +347,10 @@ class GraphToGraph(nn.Module):
                 node_batch_ids (LongTensor): node batch indices of shape [num_out_nodes];
                 seg_maps (LongTensor): graph-based segmentation maps of shape [batch_size, fH, fW];
                 analysis_dict (Dict): dictionary of different analyses used for logging purposes only.
+
+        Raises:
+            ValueError: Error when an invalid content aggregation type is provided.
+            ValueError: Error when an invalid structure aggregation type is provided.
         """
 
         # Unpack input graph dictionary
@@ -386,17 +409,47 @@ class GraphToGraph(nn.Module):
         # Get new (uncoalesced) edge indices
         new_edge_ids = group_ids[edge_ids]
 
-        # Get aggregated content and structure features (part 1)
-        con_weights = torch.exp(con_feats / self.con_temp)
-        con_sums = scatter(con_weights, group_ids, dim=0, reduce='sum')
-        con_weights = con_weights / con_sums[group_ids, :]
-        con_feats = scatter(con_weights * con_feats, group_ids, dim=0, reduce='sum')
+        # Get aggregated content features
+        if self.con_agg_type == 'weighted_sum':
+            con_weights = self.con_weight(con_feats)
+            con_sums = scatter(con_weights, group_ids, dim=0, reduce='sum')
+            con_weights = con_weights / con_sums[group_ids, :]
+            con_feats = scatter(con_weights * con_feats, group_ids, dim=0, reduce='sum')
 
-        struc_weights = torch.exp(sta_struc_feats / self.struc_temp)
-        struc_sums = scatter(struc_weights, group_ids, dim=0, reduce='sum')
-        struc_weights = struc_weights / struc_sums[group_ids, :]
-        sta_struc_feats = scatter(struc_weights * sta_struc_feats, group_ids, dim=0, reduce='sum')
+        elif self.con_agg_type in ('max', 'mean', 'min'):
+            con_feats = scatter(con_feats, group_ids, dim=0, reduce=self.con_agg_type)
 
+        else:
+            error_msg = f"Invalid content aggregation type (got {self.con_agg_type})."
+            raise ValueError(error_msg)
+
+        # Get aggregated static structure features
+        if self.struc_agg_type == 'weighted_sum':
+            struc_weights = self.struc_weight(sta_struc_feats)
+            struc_sums = scatter(struc_weights, group_ids, dim=0, reduce='sum')
+            struc_weights = struc_weights / struc_sums[group_ids, :]
+            sta_struc_feats = scatter(struc_weights * sta_struc_feats, group_ids, dim=0, reduce='sum')
+
+        elif self.struc_agg_type == 'max':
+            sta_struc_feats, max_ids = scatter_max(sta_struc_feats, group_ids, dim=0)
+            struc_weights = torch.zeros(num_nodes, max_ids.size(dim=1), device=device)
+            struc_weights.scatter_(dim=0, index=max_ids, src=torch.ones(*max_ids.size(), device=device))
+
+        elif self.struc_agg_type == 'mean':
+            sta_struc_feats = scatter_mean(sta_struc_feats, group_ids, dim=0)
+            struc_weights = torch.ones(num_nodes, device=device) / group_sizes[group_ids]
+            struc_weights = struc_weights[:, None]
+
+        elif self.struc_agg_type == 'min':
+            sta_struc_feats, min_ids = scatter_min(sta_struc_feats, group_ids, dim=0)
+            struc_weights = torch.zeros(num_nodes, min_ids.size(dim=1), device=device)
+            struc_weights.scatter_(dim=0, index=min_ids, src=torch.ones(*min_ids.size(), device=device))
+
+        else:
+            error_msg = f"Invalid structure aggregation type (got {self.struc_agg_type})."
+            raise ValueError(error_msg)
+
+        # Get aggregated dynamic structure features (part 1)
         same_group = new_edge_ids[0] == new_edge_ids[1]
         node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='sum')
         node_scores = custom_ones(node_scores)
@@ -404,7 +457,7 @@ class GraphToGraph(nn.Module):
         dyn_struc_weights = node_scores[:, None] * struc_weights.detach()
         dyn_struc_feats = scatter(dyn_struc_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
 
-        # Get aggregated content and structure features (part 2)
+        # Get aggregated dynamic structure features (part 2)
 
         # Apply self-update networks on content and structure features
         con_feats = self.con_self(con_feats)

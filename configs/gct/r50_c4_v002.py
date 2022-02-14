@@ -99,8 +99,8 @@ model = dict(
                     dict(
                         type='Mul',
                         feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
+                        init_factor=0.0,
+                        learn_factor=True,
                         bias=False,
                     ),
                     dict(
@@ -111,8 +111,8 @@ model = dict(
                     dict(
                         type='Mul',
                         feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
+                        init_factor=0.0,
+                        learn_factor=True,
                         bias=False,
                     ),
                     dict(

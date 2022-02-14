@@ -32,8 +32,8 @@ model = dict(
                 left_zero_grad_thr=-0.1,
                 right_zero_grad_thr=0.1,
                 max_group_iters=100,
-                con_agg_type='weighted_sum',
-                struc_agg_type='weighted_sum',
+                con_agg_type='max',
+                struc_agg_type='max',
                 con_cross_cfg=[
                     dict(
                         type='GraphAttn',
@@ -93,30 +93,6 @@ model = dict(
                         act_fn1='',
                         act_fn2='relu',
                         skip=True,
-                    )
-                ],
-                con_weight_cfg=[
-                    dict(
-                        type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
-                        bias=False,
-                    ),
-                    dict(
-                        type='Exp',
-                    )
-                ],
-                struc_weight_cfg=[
-                    dict(
-                        type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
-                        bias=False,
-                    ),
-                    dict(
-                        type='Exp',
                     )
                 ],
             ),

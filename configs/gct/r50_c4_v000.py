@@ -31,10 +31,9 @@ model = dict(
                 type='GraphToGraph',
                 left_zero_grad_thr=-0.1,
                 right_zero_grad_thr=0.1,
-                node_weight_iters=5,
                 max_group_iters=100,
-                con_temp=0.1,
-                struc_temp=0.1,
+                con_agg_type='weighted_sum',
+                struc_agg_type='weighted_sum',
                 con_cross_cfg=[
                     dict(
                         type='GraphAttn',
@@ -94,6 +93,30 @@ model = dict(
                         act_fn1='',
                         act_fn2='relu',
                         skip=True,
+                    )
+                ],
+                con_weight_cfg=[
+                    dict(
+                        type='Mul',
+                        feat_dependent=False,
+                        init_factor=10.0,
+                        learn_factor=False,
+                        bias=False,
+                    ),
+                    dict(
+                        type='Exp',
+                    )
+                ],
+                struc_weight_cfg=[
+                    dict(
+                        type='Mul',
+                        feat_dependent=False,
+                        init_factor=10.0,
+                        learn_factor=False,
+                        bias=False,
+                    ),
+                    dict(
+                        type='Exp',
                     )
                 ],
             ),

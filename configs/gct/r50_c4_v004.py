@@ -98,10 +98,13 @@ model = dict(
                 con_weight_cfg=[
                     dict(
                         type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
-                        bias=False,
+                        feat_dependent=True,
+                        feat_size=256,
+                        init_factor=0.0,
+                        learn_factor=True,
+                        bias=True,
+                        init_bias=0.0,
+                        learn_bias=True,
                     ),
                     dict(
                         type='Exp',
@@ -110,10 +113,13 @@ model = dict(
                 struc_weight_cfg=[
                     dict(
                         type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
-                        bias=False,
+                        feat_dependent=True,
+                        feat_size=64,
+                        init_factor=0.0,
+                        learn_factor=True,
+                        bias=True,
+                        init_bias=0.0,
+                        learn_bias=True,
                     ),
                     dict(
                         type='Exp',

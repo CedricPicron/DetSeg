@@ -98,9 +98,10 @@ model = dict(
                 con_weight_cfg=[
                     dict(
                         type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
+                        feat_dependent=True,
+                        feat_size=256,
+                        init_factor=0.0,
+                        learn_factor=True,
                         bias=False,
                     ),
                     dict(
@@ -110,9 +111,10 @@ model = dict(
                 struc_weight_cfg=[
                     dict(
                         type='Mul',
-                        feat_dependent=False,
-                        init_factor=1.0,
-                        learn_factor=False,
+                        feat_dependent=True,
+                        feat_size=64,
+                        init_factor=0.0,
+                        learn_factor=True,
                         bias=False,
                     ),
                     dict(
