@@ -14,6 +14,7 @@ from models.build import build_model, MODELS
 from models.functional.activation import custom_step
 from models.functional.graph import node_to_edge
 from models.functional.sparse import sparse_dense_mm
+from models.functional.utils import custom_ones
 
 
 @MODELS.register_module()
@@ -386,25 +387,22 @@ class GraphToGraph(nn.Module):
         new_edge_ids = group_ids[edge_ids]
 
         # Get aggregated content and structure features (part 1)
-        same_group = new_edge_ids[0] == new_edge_ids[1]
-        node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='mean')
-        node_scores = node_scores[:, None]
-
         con_weights = torch.exp(con_feats / self.con_temp)
         con_sums = scatter(con_weights, group_ids, dim=0, reduce='sum')
         con_weights = con_weights / con_sums[group_ids, :]
+        con_feats = scatter(con_weights * con_feats, group_ids, dim=0, reduce='sum')
 
         struc_weights = torch.exp(sta_struc_feats / self.struc_temp)
         struc_sums = scatter(struc_weights, group_ids, dim=0, reduce='sum')
         struc_weights = struc_weights / struc_sums[group_ids, :]
+        sta_struc_feats = scatter(struc_weights * sta_struc_feats, group_ids, dim=0, reduce='sum')
 
-        con_weights = node_scores.detach() * con_weights
-        dyn_struc_weights = node_scores * struc_weights.detach()
-        sta_struc_weights = node_scores.detach() * struc_weights
+        same_group = new_edge_ids[0] == new_edge_ids[1]
+        node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='sum')
+        node_scores = custom_ones(node_scores)
 
-        con_feats = scatter(con_weights * con_feats, group_ids, dim=0, reduce='sum')
+        dyn_struc_weights = node_scores[:, None] * struc_weights.detach()
         dyn_struc_feats = scatter(dyn_struc_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
-        sta_struc_feats = scatter(sta_struc_weights * sta_struc_feats, group_ids, dim=0, reduce='sum')
 
         # Get aggregated content and structure features (part 2)
 

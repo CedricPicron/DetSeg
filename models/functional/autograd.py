@@ -60,6 +60,52 @@ class CustomClamp(Function):
         return grad_in_tensor, grad_min, grad_max
 
 
+class CustomOnes(Function):
+    """
+    Class implementing the CustomOnes autograd function.
+
+    This custom autograd function alters the backward pass by computing gradients as if the ones operation in the
+    forward pass did not occur.
+    """
+
+    @staticmethod
+    def forward(ctx, in_tensor):
+        """
+        Forward method of the CustomOnes autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            in_tensor (FloatTensor): Input tensor of arbitrary shape.
+
+        Returns:
+            out_tensor (FloatTensor): Output tensor filled with ones of same shape as input tensor.
+        """
+
+        # Get output tensor filled with ones
+        out_tensor = torch.ones_like(in_tensor)
+
+        return out_tensor
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_out_tensor):
+        """
+        Backward method of the CustomOnes autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_out_tensor (FloatTensor): Gradient w.r.t. the output tensor.
+
+        Returns:
+            grad_in_tensor (FloatTensor): Gradient w.r.t. the input tensor.
+        """
+
+        # Get gradient tensor
+        grad_in_tensor = grad_out_tensor
+
+        return grad_in_tensor
+
+
 class CustomReLU(Function):
     """
     Class implementing the CustomReLU autograd function.
