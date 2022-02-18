@@ -47,8 +47,8 @@ def map_to_graph(feat_map):
     return graph
 
 
-def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_groups=1,
-                 implementation='pytorch-custom'):
+def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, off_edge_src=None, off_edge_tgt=None, reduction='mul',
+                 num_groups=1, implementation='pytorch-custom'):
     """
     Function computing edge features from node source and target features using the specified reduction operation.
 
@@ -56,6 +56,8 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_
         node_src_feats (FloatTensor): Tensor containing the node source features of shape [num_nodes, src_feat_size].
         node_tgt_feats (FloatTensor): Tensor containing the node target features of shape [num_nodes, tgt_feat_size].
         edge_ids (LongTensor): Tensor containing the node indices for each (directed) edge of shape [2, num_edges].
+        off_edge_src (FloatTensor): Offset edge source features of shape [num_edges, src_feat_size] (default=None).
+        off_edge_tgt (FloatTensor): Offset edge target features of shape [num_edges, tgt_feat_size] (default=None).
         reduction (str): String containing the reduction operation (default='mul').
         num_groups (int): Integer containing the number of groups during 'mul-sum' reduction (default=1).
         implementation (str): String containing the type of implementation (default='pytorch-custom').
@@ -86,11 +88,18 @@ def node_to_edge(node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_
 
     # Compute edge features
     if implementation == 'pytorch-custom':
-        edge_feats = NodeToEdgePyCustom.apply(node_src_feats, node_tgt_feats, edge_ids, reduction, num_groups)
+        apply_args = (node_src_feats, node_tgt_feats, edge_ids, off_edge_src, off_edge_tgt, reduction, num_groups)
+        edge_feats = NodeToEdgePyCustom.apply(*apply_args)
 
     elif implementation == 'pytorch-naive':
         edge_src_feats = node_src_feats[edge_ids[0]]
         edge_tgt_feats = node_tgt_feats[edge_ids[1]]
+
+        if off_edge_src is not None:
+            edge_src_feats = edge_src_feats + off_edge_src
+
+        if off_edge_tgt is not None:
+            edge_tgt_feats = edge_tgt_feats + off_edge_tgt
 
         if reduction == 'dot':
             edge_feats = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).view(-1, 1)

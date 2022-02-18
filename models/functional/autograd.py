@@ -244,20 +244,23 @@ class NodeToEdgePyCustom(Function):
     """
 
     @staticmethod
-    def forward(ctx, node_src_feats, node_tgt_feats, edge_ids, reduction='mul', num_groups=1):
+    def forward(ctx, node_src_feats, node_tgt_feats, edge_ids, off_edge_src=None, off_edge_tgt=None, reduction='mul',
+                num_groups=1):
         """
         Forward method of the NodeToEdgePyCustom autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
-            node_src_feats (FloatTensor): Tensor with the node source features of shape [num_nodes, src_feat_size].
-            node_tgt_feats (FloatTensor): Tensor with the node target features of shape [num_nodes, tgt_feat_size].
+            node_src_feats (FloatTensor): Tensor with the node source features of shape [num_nodes, feat_size].
+            node_tgt_feats (FloatTensor): Tensor with the node target features of shape [num_nodes, feat_size].
             edge_ids (LongTensor): Tensor with the node indices for each (directed) edge of shape [2, num_edges].
+            off_edge_src (FloatTensor): Offset edge source features of shape [num_edges, feat_size] (default=None).
+            off_edge_tgt (FloatTensor): Offset edge target features of shape [num_edges, feat_size] (default=None).
             reduction (str): String containing the reduction operation (default='mul').
             num_groups (int): Integer containing the number of groups during 'mul-sum' reduction (default=1).
 
         Returns:
-            edge_feats (FloatTensor): Tensor containing the edge features of shape [num_edges, edge_feat_size].
+            edge_feats (FloatTensor): Tensor containing the edge features of shape [num_edges, out_feat_size].
 
         Raises:
             ValueError: Error when an invalid reduction string is provided.
@@ -266,6 +269,12 @@ class NodeToEdgePyCustom(Function):
         # Compute edge features
         edge_src_feats = node_src_feats[edge_ids[0]]
         edge_tgt_feats = node_tgt_feats[edge_ids[1]]
+
+        if off_edge_src is not None:
+            edge_src_feats = edge_src_feats + off_edge_src
+
+        if off_edge_tgt is not None:
+            edge_tgt_feats = edge_tgt_feats + off_edge_tgt
 
         if reduction == 'dot':
             edge_feats = torch.bmm(edge_src_feats[:, None, :], edge_tgt_feats[:, :, None]).squeeze(dim=2)
@@ -286,7 +295,7 @@ class NodeToEdgePyCustom(Function):
             raise ValueError(error_msg)
 
         # Store input tensors and reduction string for backward pass
-        ctx.save_for_backward(node_src_feats, node_tgt_feats, edge_ids)
+        ctx.save_for_backward(node_src_feats, node_tgt_feats, edge_ids, off_edge_src, off_edge_tgt)
         ctx.reduction = reduction
 
         return edge_feats
@@ -299,18 +308,20 @@ class NodeToEdgePyCustom(Function):
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
-            grad_edge_feats (FloatTensor): Gradients of the edge features of shape [num_edges, edge_feat_size].
+            grad_edge_feats (FloatTensor): Gradients of the edge features of shape [num_edges, out_feat_size].
 
         Returns:
-            grad_node_src_feats (FloatTensor): Gradients of node source features of shape [num_nodes, src_feat_size].
-            grad_node_tgt_feats (FloatTensor): Gradients of node target features of shape [num_nodes, tgt_feat_size].
+            grad_node_src_feats (FloatTensor): Gradients of node source features of shape [num_nodes, feat_size].
+            grad_node_tgt_feats (FloatTensor): Gradients of node target features of shape [num_nodes, feat_size].
             grad_edge_ids (None): None.
+            grad_off_edge_src (FloatTensor): Gradient of offset edge source features of shape [num_edges, feat_size].
+            grad_off_edge_tgt (FloatTensor): Gradient of offset edge target features of shape [num_edges, feat_size].
             grad_reduction (None): None.
             grad_num_groups (None): None.
         """
 
         # Recover stored tensors and reduction string from forward pass
-        node_src_feats, node_tgt_feats, edge_ids = ctx.saved_tensors
+        node_src_feats, node_tgt_feats, edge_ids, off_edge_src, off_edge_tgt = ctx.saved_tensors
         reduction = ctx.reduction
 
         # Recompute edge features
@@ -340,14 +351,13 @@ class NodeToEdgePyCustom(Function):
             grad_edge_src_feats = grad_edge_feats
             grad_edge_tgt_feats = grad_edge_feats
 
+        grad_off_edge_src = grad_edge_src_feats if off_edge_src is not None else None
+        grad_off_edge_tgt = grad_edge_tgt_feats if off_edge_tgt is not None else None
+
         grad_node_src_feats = torch.zeros_like(node_src_feats).index_add_(0, edge_ids[0], grad_edge_src_feats)
         grad_node_tgt_feats = torch.zeros_like(node_tgt_feats).index_add_(0, edge_ids[1], grad_edge_tgt_feats)
 
-        grad_edge_ids = None
-        grad_reduction = None
-        grad_num_groups = None
-
-        return grad_node_src_feats, grad_node_tgt_feats, grad_edge_ids, grad_reduction, grad_num_groups
+        return grad_node_src_feats, grad_node_tgt_feats, None, grad_off_edge_src, grad_off_edge_tgt, None, None
 
 
 class SparseDenseMmPyCustom(Function):

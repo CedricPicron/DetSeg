@@ -2,6 +2,7 @@
 Graph-Connecting Trees (GCT) architecture.
 """
 
+from copy import deepcopy
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_
@@ -19,17 +20,18 @@ class GCT(nn.Module):
 
     Attributes:
         map (nn.Module): Module performing the initial map-based processing.
-        struc (nn.Module): Module computing the initial structure features from normalized node locations.
+        init_struc_feat (nn.Parameter): Tensor containing the initial structure feature of shape [struc_feat_size].
         graph (nn.Module): Module performing the subsequent graph-based processing.
         heads (nn.ModuleDict): Dictionary of head dictionaries containing sub-head modules.
     """
 
-    def __init__(self, map_cfg, graph_cfg, heads):
+    def __init__(self, map_cfg, struc_feat_size, graph_cfg, heads):
         """
         Initializes the GCT module.
 
         Args:
             map_cfg (Dict): Configuration dictionary specifying the initial map-based processing module.
+            struc_feat_size (int): Integer containing the size of the structure features.
             graph_cfg (Dict): Configuration dictionary specifying the subsequent graph-based processing module.
             heads (Dict): Dictionary of head dictionaries containing sub-head configuration dictionaries.
         """
@@ -39,6 +41,9 @@ class GCT(nn.Module):
 
         # Build initial map-based processing module
         self.map = build_model(map_cfg)
+
+        # Get initial structure feature
+        self.init_struc_feat = nn.Parameter(torch.zeros(struc_feat_size), requires_grad=True)
 
         # Build subsequent graph-based processing module
         self.graph = build_model(graph_cfg)
@@ -117,19 +122,27 @@ class GCT(nn.Module):
         graph = map_to_graph(feat_map)
         graph['graph_id'] = 0
         graph['con_feats'] = graph.pop('node_feats')
-        analysis_dict['num_nodes_0'] = len(graph['con_feats'])
+
+        num_nodes = len(graph['con_feats'])
+        analysis_dict['num_nodes_0'] = num_nodes
 
         # Get initial structure features
-        node_xy = graph.pop('node_xy')
-        graph['dyn_struc_feats'] = node_xy
-        graph['sta_struc_feats'] = node_xy
+        frozen_struc_feat = deepcopy(self.init_struc_feat).requires_grad_(False)
+        graph['dyn_struc_feats'] = frozen_struc_feat[None, :].expand(num_nodes, -1)
+        graph['sta_struc_feats'] = self.init_struc_feat[None, :].expand(num_nodes, -1)
 
         # Get initial edge weights
         num_edges = graph['edge_ids'].size(dim=1)
         graph['edge_weights'] = torch.ones(num_edges, dtype=torch.float, device=feat_map.device)
 
-        # Get initial graph-based segmentation maps
+        # Get initial node center locations and masses
+        node_xy = graph.pop('node_xy')
+        graph['node_cxcy'] = node_xy
+        graph['node_masses'] = torch.ones_like(node_xy[:, 0])
+
+        # Get pixel locations and initial graph-based segmentation maps
         batch_size, _, fH, fW = feat_map.size()
+        pixel_xy = node_xy.view(batch_size, -1, 2)[0]
         graph['seg_maps'] = torch.arange(batch_size * fH * fW, device=feat_map.device).view(batch_size, fH, fW)
 
         # Add analysis dictionary to graph dictionary
@@ -140,13 +153,13 @@ class GCT(nn.Module):
 
         # Unpack final graph dictionary
         sta_struc_feats = graph['sta_struc_feats']
-        graph_seg_maps = graph['seg_maps']
+        node_cxcy = graph['node_cxcy']
         node_batch_ids = graph['node_batch_ids']
+        graph_seg_maps = graph['seg_maps']
         analysis_dict = graph['analysis_dict']
 
         # Get useful final graph properties
         num_nodes = len(sta_struc_feats)
-        img_node_xy = node_xy.view(batch_size, -1, 2)[0]
         _, nodes_per_img = torch.unique_consecutive(node_batch_ids, return_counts=True)
         cum_nodes_per_img = torch.tensor([0, *nodes_per_img.cumsum(dim=0)])
 
@@ -158,10 +171,10 @@ class GCT(nn.Module):
 
                 # Get prediction boxes
                 pred_boxes = head_dict['pred'](sta_struc_feats)
+                pred_boxes[:, :2] = node_cxcy + pred_boxes[:, :2]
 
-                pred_boxes_cxcy = custom_clamp(pred_boxes[:, :2], min=0.0, max=1.0)
-                pred_boxes_wh = custom_clamp(pred_boxes[:, 2:], min=1e-6, max=1.0)
-                pred_boxes = torch.cat([pred_boxes_cxcy, pred_boxes_wh], dim=1)
+                pred_boxes[:, :2] = custom_clamp(pred_boxes[:, :2], min=0.0, max=1.0)
+                pred_boxes[:, 2:] = custom_clamp(pred_boxes[:, 2:], min=1e-6, max=1.0)
 
                 box_kwargs = {'normalized': 'img_with_padding', 'boxes_per_img': nodes_per_img}
                 pred_boxes = Boxes(pred_boxes, format='cxcywh', **box_kwargs)
@@ -175,7 +188,7 @@ class GCT(nn.Module):
                     range_obj = range(cum_nodes_per_img[i], cum_nodes_per_img[i+1])
 
                     for j in range_obj:
-                        tgt_xy = img_node_xy[(graph_seg_map == j).view(-1)]
+                        tgt_xy = pixel_xy[(graph_seg_map == j).view(-1)]
                         tgt_box_ij = torch.cat([tgt_xy.amin(dim=0), tgt_xy.amax(dim=0) + pixel_size], dim=0)
                         tgt_boxes.append(tgt_box_ij)
 
@@ -200,7 +213,7 @@ class GCT(nn.Module):
 
                 # Get prediction maps
                 struc_seg_feats = head_dict['struc'](sta_struc_feats)
-                pos_feats = head_dict['pos'](img_node_xy)
+                pos_feats = head_dict['pos'](pixel_xy)
                 pred_maps = torch.mm(struc_seg_feats, pos_feats.t()).view(num_nodes, fH, fW)
 
                 # Get target masks

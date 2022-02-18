@@ -6,6 +6,7 @@ model = dict(
         name='resnet50',
         out_ids=[4],
     ),
+    struc_feat_size=256,
     graph_cfg=dict(
         type='Net',
         blocks_per_stage=[3],
@@ -13,9 +14,10 @@ model = dict(
         scale_tags=['_features', '_shape', '_size'],
         scale_overwrites=[
             [0, 'in_proj_cfg', 'con_in_size', 1024],
-            [0, 'in_proj_cfg', 'struc_in_size', 2],
             [0, 'block_cfg', 'edge_score_cfg', 3, 'out_features', 1],
             [0, 'block_cfg', 'edge_score_cfg', 3, 'init_cfg', 'val', 0.003],
+            [0, 'block_cfg', 'con_cxcy_cfg', 0, 'in_features', 2],
+            [0, 'block_cfg', 'struc_cxcy_cfg', 0, 'in_features', 2],
         ],
         return_inter_stages=False,
         base_stage_cfg=dict(
@@ -24,8 +26,6 @@ model = dict(
                 type='GraphProjector',
                 con_in_size=128,
                 con_out_size=256,
-                struc_in_size=32,
-                struc_out_size=64,
             ),
             block_cfg=dict(
                 type='GraphToGraph',
@@ -34,6 +34,18 @@ model = dict(
                 max_group_iters=100,
                 con_agg_type='weighted_sum',
                 struc_agg_type='weighted_sum',
+                con_self_cfg=[
+                    dict(
+                        type='TwoStepMLP',
+                        in_size=256,
+                        hidden_size=256,
+                        norm1='layer',
+                        norm2='',
+                        act_fn1='',
+                        act_fn2='relu',
+                        skip=True,
+                    )
+                ],
                 con_cross_cfg=[
                     dict(
                         type='GraphAttn',
@@ -61,7 +73,6 @@ model = dict(
                     dict(
                         type='NodeToEdge',
                         reduction='mul',
-                        implementation='pytorch-custom',
                     ),
                     dict(
                         type='nn.Linear',
@@ -71,29 +82,35 @@ model = dict(
                         init_cfg=dict(type='Constant', layer='Linear', val=0.01, bias=-0.6),
                     ),
                 ],
-                con_self_cfg=[
+                con_cxcy_cfg=[
                     dict(
-                        type='TwoStepMLP',
+                        type='nn.Linear',
+                        in_features=2,
+                        out_features=256,
+                    ),
+                    dict(
+                        type='OneStepMLP',
+                        num_layers=1,
                         in_size=256,
-                        hidden_size=256,
-                        norm1='layer',
-                        norm2='',
-                        act_fn1='',
-                        act_fn2='relu',
+                        norm='layer',
+                        act_fn='relu',
                         skip=True,
-                    )
+                    ),
                 ],
-                struc_self_cfg=[
+                struc_cxcy_cfg=[
                     dict(
-                        type='TwoStepMLP',
+                        type='nn.Linear',
+                        in_features=2,
+                        out_features=64,
+                    ),
+                    dict(
+                        type='OneStepMLP',
+                        num_layers=1,
                         in_size=64,
-                        hidden_size=128,
-                        norm1='layer',
-                        norm2='',
-                        act_fn1='',
-                        act_fn2='relu',
+                        norm='layer',
+                        act_fn='relu',
                         skip=True,
-                    )
+                    ),
                 ],
                 con_weight_cfg=[
                     dict(
@@ -128,20 +145,20 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=64,
+                    out_features=256,
                     bias=True,
                 ),
                 dict(
                     type='OneStepMLP',
                     num_layers=2,
-                    in_size=64,
+                    in_size=256,
                     norm='layer',
                     act_fn='relu',
                     skip=True,
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=64,
+                    in_features=256,
                     out_features=4,
                     bias=True,
                 ),

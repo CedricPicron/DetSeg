@@ -1,7 +1,6 @@
 """
 Collection of modules related to graphs.
 """
-from copy import deepcopy
 import math
 
 import torch
@@ -29,6 +28,7 @@ class GraphAttn(nn.Module):
         struc_proj (nn.Linear): Optional module projecting structure features to input feature space.
         qry_proj (nn.Linear): Module projecting input features to query features.
         key_proj (nn.Linear): Module projecting input features to key features.
+        pos_proj (nn.Linear): Module projecting relative node locations to relative position features.
         val_proj (nn.Linear): Module projecting input features to value features.
         out_proj (nn.Linear): Module projecting weighted value features to output features.
 
@@ -125,6 +125,10 @@ class GraphAttn(nn.Module):
         xavier_uniform_(self.val_proj.weight)
         zeros_(self.val_proj.bias)
 
+        self.pos_proj = nn.Linear(2, qk_size)
+        xavier_uniform_(self.pos_proj.weight)
+        zeros_(self.pos_proj.bias)
+
         self.out_proj = nn.Linear(val_size, out_size, bias=False)
         zeros_(self.out_proj.weight)
 
@@ -132,15 +136,16 @@ class GraphAttn(nn.Module):
         self.num_heads = num_heads
         self.skip = skip
 
-    def forward(self, in_feats, edge_ids, edge_weights=None, struc_feats=None):
+    def forward(self, in_feats, edge_ids, edge_weights=None, node_cxcy=None, struc_feats=None):
         """
         Forward method of the GraphAttn module.
 
         Args:
             in_feats (FloatTensor): Input node features of shape [num_nodes, in_size].
             edge_ids (LongTensor): Node indices for each (directed) edge of shape [2, num_edges].
-            edge_weights (FloatTensor): Weights for each (directed) edge of shape [num_edges] (default=None).
             struc_feats (FloatTensor): Structure node features of shape [num_nodes, struc_size] (default=None).
+            node_cxcy (FloatTensor): Normalized node center locations of shape [num_nodes, 2] (default=None).
+            edge_weights (FloatTensor): Weights for each (directed) edge of shape [num_edges] (default=None).
 
         Returns:
             out_feats (FloatTensor): Output node features of shape [num_nodes, out_size].
@@ -157,27 +162,34 @@ class GraphAttn(nn.Module):
         delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
         delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
 
-        # Get structure-enhanced delta features
+        # Get query, key and value features
+        qry_feats = key_feats = val_feats = delta_feats
+
         if struc_feats is not None:
             if hasattr(self, 'struc_proj'):
-                delta_struc_feats = delta_feats + self.struc_proj(struc_feats)
+                qry_feats = key_feats = delta_feats + self.struc_proj(struc_feats)
 
             elif in_feats.size(dim=1) == struc_feats.size(dim=1):
-                delta_struc_feats = delta_feats + struc_feats
+                qry_feats = key_feats = delta_feats + struc_feats
 
             else:
                 error_msg = "The input and structure feature sizes must be equal when no structure feature size was "
                 error_msg += f"provided during initialization (got {in_feats.size(1)} and {struc_feats.size(1)})."
                 raise ValueError(error_msg)
 
-        # Get query, key and value features
-        qry_feats = self.qry_proj(delta_struc_feats)
-        key_feats = self.key_proj(delta_struc_feats)
-        val_feats = self.val_proj(delta_feats)
+        qry_feats = self.qry_proj(qry_feats)
+        key_feats = self.key_proj(key_feats)
+        val_feats = self.val_proj(val_feats)
+
+        # Get relative position features
+        qry_cxcy = node_cxcy[edge_ids[0]]
+        tgt_cxcy = node_cxcy[edge_ids[1]]
+        pos_feats = self.pos_proj(tgt_cxcy - qry_cxcy)
 
         # Get attention weights
         qry_feats = qry_feats / math.sqrt(qry_feats.size(dim=1) // self.num_heads)
-        attn_weights = node_to_edge(qry_feats, key_feats, edge_ids, reduction='mul-sum', num_groups=self.num_heads)
+        node_to_edge_kwargs = {'reduction': 'mul-sum', 'num_groups': self.num_heads, 'off_edge_tgt': pos_feats}
+        attn_weights = node_to_edge(qry_feats, key_feats, edge_ids, **node_to_edge_kwargs)
         attn_weights = torch.sigmoid(attn_weights)
 
         if edge_weights is not None:
@@ -200,50 +212,38 @@ class GraphProjector(nn.Module):
 
     Attributes:
         con_proj (nn.Linear): Linear module projecting input content features to output content features.
-        struc_proj (nn.Linear): Linear module projecting input structure features to output structure features.
     """
 
-    def __init__(self, con_in_size, con_out_size, struc_in_size, struc_out_size):
+    def __init__(self, con_in_size, con_out_size):
         """
         Initializes the GraphProjector module.
 
         Args:
             con_in_size (int): Integer containing the input content feature size.
             con_out_size (int): Integer containing the output content feature size.
-            struc_in_size (int): Integer containing the input structure feature size.
-            struc_out_size (int): Integer containing the output structure feature size.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build linear projection modules
+        # Build linear content projection module
         self.con_proj = nn.Linear(con_in_size, con_out_size)
-        self.struc_proj = nn.Linear(struc_in_size, struc_out_size)
 
     def forward(self, in_graph):
         """
         Forward method of the GraphProjector module.
 
         Args:
-            in_graph (Dict): Input graph dictionary containing at least following keys:
+            in_graph (Dict): Input graph dictionary containing at least following key:
                 con_feats (FloatTensor): input content features of shape [num_nodes, con_in_size];
-                dyn_struc_feats (FloatTensor): input dynamic structure features of shape [num_nodes, struc_in_size];
-                sta_struc_feats (FloatTensor): input static structure features of shape [num_nodes, struc_in_size].
 
-            out_graph (Dict): Output graph dictionary containing at least following keys:
+            out_graph (Dict): Output graph dictionary containing at least following key:
                 con_feats (FloatTensor): output content features of shape [num_nodes, con_out_size];
-                dyn_struc_feats (FloatTensor): output dynamic structure features of shape [num_nodes, struc_out_size];
-                sta_struc_feats (FloatTensor): output static structure features of shape [num_nodes, struc_out_size].
         """
 
-        # Get output content and structure features
+        # Get output content features
         out_graph = in_graph.copy()
         out_graph['con_feats'] = self.con_proj(in_graph['con_feats'])
-        out_graph['sta_struc_feats'] = self.struc_proj(in_graph['sta_struc_feats'])
-
-        frozen_struc_proj = deepcopy(self.struc_proj).requires_grad_(False)
-        out_graph['dyn_struc_feats'] = frozen_struc_proj(in_graph['dyn_struc_feats'])
 
         return out_graph
 
@@ -254,10 +254,11 @@ class GraphToGraph(nn.Module):
     Class implementing the GraphToGraph module.
 
     Attributes:
+        con_self (nn.Module): Module implementing the content self-update network.
         con_cross (nn.Module): Module implementing the content cross-update network.
         edge_score (nn.Module): Module implementing the edge score network.
-        con_self (nn.Module): Module implementing the content self-update network.
-        struc_self (nn.Module): Module implementing the structure self-update network.
+        con_cxcy (nn.Module): Module implementing the content cxcy-update network.
+        struc_cxcy (nn.Module): Module implementing the structure cxcy-update network.
         left_zero_grad_thr (float): Left zero gradient threshold of the custom step function.
         right_zero_grad_thr (float): Right zero gradient threshold of the custom step function.
         max_group_iters (int): Maximum number of iterations during node grouping.
@@ -267,17 +268,18 @@ class GraphToGraph(nn.Module):
         struc_weight (nn.Module): Optional module specifying the structure weight network.
   """
 
-    def __init__(self, con_cross_cfg, edge_score_cfg, con_self_cfg, struc_self_cfg, left_zero_grad_thr=-0.1,
-                 right_zero_grad_thr=0.1, max_group_iters=100, con_agg_type='mean', struc_agg_type='mean',
-                 con_weight_cfg=None, struc_weight_cfg=None):
+    def __init__(self, con_self_cfg, con_cross_cfg, edge_score_cfg, con_cxcy_cfg, struc_cxcy_cfg,
+                 left_zero_grad_thr=-0.1, right_zero_grad_thr=0.1, max_group_iters=100, con_agg_type='mean',
+                 struc_agg_type='mean', con_weight_cfg=None, struc_weight_cfg=None):
         """
         Initializes the GraphToGraph module.
 
         Args:
+            con_self_cfg (Dict): Configuration dictionary specifying the content self-update network.
             con_cross_cfg (Dict): Configuration dictionary specifying the content cross-update network.
             edge_score_cfg (Dict): Configuration dictionary specifying the edge score network.
-            con_self_cfg (Dict): Configuration dictionary specifying the content self-update network.
-            struc_self_cfg (Dict): Configuration dictionary specifying the structure self-update network.
+            con_cxcy_cfg (Dict): Configuration dicationary specifying the content cxcy-update network.
+            struc_cxcy_cfg (Dict): Configuration dictionary specifying the structure cxcy-update network.
             left_zero_grad_thr (float): Left zero gradient threshold of the custom step function (default=-0.1).
             right_zero_grad_thr (float): Right zero gradient threshold of the custom step function (default=0.1).
             max_group_iters (int): Maximum number of iterations during node grouping (default=100).
@@ -291,10 +293,11 @@ class GraphToGraph(nn.Module):
         super().__init__()
 
         # Build mandatory sub-networks
+        self.con_self = build_model(con_self_cfg)
         self.con_cross = build_model(con_cross_cfg)
         self.edge_score = build_model(edge_score_cfg)
-        self.con_self = build_model(con_self_cfg)
-        self.struc_self = build_model(struc_self_cfg)
+        self.con_cxcy = build_model(con_cxcy_cfg)
+        self.struc_cxcy = build_model(struc_cxcy_cfg)
 
         # Set additional attributes
         self.left_zero_grad_thr = left_zero_grad_thr
@@ -332,6 +335,8 @@ class GraphToGraph(nn.Module):
                 sta_struc_feats (FloatTensor): static structure features of shape [num_in_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_in_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_in_edges];
+                node_cxcy (FloatTensor): node center locations in normalized (x, y) format of shape [num_in_nodes, 2];
+                node_masses (FloatTensor): node masses of shape [num_in_nodes];
                 node_batch_ids (LongTensor): node batch indices of shape [num_in_nodes];
                 seg_maps (LongTensor): graph-based segmentation maps of shape [batch_size, fH, fW];
                 analysis_dict (Dict): dictionary of different analyses used for logging purposes only.
@@ -344,6 +349,8 @@ class GraphToGraph(nn.Module):
                 sta_struc_feats (FloatTensor): static structure features of shape [num_out_nodes, struc_feat_size];
                 edge_ids (LongTensor): node indices for each (directed) edge of shape [2, num_out_edges];
                 edge_weights (FloatTensor): weights for each (directed) edge of shape [num_out_edges];
+                node_cxcy (FloatTensor): node center locations in normalized (x, y) format of shape [num_out_nodes, 2];
+                node_masses (FloatTensor): node masses of shape [num_out_nodes];
                 node_batch_ids (LongTensor): node batch indices of shape [num_out_nodes];
                 seg_maps (LongTensor): graph-based segmentation maps of shape [batch_size, fH, fW];
                 analysis_dict (Dict): dictionary of different analyses used for logging purposes only.
@@ -360,6 +367,8 @@ class GraphToGraph(nn.Module):
         sta_struc_feats = in_graph['sta_struc_feats']
         edge_ids = in_graph['edge_ids']
         edge_weights = in_graph['edge_weights']
+        in_node_cxcy = in_graph['node_cxcy']
+        in_node_masses = in_graph['node_masses']
         node_batch_ids = in_graph['node_batch_ids']
         seg_maps = in_graph['seg_maps']
         analysis_dict = in_graph['analysis_dict']
@@ -368,9 +377,13 @@ class GraphToGraph(nn.Module):
         num_nodes = len(con_feats)
         device = edge_ids.device
 
+        # Update content features based on own content features
+        con_feats = self.con_self(con_feats)
+
         # Update content features using neighboring features
-        cross_kwargs = {'edge_ids': edge_ids, 'edge_weights': edge_weights, 'struc_feats': dyn_struc_feats.detach()}
-        con_feats = self.con_cross(con_feats, **cross_kwargs)
+        cross_kwargs = {'struc_feats': dyn_struc_feats.detach(), 'node_cxcy': in_node_cxcy}
+        cross_kwargs = {**cross_kwargs, 'edge_weights': edge_weights}
+        con_feats = self.con_cross(con_feats, edge_ids, **cross_kwargs)
 
         # Get edge scores
         pruned_edge_ids = edge_ids[:, edge_ids[1] > edge_ids[0]]
@@ -406,8 +419,25 @@ class GraphToGraph(nn.Module):
         analysis_dict[f'group_iters_{graph_id+1}'] = iter_id + 1
         analysis_dict[f'num_nodes_{graph_id+1}'] = num_groups
 
-        # Get new (uncoalesced) edge indices
+        # Get new node center locations and masses
+        out_node_masses = scatter(in_node_masses, group_ids, dim=0, reduce='sum')
+        node_weights = in_node_masses / out_node_masses[group_ids]
+        out_node_cxcy = scatter(node_weights[:, None] * in_node_cxcy, group_ids, dim=0, reduce='sum')
+
+        # Update content and structure features based on new center location
+        delta_cxcy = out_node_cxcy[group_ids] - in_node_cxcy
+        delta_con_feats = self.con_cxcy(delta_cxcy)
+        delta_struc_feats = self.struc_cxcy(delta_cxcy)
+
+        con_feats = con_feats + delta_con_feats
+        dyn_struc_feats = dyn_struc_feats + delta_struc_feats.detach()
+        sta_struc_feats = sta_struc_feats + delta_struc_feats
+
+        # Get node scores
         new_edge_ids = group_ids[edge_ids]
+        same_group = new_edge_ids[0] == new_edge_ids[1]
+        node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='sum')
+        node_scores = custom_ones(node_scores)
 
         # Get aggregated content features
         if self.con_agg_type == 'weighted_sum':
@@ -450,21 +480,10 @@ class GraphToGraph(nn.Module):
             raise ValueError(error_msg)
 
         # Get aggregated dynamic structure features (part 1)
-        same_group = new_edge_ids[0] == new_edge_ids[1]
-        node_scores = scatter(edge_scores[same_group], edge_ids[0, same_group], dim=0, reduce='sum')
-        node_scores = custom_ones(node_scores)
-
         dyn_struc_weights = node_scores[:, None] * struc_weights.detach()
         dyn_struc_feats = scatter(dyn_struc_weights * dyn_struc_feats, group_ids, dim=0, reduce='sum')
 
         # Get aggregated dynamic structure features (part 2)
-
-        # Apply self-update networks on content and structure features
-        con_feats = self.con_self(con_feats)
-        sta_struc_feats = self.struc_self(sta_struc_feats)
-
-        frozen_struc_self = deepcopy(self.struc_self).requires_grad_(False)
-        dyn_struc_feats = frozen_struc_self(dyn_struc_feats)
 
         # Get new (coalesced) edge indices and edge weights
         edge_ids, edge_weights = coalesce(new_edge_ids, edge_weights, num_groups, num_groups, op='add')
@@ -483,6 +502,8 @@ class GraphToGraph(nn.Module):
         out_graph['sta_struc_feats'] = sta_struc_feats
         out_graph['edge_ids'] = edge_ids
         out_graph['edge_weights'] = edge_weights
+        out_graph['node_cxcy'] = out_node_cxcy
+        out_graph['node_masses'] = out_node_masses
         out_graph['node_batch_ids'] = node_batch_ids
         out_graph['seg_maps'] = seg_maps
         out_graph['analysis_dict'] = analysis_dict
@@ -497,26 +518,29 @@ class NodeToEdge(nn.Module):
 
     Attributes:
         reduction (str): String containing the reduction operation.
+        num_groups (int): Integer containing the number of groups during 'mul-sum' reduction.
         implementation (str): String containing the type of implementation.
     """
 
-    def __init__(self, reduction='mul', implementation='pytorch-custom'):
+    def __init__(self, reduction='mul', num_groups=1, implementation='pytorch-custom'):
         """
         Initializes the NodeToEdge module.
 
         Args:
             reduction (str): String containing the reduction operation (default='mul').
+            num_groups (int): Integer containing the number of groups during 'mul-sum' reduction (default=1).
             implementation (str): String containing the type of implementation (default='pytorch-custom').
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set reduction and implementation attributes
+        # Set attributes
         self.reduction = reduction
+        self.num_groups = num_groups
         self.implementation = implementation
 
-    def forward(self, node_src_feats, node_tgt_feats=None, edge_ids=None):
+    def forward(self, node_src_feats, node_tgt_feats=None, edge_ids=None, off_edge_src=None, off_edge_tgt=None):
         """
         Forward method of the NodeToEdge module.
 
@@ -524,6 +548,8 @@ class NodeToEdge(nn.Module):
             node_src_feats (FloatTensor): Node source features of shape [num_nodes, src_feat_size].
             node_tgt_feats (FloatTensor): Node target features of shape [num_nodes, tgt_feat_size] (default=None).
             edge_ids (LongTensor): Node indices for each (directed) edge of shape [2, num_edges] (default=None).
+            off_edge_src (FloatTensor): Offset edge source features of shape [num_edges, src_feat_size] (default=None).
+            off_edge_tgt (FloatTensor): Offset edge target features of shape [num_edges, tgt_feat_size] (default=None).
 
         Returns:
             edge_feats (FloatTensor): Tensor containing the edge features of shape [num_edges, edge_feat_size].
@@ -542,6 +568,7 @@ class NodeToEdge(nn.Module):
             raise ValueError(error_msg)
 
         # Get edge features
-        edge_feats = node_to_edge(node_src_feats, node_tgt_feats, edge_ids, self.reduction, self.implementation)
+        attrs = {'reduction': self.reduction, 'num_groups': self.num_groups, 'implementation': self.implementation}
+        edge_feats = node_to_edge(node_src_feats, node_tgt_feats, edge_ids, off_edge_src, off_edge_tgt, **attrs)
 
         return edge_feats
