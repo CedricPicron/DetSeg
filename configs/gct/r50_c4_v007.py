@@ -79,7 +79,7 @@ model = dict(
                         in_features=64,
                         out_features=1,
                         bias=True,
-                        init_cfg=dict(type='Constant', layer='Linear', val=0.01, bias=-0.6),
+                        init_cfg=dict(type='Constant', layer='Linear', val=0.01, bias=-0.75),
                     ),
                 ],
                 con_cxcy_cfg=[

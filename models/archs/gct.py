@@ -1,8 +1,8 @@
 """
 Graph-Connecting Trees (GCT) architecture.
 """
-
 from copy import deepcopy
+
 import torch
 from torch import nn
 from torch.nn.utils import clip_grad_norm_

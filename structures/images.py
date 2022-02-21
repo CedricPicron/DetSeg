@@ -313,9 +313,11 @@ class Images(object):
             resize_ratio (Tuple): Tuple of size [2] containing the resize ratio as (width_ratio, height_ratio).
         """
 
-        # Get size in (width, height) format
+        # Get original image size
+        image_size = self.size()
+
+        # Get new image size in (width, height) format
         if isinstance(size, int):
-            image_size = self.size()
             size = tuple(size*x/min(image_size) for x in image_size)
 
         # Overrule with max size if given and necessary
