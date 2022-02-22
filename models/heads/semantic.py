@@ -22,10 +22,9 @@ class SemanticSegHead(nn.Module):
         num_classes (int): Integer containing the number of object classes (without background).
         class_weights (FloatTensor): Tensor of shape [num_classes+1] containing class-specific loss weights.
         loss_weight (float): Weight factor used to scale the semantic segmentation loss as a whole.
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight, metadata):
+    def __init__(self, feat_sizes, num_classes, bg_weight, loss_weight):
         """
         Initializes the SemanticSegHead module.
 
@@ -34,7 +33,6 @@ class SemanticSegHead(nn.Module):
             num_classes (int): Integer containing the number of object classes (without background).
             bg_weight (float): Cross entropy weight scaling the losses in target background positions.
             loss_weight (float): Weight factor used to scale the semantic segmentation loss.
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -52,11 +50,6 @@ class SemanticSegHead(nn.Module):
         # Set number of classes and loss weight attributes
         self.num_classes = num_classes
         self.loss_weight = loss_weight
-
-        # Set dataset metadata attribute used during visualization
-        metadata.stuff_classes = metadata.thing_classes
-        metadata.stuff_colors = metadata.thing_colors
-        self.metadata = metadata
 
     @staticmethod
     def get_accuracy(preds, targets):
@@ -254,7 +247,7 @@ class SemanticSegHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dicts, tgt_dict):
+    def visualize(self, images, pred_dicts, tgt_dict, metadata=None):
         """
         Draws predicted and target semantic segmentations on given full-resolution images.
 
@@ -267,9 +260,16 @@ class SemanticSegHead(nn.Module):
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
 
+            metadata (detectron2.data.Metadata): Object containing additional dataset information (default=None).
+
         Returns:
             images_dict (Dict): Dictionary of images with drawn predicted and target semantic segmentations.
         """
+
+        # Update stuff attributes of metadata object if given
+        if metadata is not None:
+            metadata.stuff_classes = metadata.thing_classes
+            metadata.stuff_colors = metadata.thing_colors
 
         # Combine prediction and target semantic maps and get corresponding map names
         semantic_maps = [map for p in pred_dicts for map in p['semantic_maps']] + tgt_dict['semantic_maps']
@@ -320,7 +320,7 @@ class SemanticSegHead(nn.Module):
 
             # Draw image semantic maps on corresponding images
             for i, image, img_size, img_semantic_map in zip(range(len(images)), images, img_sizes, semantic_map):
-                visualizer = Visualizer(image, metadata=self.metadata)
+                visualizer = Visualizer(image, metadata=metadata)
                 visualizer.draw_sem_seg(img_semantic_map)
 
                 annotated_image = visualizer.output.get_image()

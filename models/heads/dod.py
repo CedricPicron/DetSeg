@@ -50,11 +50,9 @@ class DOD(nn.Module):
 
         pred_num_pos (int): Integer containing the number of positive anchors per target during prediction.
         pred_max_dets (int): Integer containing the maximum number of detections during prediction.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict, metadata):
+    def __init__(self, in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict):
         """
         Initializes the DOD module.
 
@@ -102,8 +100,6 @@ class DOD(nn.Module):
             pred_dict (Dict): Dictionary with items used during prediction containing following keys:
                 - num_pos (int): integer containing the number of positive anchors per target during prediction;
                 - max_dets (int): integer containing the maximum number of detections during prediction.
-
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -163,11 +159,6 @@ class DOD(nn.Module):
         # Set prediction-related attributes
         self.pred_num_pos = pred_dict['num_pos']
         self.pred_max_dets = pred_dict['max_dets']
-
-        # Set metadata attribute
-        metadata.stuff_classes = metadata.thing_classes
-        metadata.stuff_colors = metadata.thing_colors
-        self.metadata = metadata
 
     @torch.no_grad()
     def get_static_tgt_masks(self, feat_maps, anchors, tgt_boxes, return_ids=True):

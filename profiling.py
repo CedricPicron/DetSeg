@@ -3,7 +3,6 @@ Profiling script.
 """
 import argparse
 
-from detectron2.data import MetadataCatalog
 from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 import torch
 import torch.autograd.profiler as profiler
@@ -13,17 +12,15 @@ from main import get_parser
 from models.archs.build import build_arch
 from models.backbones.build import build_backbone
 from models.cores.build import build_core
-from models.modules.detr.decoder import build_decoder
-from models.modules.detr.encoder import build_encoder
 from models.heads.build import build_heads
 from structures.boxes import Boxes
 from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'detr', 'dfd']
-model_choices = [*model_choices, 'dod', 'encoder', 'fpn', 'gc', 'gct', 'global_decoder', 'mbd', 'mmdet_arch']
-model_choices = [*model_choices, 'mmdet_backbone', 'mmdet_core', 'resnet', 'ret', 'sample_decoder', 'sbd', 'sem']
+model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'dfd', 'dod']
+model_choices = [*model_choices, 'fpn', 'gc', 'gct', 'mbd', 'mmdet_arch', 'mmdet_backbone', 'mmdet_core', 'resnet']
+model_choices = [*model_choices, 'ret', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -42,7 +39,6 @@ if profiling_args.model == 'bch_dod':
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
     main_args.heads = ['dod']
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -81,7 +77,6 @@ elif profiling_args.model == 'bch_sbd':
     main_args.sbd_update_layers = 6
     main_args.sbd_ca_version = 0
     main_args.sbd_ca_num_points = 1
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -123,7 +118,6 @@ elif profiling_args.model == 'bin':
     main_args.heads = ['bin']
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.disputed_loss = True
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['bin'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -150,7 +144,6 @@ elif profiling_args.model == 'brd':
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['brd']
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['brd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -179,7 +172,6 @@ elif profiling_args.model == 'bvn_bin':
     main_args.bvn_sync_heads = False
     main_args.heads = ['bin']
     main_args.disputed_loss = True
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -208,7 +200,6 @@ elif profiling_args.model == 'bvn_ret':
     main_args.heads = ['ret']
     main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -233,7 +224,6 @@ elif profiling_args.model == 'bvn_sem':
     main_args.bvn_sync_heads = False
     main_args.heads = ['sem']
     main_args.disputed_loss = True
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -276,36 +266,10 @@ elif profiling_args.model == 'dc':
     forward_stmt = "model(**inputs)"
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
-elif profiling_args.model == 'detr':
-    main_args.arch_type = 'detr'
-    main_args.lr_backbone = 1e-5
-    main_args.lr_encoder = 1e-4
-    main_args.lr_decoder = 1e-4
-    main_args.num_classes = 80
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
-    model = build_arch(main_args).to('cuda')
-
-    batch_size = main_args.batch_size
-    images = Images(torch.randn(batch_size, 3, 800, 800)).to('cuda')
-
-    num_targets_total = 20
-    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
-    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
-    boxes = Boxes(boxes/boxes.max(), 'cxcywh', 'img_without_padding', [main_args.num_init_slots] * batch_size)
-    sizes = torch.tensor([i*(num_targets_total//batch_size) for i in range(batch_size+1)], device='cuda')
-    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
-
-    optimizer = optimizer = torch.optim.AdamW(model.parameters())
-    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)"
-
 elif profiling_args.model == 'dfd':
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['dfd']
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['dfd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -339,7 +303,6 @@ elif profiling_args.model == 'dod':
     main_args.dod_sel_mode = 'rel'
     main_args.dod_tgt_decision = 'rel'
     main_args.dod_tgt_mode = 'static'
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['dod'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -360,20 +323,6 @@ elif profiling_args.model == 'dod':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
-
-elif profiling_args.model == 'encoder':
-    main_args.lr_encoder = 1e-4
-    main_args.num_encoder_layers = 6
-    model = build_encoder(main_args).to('cuda')
-
-    features = torch.randn(1024, 2, 256).to('cuda')
-    feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
-    pos_encodings = torch.randn(1024, 2, 256).to('cuda')
-
-    inputs = {'features': features, 'feature_masks': feature_masks, 'pos_encodings': pos_encodings}
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs).sum().backward()"
 
 elif profiling_args.model == 'fpn':
     main_args.backbone_out_ids = [3, 4, 5]
@@ -431,21 +380,6 @@ elif profiling_args.model == 'gct':
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)"
 
-elif profiling_args.model == 'global_decoder':
-    main_args.decoder_type = 'global'
-    main_args.lr_decoder = 1e-4
-    main_args.num_decoder_layers = 6
-    model = build_decoder(main_args).to('cuda')
-
-    features = torch.randn(1024, 2, 256).to('cuda')
-    feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
-    pos_encodings = torch.randn(1024, 2, 256).to('cuda')
-
-    inputs = {'features': features, 'feature_masks': feature_masks, 'pos_encodings': pos_encodings}
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)['slots'].sum().backward()"
-
 elif profiling_args.model == 'mbd':
     main_args.num_classes = 80
     main_args.core_out_ids = [3, 4, 5, 6, 7]
@@ -479,7 +413,6 @@ elif profiling_args.model == 'mbd':
     main_args.mbd_match_thr = 0.0
     main_args.mbd_loss_gt_seg = True
     main_args.mbd_loss_seg_types = 'sigmoid_focal'
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['mbd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -576,7 +509,6 @@ elif profiling_args.model == 'ret':
     main_args.heads = ['ret']
     main_args.ret_num_convs = 1
     main_args.ret_pred_type = 'conv1'
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['ret'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -599,21 +531,6 @@ elif profiling_args.model == 'ret':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
-
-elif profiling_args.model == 'sample_decoder':
-    main_args.decoder_type = 'sample'
-    main_args.lr_decoder = 1e-4
-    main_args.num_decoder_layers = 6
-    model = build_decoder(main_args).to('cuda')
-
-    features = torch.randn(1024, 2, 256).to('cuda')
-    feature_masks = (torch.randn(2, 32, 32) > 0).to('cuda')
-    pos_encodings = torch.randn(1024, 2, 256).to('cuda')
-
-    inputs = {'features': features, 'feature_masks': feature_masks, 'pos': pos_encodings}
-    globals_dict = {'model': model, 'inputs': inputs}
-    forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)['slots'].sum().backward()"
 
 elif profiling_args.model == 'sbd':
     main_args.num_classes = 80
@@ -651,7 +568,6 @@ elif profiling_args.model == 'sbd':
     main_args.sbd_ca_step_size = -1
     main_args.sbd_ca_step_norm_xy = 'map'
     main_args.sbd_ca_step_norm_z = 1.0
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['sbd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -679,7 +595,6 @@ elif profiling_args.model == 'sem':
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['sem']
-    main_args.val_metadata = MetadataCatalog.get('coco_2017_val')
     model = build_heads(main_args)['sem'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')

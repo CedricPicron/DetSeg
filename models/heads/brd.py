@@ -55,11 +55,9 @@ class BRD(nn.Module):
         cls_loss_weight (float): Factor weighting the actual classification loss.
         l1_loss_weight (float): Factor weighting the actual L1 bounding box loss.
         giou_loss_weight (float): Factor weighting the actual GIoU bounding box loss.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata):
+    def __init__(self, feat_size, policy_dict, decoder_dict, head_dict, loss_dict):
         """
         Initializes the BRD module.
 
@@ -105,8 +103,6 @@ class BRD(nn.Module):
                 - cls_loss_weight (float): factor weighting the actual classification loss;
                 - l1_loss_weight (float): factor weighting the actual L1 bounding box loss;
                 - giou_loss_weight (float): factor weighting the actual GIoU bounding box loss.
-
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -151,9 +147,6 @@ class BRD(nn.Module):
         self.cls_loss_weight = loss_dict['cls_loss_weight']
         self.l1_loss_weight = loss_dict['l1_loss_weight']
         self.giou_loss_weight = loss_dict['giou_loss_weight']
-
-        # Set metadata attribute
-        self.metadata = metadata
 
         # Set default initial values of module parameters
         self.reset_parameters(prior_cls_prob)
@@ -539,7 +532,7 @@ class BRD(nn.Module):
 
                 return pred_dicts
 
-    def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.4):
+    def visualize(self, images, pred_dicts, tgt_dict, metadata=None, score_threshold=0.4):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -559,6 +552,7 @@ class BRD(nn.Module):
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            metadata (detectron2.data.Metadata): Object containing additional dataset information (default=None).
             score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
 
         Returns:
@@ -576,7 +570,7 @@ class BRD(nn.Module):
             well_defined = pred_boxes.well_defined()
 
             pred_scores = pred_dict['scores'][well_defined]
-            sufficient_score = pred_scores >= score_treshold
+            sufficient_score = pred_scores >= score_threshold
 
             pred_labels = pred_dict['labels'][well_defined][sufficient_score]
             pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
@@ -619,7 +613,7 @@ class BRD(nn.Module):
             sizes = draw_dict['sizes']
 
             for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                visualizer = Visualizer(images[image_id], metadata=metadata)
 
                 img_size = img_sizes[image_id]
                 img_size = (img_size[1], img_size[0])

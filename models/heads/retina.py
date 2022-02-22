@@ -45,11 +45,9 @@ class RetinaHead(nn.Module):
         test_max_candidates (int): Maximum number of candidate detections to keep per map of an image for NMS.
         test_nms_threshold (float): Threshold used during NMS to remove duplicate detections.
         test_max_detections (int): Maximum number of detections to keep per image after NMS.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata):
+    def __init__(self, num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict):
         """
         Initializes the RetinaHead module.
 
@@ -78,8 +76,6 @@ class RetinaHead(nn.Module):
                 - max_candidates (int): maximum number of candidate detections to keep per map of an image for NMS;
                 - nms_threshold (float): threshold used during NMS to remove duplicate detections;
                 - max_detections (int): maximum number of detections to keep per image after NMS.
-
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -124,9 +120,6 @@ class RetinaHead(nn.Module):
         self.test_max_candidates = test_dict['max_candidates']
         self.test_nms_threshold = test_dict['nms_threshold']
         self.test_max_detections = test_dict['max_detections']
-
-        # Initialization of metadata attribute
-        self.metadata = metadata
 
     @torch.no_grad()
     def forward_init(self, images, feat_maps, tgt_dict=None):
@@ -475,7 +468,7 @@ class RetinaHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.4):
+    def visualize(self, images, pred_dicts, tgt_dict, metadata=None, score_threshold=0.4):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -495,6 +488,7 @@ class RetinaHead(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            metadata (detectron2.data.Metadata): Object containing additional dataset information (default=None).
             score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
 
         Returns:
@@ -512,7 +506,7 @@ class RetinaHead(nn.Module):
             well_defined = pred_boxes.well_defined()
 
             pred_scores = pred_dict['scores'][well_defined]
-            sufficient_score = pred_scores >= score_treshold
+            sufficient_score = pred_scores >= score_threshold
 
             pred_labels = pred_dict['labels'][well_defined][sufficient_score]
             pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
@@ -555,7 +549,7 @@ class RetinaHead(nn.Module):
             sizes = draw_dict['sizes']
 
             for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                visualizer = Visualizer(images[image_id], metadata=metadata)
 
                 img_size = img_sizes[image_id]
                 img_size = (img_size[1], img_size[0])

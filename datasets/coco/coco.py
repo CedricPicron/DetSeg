@@ -6,6 +6,7 @@ import contextlib
 import os
 from pathlib import Path
 
+from detectron2.data import MetadataCatalog
 import numpy as np
 from PIL import Image
 from pycocotools.coco import COCO
@@ -441,7 +442,8 @@ def build_coco(args):
     val_annotation_file = coco_root / 'annotations' / 'instances_val2017.json'
 
     train_transforms, val_transforms = get_coco_transforms()
-    train_metadata, val_metadata = (args.train_metadata, args.val_metadata)
+    train_metadata = MetadataCatalog.get('coco_2017_train')
+    val_metadata = MetadataCatalog.get('coco_2017_val')
 
     train_dataset = CocoDataset(train_image_folder, train_annotation_file, train_transforms, train_metadata)
     val_dataset = CocoDataset(val_image_folder, val_annotation_file, val_transforms, val_metadata)

@@ -53,11 +53,9 @@ class DFD(nn.Module):
         inf_ins_candidates (int): Maximum number of candidates retained for instance head duplicate removal.
         inf_ins_threshold (float): Value determining whether two features are considered duplicates or not.
         inf_max_detections (int): Maximum number of detections retained during inference.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata):
+    def __init__(self, in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict):
         """
         Initializes the DFD module.
 
@@ -125,8 +123,6 @@ class DFD(nn.Module):
                 - ins_candidates (int): maximum number of candidates retained for instance head duplicate removal;
                 - ins_threshold (float): value determining whether two features are considered duplicates or not;
                 - max_detections (int): maximum number of detections retained during inference.
-
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -253,11 +249,6 @@ class DFD(nn.Module):
         self.inf_ins_candidates = inf_dict['ins_candidates']
         self.inf_ins_threshold = inf_dict['ins_threshold']
         self.inf_max_detections = inf_dict['max_detections']
-
-        # Set metadata attribute
-        metadata.stuff_classes = metadata.thing_classes
-        metadata.stuff_colors = metadata.thing_colors
-        self.metadata = metadata
 
     @torch.no_grad()
     def forward_init(self, images, feat_maps, tgt_dict=None):
@@ -945,7 +936,7 @@ class DFD(nn.Module):
 
             return pred_dicts
 
-    def visualize(self, images, pred_dicts, tgt_dict, score_treshold=0.4):
+    def visualize(self, images, pred_dicts, tgt_dict, metadata=None, score_threshold=0.4):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -972,11 +963,17 @@ class DFD(nn.Module):
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
+            metadata (detectron2.data.Metadata): Object containing additional dataset information (default=None).
             score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
 
         Returns:
             images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
         """
+
+        # Update stuff attributes of metadata object if given
+        if metadata is not None:
+            metadata.stuff_classes = metadata.thing_classes
+            metadata.stuff_colors = metadata.thing_colors
 
         # Get keys found in draw dictionaries
         draw_dict_keys = ['labels', 'boxes', 'scores', 'sizes']
@@ -989,7 +986,7 @@ class DFD(nn.Module):
             well_defined = pred_boxes.well_defined()
 
             pred_scores = pred_dict['scores'][well_defined]
-            sufficient_score = pred_scores >= score_treshold
+            sufficient_score = pred_scores >= score_threshold
 
             pred_labels = pred_dict['labels'][well_defined][sufficient_score]
             pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
@@ -1040,7 +1037,7 @@ class DFD(nn.Module):
                 img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
                 img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
 
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                visualizer = Visualizer(images[image_id], metadata=metadata)
                 instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
                 visualizer.draw_instance_predictions(instances)
 
@@ -1055,7 +1052,7 @@ class DFD(nn.Module):
                 cls_map = F.interpolate(cls_map[None], size=(iH, iW), mode='bilinear', align_corners=True)[0]
                 cls_map = torch.argmax(cls_map, dim=0).cpu().numpy()
 
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                visualizer = Visualizer(images[image_id], metadata=metadata)
                 visualizer.draw_sem_seg(cls_map)
                 annotated_image = visualizer.output.get_image()
 
@@ -1099,7 +1096,7 @@ class DFD(nn.Module):
                     ins_masks = F.one_hot(ins_map, len(img_labels)+1).to(torch.bool)
                     ins_masks = ins_masks.permute(2, 0, 1)[:-1].cpu().numpy()
 
-                    visualizer = Visualizer(images[image_id], metadata=self.metadata)
+                    visualizer = Visualizer(images[image_id], metadata=metadata)
                     instances = Instances(img_size, pred_classes=img_labels, scores=scores, pred_masks=ins_masks)
                     visualizer.draw_instance_predictions(instances)
 

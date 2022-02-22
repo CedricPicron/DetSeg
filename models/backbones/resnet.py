@@ -1,7 +1,6 @@
 """
 ResNet backbone.
 """
-from collections import OrderedDict
 
 import torch
 from torch import nn
@@ -82,24 +81,6 @@ class ResNet(nn.Module):
         self.out_ids = out_ids
         out_sizes = [64, 128, 256, 512] if name in ['resnet18', 'resnet34'] else [256, 512, 1024, 2048]
         self.out_sizes = [out_sizes[i-2] for i in out_ids]
-
-    def load_from_original_detr(self, fb_detr_state_dict):
-        """
-        Loads backbone from state dictionary of an original Facebook DETR model.
-
-        fb_detr_state_dict (Dict): Dictionary containing Facebook DETR model parameters and persistent buffers.
-        """
-
-        backbone_identifier = 'backbone.0.'
-        identifier_length = len(backbone_identifier)
-        backbone_state_dict = OrderedDict()
-
-        for original_name, state in fb_detr_state_dict.items():
-            if backbone_identifier in original_name:
-                new_name = original_name[identifier_length:]
-                backbone_state_dict[new_name] = state
-
-        self.load_state_dict(backbone_state_dict)
 
     def _load_from_state_dict(self, state_dict, prefix, *args):
         """

@@ -39,11 +39,9 @@ class MBD (nn.Module):
         seg_weights (List): List with factors weighting the different segmentation losses.
 
         pred_thr (float): Threshold determining the minimum probability for a positive pixel prediction.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self, sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict, metadata):
+    def __init__(self, sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict):
         """
         Initializes the MBD module.
 
@@ -110,8 +108,6 @@ class MBD (nn.Module):
 
             pred_dict (Dict): Prediction dictionary containing following key:
                 - pred_thr (float): threshold determining the minimum probability for a positive pixel prediction.
-
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
@@ -154,11 +150,6 @@ class MBD (nn.Module):
         # Set prediction attributes
         for k, v in pred_dict.items():
             setattr(self, k, v)
-
-        # Set metadata attribute
-        metadata.stuff_classes = metadata.thing_classes
-        metadata.stuff_colors = metadata.thing_colors
-        self.metadata = metadata
 
     def get_loss(self, pred_maps, tgt_dict, sbd_boxes, images):
         """

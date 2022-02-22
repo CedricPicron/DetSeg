@@ -21,10 +21,18 @@ def get_parser():
     parser = argparse.ArgumentParser(add_help=False)
 
     # General
-    parser.add_argument('--device', default='cuda', type=str, help='device to use training/validation')
+    parser.add_argument('--device', default='cuda', type=str, help='name of device to use')
     parser.add_argument('--checkpoint_full', default='', type=str, help='path with full checkpoint to resume from')
     parser.add_argument('--checkpoint_model', default='', type=str, help='path with model checkpoint to resume from')
-    parser.add_argument('--output_dir', default='', type=str, help='save path during training (no saving when empty)')
+    parser.add_argument('--output_dir', default='', type=str, help='path to output directory (no saving when empty)')
+
+    # Distributed
+    parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
+    parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
+
+    # Dataset
+    parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
+    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during validation')
 
     # Evaluation
     parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
@@ -33,19 +41,15 @@ def get_parser():
     parser.add_argument('--get_flops', action='store_true', help='compute number of FLOPS of model and return')
     parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
 
+    # Testing
+    parser.add_argument('--test', action='store_true', help='test model from checkpoint and return')
+    parser.add_argument('--test_split', default='test-dev', type=str, help='name of the test split')
+
     # Visualization
     parser.add_argument('--visualize', action='store_true', help='visualize model from checkpoint and return')
     parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
     parser.add_argument('--image_offset', default=0, type=int, help='image id of first image to be visualized')
     parser.add_argument('--random_offset', action='store_true', help='generate random image offset')
-
-    # Distributed
-    parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
-    parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
-
-    # Dataset
-    parser.add_argument('--dataset', default='coco', type=str, help='name of dataset used for training and validation')
-    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during validation')
 
     # Data loading
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
@@ -435,61 +439,6 @@ def get_parser():
     parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
     parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
-    # DETR
-    parser.add_argument('--load_orig_detr', action='store_true', help='load untrained detr parts from original DETR')
-
-    # * Position encoding
-    parser.add_argument('--position_encoding', default='sine', type=str, help='type of position encoding')
-
-    # * Transformer
-    parser.add_argument('--feat_dim', default=256, type=int, help='feature dimension used in transformer')
-
-    # ** Multi-head attention (MHA)
-    parser.add_argument('--mha_dropout', default=0.1, type=float, help='dropout used during multi-head attention')
-    parser.add_argument('--num_heads', default=8, type=int, help='number of attention heads')
-
-    # ** Feedforward network (FFN)
-    parser.add_argument('--ffn_dropout', default=0.1, type=float, help='dropout used during feedforward network')
-    parser.add_argument('--ffn_hidden_dim', default=2048, type=float, help='hidden dimension of feedforward network')
-
-    # ** Encoder
-    parser.add_argument('--num_encoder_layers', default=6, type=int, help='number of encoder layers in transformer')
-
-    # ** Decoder
-    parser.add_argument('--decoder_type', default='global', choices=['global', 'sample'], help='decoder type')
-    parser.add_argument('--num_decoder_layers', default=6, type=int, help='number of decoder layers in transformer')
-
-    # *** Global decoder
-    parser.add_argument('--num_slots', default=100, type=int, help='number of object slots per image')
-
-    # *** Sample decoder
-    parser.add_argument('--num_init_slots', default=64, type=int, help='number of initial object slots per image')
-    parser.add_argument('--no_curio_sharing', action='store_true', help='do not share curiosity kernel between layers')
-
-    # *** Sample decoder layer
-    parser.add_argument('--num_decoder_iterations', default=1, type=int, help='number of decoder iterations per layer')
-    parser.add_argument('--iter_type', default='outside', type=str, choices=['inside', 'outside'], help='iter type')
-    parser.add_argument('--num_pos_samples', default=16, type=int, help='number of positive features sampled per slot')
-    parser.add_argument('--num_neg_samples', default=16, type=int, help='number of negative features sampled per slot')
-    parser.add_argument('--sample_type', default='after', type=str, choices=['before', 'after'], help='sample type')
-    parser.add_argument('--curio_loss_coef', default=1, type=float, help='coefficient scaling the curiosity loss')
-    parser.add_argument('--curio_kernel_size', default=3, type=int, help='kernel size of curiosity convolution')
-    parser.add_argument('--curio_dropout', default=0.1, type=float, help='dropout used during curiosity update')
-
-    # * DETR criterion
-    parser.add_argument('--aux_loss', action='store_true', help='apply auxiliary losses at intermediate predictions')
-
-    # ** Matcher coefficients
-    parser.add_argument('--match_coef_class', default=1, type=float, help='class coefficient in the matching cost')
-    parser.add_argument('--match_coef_l1', default=5, type=float, help='L1 box coefficient in the matching cost')
-    parser.add_argument('--match_coef_giou', default=2, type=float, help='GIoU box coefficient in the matching cost')
-
-    # ** Loss coefficients
-    parser.add_argument('--loss_coef_class', default=1, type=float, help='class coefficient in loss')
-    parser.add_argument('--loss_coef_l1', default=5, type=float, help='L1 box coefficient in loss')
-    parser.add_argument('--loss_coef_giou', default=2, type=float, help='GIoU box coefficient in loss')
-    parser.add_argument('--no_obj_weight', default=0.1, type=float, help='relative weight of the no-object class')
-
     # Optimizer
     parser.add_argument('--max_grad_norm', default=-1, type=float, help='maximum gradient norm during training')
     parser.add_argument('--weight_decay', default=1e-4, type=float, help='L2 weight decay coefficient')
@@ -506,13 +455,6 @@ def get_parser():
 
     # * Learning rates (Deformable DETR)
     parser.add_argument('--lr_reference_points', default=1e-5, type=float, help='reference points learning rate')
-
-    # * Learning rates (DETR)
-    parser.add_argument('--lr_projector', default=1e-4, type=float, help='DETR projector learning rate')
-    parser.add_argument('--lr_encoder', default=1e-4, type=float, help='DETR encoder learning rate')
-    parser.add_argument('--lr_decoder', default=1e-4, type=float, help='DETR decoder learning rate')
-    parser.add_argument('--lr_class_head', default=1e-4, type=float, help='DETR classification head learning rate')
-    parser.add_argument('--lr_bbox_head', default=1e-4, type=float, help='DETR bounding box head learning rate')
 
     # * Learning rates (GCT)
     parser.add_argument('--lr_map', default=1e-5, type=float, help='GCT map learning rate')
@@ -553,10 +495,6 @@ def main(args):
     device = torch.device(args.device)
     model = build_arch(args)
     model = model.to(device)
-
-    # Load untrained model parts from original DETR if required
-    if args.load_orig_detr and args.arch_type == 'detr':
-        model.load_from_original_detr()
 
     # Try loading checkpoint
     checkpoint_path = ''
