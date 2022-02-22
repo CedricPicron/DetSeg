@@ -24,7 +24,7 @@ def get_parser():
     parser.add_argument('--device', default='cuda', type=str, help='name of device to use')
     parser.add_argument('--checkpoint_full', default='', type=str, help='path with full checkpoint to resume from')
     parser.add_argument('--checkpoint_model', default='', type=str, help='path with model checkpoint to resume from')
-    parser.add_argument('--output_dir', default='', type=str, help='path to output directory (no saving when empty)')
+    parser.add_argument('--output_dir', default='', type=str, help='path to output directory')
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
@@ -33,27 +33,27 @@ def get_parser():
     # Dataset
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
     parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during validation')
-
-    # Evaluation
-    parser.add_argument('--eval', action='store_true', help='evaluate model from checkpoint and return')
-
-    # FLOPS computation
-    parser.add_argument('--get_flops', action='store_true', help='compute number of FLOPS of model and return')
-    parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
-
-    # Testing
-    parser.add_argument('--test', action='store_true', help='test model from checkpoint and return')
-    parser.add_argument('--test_split', default='test-dev', type=str, help='name of the test split')
-
-    # Visualization
-    parser.add_argument('--visualize', action='store_true', help='visualize model from checkpoint and return')
-    parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
-    parser.add_argument('--image_offset', default=0, type=int, help='image id of first image to be visualized')
-    parser.add_argument('--random_offset', action='store_true', help='generate random image offset')
+    parser.add_argument('--train_split', default='train2017', type=str, help='name of the training split')
+    parser.add_argument('--eval_split', default='val2017', type=str, help='name of the evaluation split')
 
     # Data loading
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
     parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
+
+    # Evaluation
+    parser.add_argument('--eval', action='store_true', help='perform evaluation task instead of training')
+    parser.add_argument('--eval_task', default='performance', type=str, help='name of the evaluation task')
+
+    # * FLOPS computation
+    parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
+
+    # * Performance
+    parser.add_argument('--perf_with_vis', action='store_true', help='also gather visualizations during evaluation')
+
+    # * Visualization
+    parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
+    parser.add_argument('--image_offset', default=0, type=int, help='image id of first image to be visualized')
+    parser.add_argument('--random_offset', action='store_true', help='generate random image offset')
 
     # Architecture
     parser.add_argument('--arch_type', default='bch', type=str, help='type of architecture module')
@@ -482,14 +482,19 @@ def main(args):
 
     Args:
         args (argparse.Namespace): Command-line arguments.
+
+    Raises:
+        ValueError: Error when no output directory could be determined for the 'visualize' evaluation task.
+        ValueError: Error when in distributed mode for the 'visualize' evaluation task.
+        ValueError: Error when an unknown evaluation task is provided.
     """
 
     # Initialize distributed mode if needed
     distributed.init_distributed_mode(args)
     print(args)
 
-    # Get training/validation datasets and evaluator
-    train_dataset, val_dataset, evaluator = build_dataset(args)
+    # Get datasets and evaluator
+    datasets, evaluator = build_dataset(args)
 
     # Build model and place it on correct device
     device = torch.device(args.device)
@@ -520,72 +525,77 @@ def main(args):
     if args.distributed:
         model = distributed.DistributedDataParallel(model, device_id=args.gpu)
 
-    # Set 'requires_masks' attributes of datasets
-    train_dataset.requires_masks = args.requires_masks
-    val_dataset.requires_masks = args.requires_masks
+    # Set 'requires_masks' attribute of datasets
+    for dataset in datasets.values():
+        dataset.requires_masks = args.requires_masks
 
-    # Get training and validation samplers
-    if args.distributed:
-        train_sampler = DistributedSampler(train_dataset)
-        val_sampler = DistributedSampler(val_dataset, shuffle=False)
-    else:
-        train_sampler = RandomSampler(train_dataset)
-        val_sampler = SequentialSampler(val_dataset)
-
-    # Get training and validation dataloaders
-    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+    # Get shared dataloader keyword arguments
     dataloader_kwargs = {'collate_fn': collate_fn, 'num_workers': args.num_workers, 'pin_memory': True}
 
-    train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
-    val_dataloader = DataLoader(val_dataset, args.batch_size, sampler=val_sampler, **dataloader_kwargs)
+    # Get training dataloader if needed
+    if not args.eval:
+        train_dataset = datasets['train']
+        train_sampler = DistributedSampler(train_dataset) if args.distributed else RandomSampler(train_dataset)
+        train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+        train_dataloader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, **dataloader_kwargs)
 
-    # If requested, evaluate model from checkpoint and return
+    # Get evaluation dataloader
+    eval_dataset = datasets['eval']
+
+    if args.eval and args.eval_task == 'visualize':
+        eval_sampler = SubsetSampler(eval_dataset, args.num_images, args.image_offset, args.random_offset)
+    elif args.distributed:
+        eval_sampler = DistributedSampler(eval_dataset, shuffle=False)
+    else:
+        eval_sampler = SequentialSampler(eval_dataset)
+
+    eval_dataloader = DataLoader(eval_dataset, args.batch_size, sampler=eval_sampler, **dataloader_kwargs)
+
+    # Get output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    elif checkpoint_path:
+        output_dir = Path(checkpoint_path).parent
+    else:
+        output_dir = None
+
+    # Perform evaluation task if requested
     if args.eval:
 
-        # Get output directory
-        if args.output_dir:
-            output_dir = Path(args.output_dir)
-        elif checkpoint_path:
-            output_dir = Path(checkpoint_path).parent
-        else:
-            output_dir = None
-
-        # Evaluate model and return
-        evaluate(model, val_dataloader, evaluator=evaluator, output_dir=output_dir, visualize=args.visualize)
-        return
-
-    # If requested, compute average number of FLOPS of model and return
-    if args.get_flops:
-        avg_flops = compute_flops(model, val_dataset, num_samples=args.flops_samples)
-        print(f"Average number of FLOPS: {avg_flops: .1f} GFLOPS")
-        return
-
-    # If requested, visualize model from checkpoint and return
-    if args.visualize:
-
-        # Get output directory
-        if args.output_dir:
-            output_dir = Path(args.output_dir)
-        elif checkpoint_path:
-            output_dir = Path(checkpoint_path).parent
-        else:
-            print("No output directory was given or can be derived from checkpoint for visualization. Returning now.")
+        # Compute average number of FLOPS of model and return
+        if args.eval_task == 'compute_flops':
+            avg_flops = compute_flops(model, eval_dataset, num_samples=args.flops_samples)
+            print(f"Average number of FLOPS: {avg_flops: .1f} GFLOPS")
             return
 
-        if args.distributed:
-            print("Distributed mode is not supported for visualization. Returning now.")
+        # Evaluate model performance and return
+        elif args.eval_task == 'performance':
+            evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, visualize=args.perf_with_vis)
             return
 
-        if args.batch_size > 1:
-            print("It's recommended to use 'batch_size=1' so that printed loss and analysis dicts are image-specific.")
+        # Visualize model predictions and return
+        elif args.eval_task == 'visualize':
+            if output_dir is None:
+                error_msg = "The 'visualize' evaluation task requires an output directory, but no output directory "
+                error_msg += "was given or could be derived from checkpoint."
+                raise ValueError(error_msg)
 
-        # Get visualization dataloader
-        subset_sampler = SubsetSampler(val_dataset, args.num_images, args.image_offset, args.random_offset)
-        dataloader = DataLoader(val_dataset, args.batch_size, sampler=subset_sampler, **dataloader_kwargs)
+            if args.distributed:
+                error_msg = "Distributed mode is not supported for the 'visualize' evaluation task."
+                raise ValueError(error_msg)
 
-        # Get visualizations and return
-        evaluate(model, dataloader, output_dir=output_dir, print_freq=1, save_stats=False, visualize=True)
-        return
+            if args.batch_size > 1:
+                msg = "It's recommended to use 'batch_size=1' for the 'visualize' evaluation task, so that the printed "
+                msg += "loss and analysis dictionaries are image-specific."
+                print(msg)
+
+            evaluate(model, eval_dataloader, output_dir=output_dir, print_freq=1, save_stats=False, visualize=True)
+            return
+
+        # Raise error
+        else:
+            error_msg = f"An unknown evaluation task was provided (got '{args.eval_task}')."
+            raise ValueError(error_msg)
 
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
@@ -642,8 +652,8 @@ def main(args):
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        val_stats = evaluate(model, val_dataloader, evaluator=evaluator, epoch=epoch)
-        save_log(args.output_dir, epoch, train_stats, val_stats)
+        eval_stats = evaluate(model, eval_dataloader, evaluator=evaluator, epoch=epoch)
+        save_log(args.output_dir, epoch, train_stats, eval_stats)
 
     # End training timer and report total training time
     total_time = time.time() - start_time
