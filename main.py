@@ -572,7 +572,8 @@ def main(args):
 
         # Evaluate model performance and return
         elif args.eval_task == 'performance':
-            perf_kwargs = {'save_stats': True, 'save_results': args.perf_save_res, 'save_tag': args.perf_save_tag}
+            perf_kwargs = {'save_stats': True, 'save_results': args.perf_save_res}
+            perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
             perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis}
             evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
             return
