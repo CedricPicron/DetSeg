@@ -74,23 +74,25 @@ def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, print_freq=10, save_stats=True,
-             visualize=False):
+def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, print_freq=10, save_stats=False,
+             save_results=False, save_tag='single_scale', visualize=False):
     """
     Evaluates model on data from given dataloader. It additionally computes visualizations if 'visualize' is set.
 
     Args:
         model (nn.Module): Module to be evaluated computing predictions from images.
-        dataloader (torch.utils.data.Dataloader): Validation dataloader.
+        dataloader (torch.utils.data.Dataloader): Evaluation dataloader.
         evaluator (object): Object computing evaluations from predictions and storing them (default=None).
         epoch (int): Integer containing the number of training epochs completed (default=None).
         output_dir (Path): Path to directory to save evaluations and potentially visualizations (default=None).
         print_freq (int): Integer containing the logger print frequency (default=10).
-        save_stats (bool): Boolean indicating whether to save validation statistics (default=True).
+        save_stats (bool): Boolean indicating whether to save evaluation statistics (default=False).
+        save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
+        save_tag (str): String containing tag used at the end of evaluation file names (default='single_scale').
         visualize (bool): Boolean indicating whether visualizations should be computed (default=False).
 
     Returns:
-        val_stats (Dict): Dictionary containing the validation statistics.
+        eval_stats (Dict): Dictionary containing the evaluation statistics.
     """
 
     # Get device, set model in evaluation mode and initialize evaluators
@@ -112,9 +114,9 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
 
     # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ")
-    header = "Validation:" if epoch is None else f"Val epoch {epoch}:"
+    header = "Evaluation:" if epoch is None else f"Eval epoch {epoch}:"
 
-    # Iterate over validation images
+    # Iterate over evaluation images
     for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
 
         # Place images and target dictionary on correct device
@@ -122,16 +124,25 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
         # Get prediction, loss and analysis dictionaries
-        output_dicts = model(images, tgt_dict, extended_analysis=True, visualize=visualize)
-        pred_dicts, loss_dict, analysis_dict = output_dicts[:3]
+        tgt_dict = tgt_dict if tgt_dict else None
+        output_dicts = model(images, tgt_dict=tgt_dict, extended_analysis=True, visualize=visualize)
+
+        if tgt_dict is not None:
+            pred_dicts, loss_dict, analysis_dict = output_dicts[:3]
+        else:
+            pred_dicts, analysis_dict = output_dicts[:2]
+            loss_dict = {}
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)
-        loss_dict = distributed.reduce_dict(loss_dict)
-        loss = sum(loss_dict.values()).item()
+        loss_dict = distributed.reduce_dict(loss_dict) if loss_dict else loss_dict
 
         # Update logger
-        metric_logger.update(**analysis_dict, **loss_dict, loss=loss)
+        metric_logger.update(**analysis_dict, **loss_dict)
+
+        if loss_dict:
+            loss = sum(loss_dict.values()).item()
+            metric_logger.update(loss=loss)
 
         # Update evaluators
         if evaluators is not None:
@@ -140,7 +151,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
 
         # Save visualizations to visualization directory
         if visualize and output_dir is not None:
-            images_dict = output_dicts[3]
+            images_dict = output_dicts[-1]
 
             for key, image in images_dict.items():
                 key_parts = key.split('_')
@@ -156,28 +167,34 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
             evaluator.accumulate()
             evaluator.summarize()
 
-    # Get epoch validation statistics
+    # Get epoch evaluation statistics
     metric_logger.synchronize_between_processes()
-    val_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    eval_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
     if evaluators is not None:
         for i, evaluator in enumerate(evaluators, 1):
             for metric in evaluator.metrics:
-                val_stats[f'eval_{i}_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
+                if hasattr(evaluator, 'sub_evaluators'):
+                    eval_stats[f'eval_{i}_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
 
     # Save evaluations to output directory
     if distributed.is_main_process() and output_dir is not None:
         if save_stats:
-            with (output_dir / 'eval.txt').open('w') as eval_file:
-                eval_file.write(json.dumps(val_stats) + "\n")
+            with (output_dir / f'eval_{save_tag}.txt').open('w') as eval_file:
+                eval_file.write(json.dumps(eval_stats) + "\n")
 
         if evaluators is not None:
             for i, evaluator in enumerate(evaluators, 1):
                 for metric in evaluator.metrics:
-                    evaluations = evaluator.sub_evaluators[metric].eval
-                    torch.save(evaluations, output_dir / f'eval_{i}_{metric}.pth')
+                    if save_results or not hasattr(evaluator, 'sub_evaluators'):
+                        with open(output_dir / f'result_{i}_{metric}_{save_tag}.json', 'w') as result_file:
+                            json.dump(evaluator.result_dicts[metric], result_file)
 
-    return val_stats
+                    if hasattr(evaluator, 'sub_evaluators'):
+                        evaluations = evaluator.sub_evaluators[metric].eval
+                        torch.save(evaluations, output_dir / f'eval_{i}_{metric}_{save_tag}.pth')
+
+    return eval_stats
 
 
 def save_checkpoint(args, epoch, model, optimizer, scheduler):
@@ -211,17 +228,17 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler):
             torch.save(checkpoint, checkpoint_path)
 
 
-def save_log(output_dir, epoch, train_stats, val_stats):
+def save_log(output_dir, epoch, train_stats, eval_stats):
     """
     Function used for log saving.
 
-    No logs are saved when output_dir is and empty string.
+    No logs are saved when output_dir is an empty string.
 
     Args:
         output_dir (str): String containing the path to the output directory used for saving.
         epoch (int): Training epochs completed.
         train_stats (Dict): Dictionary containing the training statistics.
-        val_stats (Dict): Dictionary containing the val statistics.
+        eval_stats (Dict): Dictionary containing the evaluation statistics.
     """
 
     if output_dir and distributed.is_main_process():
@@ -229,7 +246,7 @@ def save_log(output_dir, epoch, train_stats, val_stats):
 
         log_dict = {'epoch': epoch}
         log_dict.update({f'train_{k}': v for k, v in train_stats.items()})
-        log_dict.update({f'val_{k}': v for k, v in val_stats.items()})
+        log_dict.update({f'eval_{k}': v for k, v in eval_stats.items()})
 
         with (output_dir / 'log.txt').open('a') as log_file:
             log_file.write(json.dumps(log_dict) + "\n")

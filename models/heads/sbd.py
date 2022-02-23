@@ -75,10 +75,12 @@ class SBD(nn.Module):
         up_ca_type (str): String containing the type of cross-attention used by the update layers.
         up_layers (nn.ModuleList): List of update layers computing new object states from current object states.
         up_iters (int): Integer containing the number of iterations over all update layers.
+
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
     def __init__(self, dod, state_dict, osi_dict, ae_dict, se_dict, cls_dict, box_dict, match_dict, loss_dict,
-                 pred_dict, update_dict, ca_dict, sa_dict, ffn_dict):
+                 pred_dict, update_dict, ca_dict, sa_dict, ffn_dict, metadata):
         """
         Initializes the SBD module.
 
@@ -229,6 +231,8 @@ class SBD(nn.Module):
                 - skip (bool): boolean indicating whether layers of the FFN network contain skip connections;
                 - hidden_size (int): hidden feature size of the FFN network.
 
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+
         Raises:
             ValueError: Error when invalid loss application frequency is provided.
             ValueError: Error when both the 'freeze_inter' and 'no_sharing' CLS attributes are set to True.
@@ -365,6 +369,9 @@ class SBD(nn.Module):
             ca_id = update_dict['types'].index('ca')
             last_pa_layer = self.up_layers[-1][ca_id][0].pa
             last_pa_layer.no_sample_locations_update()
+
+        # Set metadata attribute
+        self.metadata = metadata
 
     def _load_from_state_dict(self, state_dict, *args):
         """
@@ -1255,7 +1262,7 @@ class SBD(nn.Module):
         else:
             return pred_dicts, analysis_dict, obj_states, obj_anchors, feats, feat_ids
 
-    def visualize(self, images, pred_dicts, tgt_dict, metadata=None, score_threshold=0.35):
+    def visualize(self, images, pred_dicts, tgt_dict, score_threshold=0.35):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -1275,7 +1282,6 @@ class SBD(nn.Module):
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
-            metadata (detectron2.data.Metadata): Object containing additional dataset information (default=None).
             score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.35).
 
         Returns:
@@ -1336,7 +1342,7 @@ class SBD(nn.Module):
             sizes = draw_dict['sizes']
 
             for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                visualizer = Visualizer(images[image_id], metadata=metadata)
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
 
                 img_size = img_sizes[image_id]
                 img_size = (img_size[1], img_size[0])

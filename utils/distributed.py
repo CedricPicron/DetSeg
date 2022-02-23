@@ -201,34 +201,37 @@ def all_gather(input_data):
         gathered_data (List): List of data gathered from each process.
     """
 
-    # Get world size and return if world size is one
+    # Get world size
     world_size = get_world_size()
+
+    # Return if world size is one
     if world_size == 1:
         return [input_data]
 
     # Transform serialized object to byte tensor
     buffer = pickle.dumps(input_data)
     storage = torch.ByteStorage.from_buffer(buffer)
-    tensor = torch.ByteTensor(storage).to("cuda")
+    tensor = torch.ByteTensor(storage).to('cuda')
 
     # Obtain max tensor size
-    local_size = torch.tensor([tensor.numel()], device="cuda")
-    size_list = [torch.tensor([0], device="cuda") for _ in range(world_size)]
+    local_size = torch.tensor([tensor.numel()], device='cuda')
+    size_list = [torch.tensor([0], device='cuda') for _ in range(world_size)]
     torch.distributed.all_gather(size_list, local_size)
     size_list = [int(size.item()) for size in size_list]
     max_size = max(size_list)
 
     # Pad tensors as only tensors of same shape can be gathered
     if local_size != max_size:
-        padding = torch.empty(size=(max_size - local_size,), dtype=torch.uint8, device="cuda")
+        padding = torch.empty(size=(max_size - local_size,), dtype=torch.uint8, device='cuda')
         tensor = torch.cat((tensor, padding), dim=0)
 
     # Gather padded tensors in tensor_list
-    tensor_list = [torch.empty((max_size,), dtype=torch.uint8, device="cuda") for _ in size_list]
+    tensor_list = [torch.empty((max_size,), dtype=torch.uint8, device='cuda') for _ in size_list]
     torch.distributed.all_gather(tensor_list, tensor)
 
     # Post-processing with padding removal and reserialization
     gathered_data = []
+
     for size, tensor in zip(size_list, tensor_list):
         buffer = tensor.cpu().numpy().tobytes()[:size]
         gathered_data.append(pickle.loads(buffer))

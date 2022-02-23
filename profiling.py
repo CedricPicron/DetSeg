@@ -3,6 +3,7 @@ Profiling script.
 """
 import argparse
 
+from detectron2.data import MetadataCatalog
 from detectron2.modeling.anchor_generator import DefaultAnchorGenerator
 import torch
 import torch.autograd.profiler as profiler
@@ -57,6 +58,7 @@ if profiling_args.model == 'bch_dod':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bch_sbd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.arch_type = 'bch'
     main_args.backbone_type = 'mmdet'
@@ -141,6 +143,7 @@ elif profiling_args.model == 'bin':
     backward_stmt = "model(**inputs)[0]['bin_seg_loss'].backward()"
 
 elif profiling_args.model == 'brd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['brd']
@@ -188,6 +191,7 @@ elif profiling_args.model == 'bvn_bin':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bvn_ret':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.arch_type = 'bvn'
     main_args.bvn_step_mode = 'single'
@@ -218,6 +222,7 @@ elif profiling_args.model == 'bvn_ret':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'bvn_sem':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.arch_type = 'bvn'
     main_args.bvn_step_mode = 'single'
@@ -267,6 +272,7 @@ elif profiling_args.model == 'dc':
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'dfd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['dfd']
@@ -381,6 +387,7 @@ elif profiling_args.model == 'gct':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'mbd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_ids = [3, 4, 5, 6, 7]
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
@@ -503,6 +510,7 @@ elif profiling_args.model == 'resnet':
     backward_stmt = "torch.cat([map.sum()[None] for map in model(**inputs)]).sum().backward()"
 
 elif profiling_args.model == 'ret':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_ids = [3, 4, 5, 6, 7]
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
@@ -533,6 +541,7 @@ elif profiling_args.model == 'ret':
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'sbd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_ids = [3, 4, 5, 6, 7]
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
@@ -592,6 +601,7 @@ elif profiling_args.model == 'sbd':
     backward_stmt = "sum(v[None] for v in model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'sem':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.core_out_sizes = [256, 256, 256, 256, 256]
     main_args.heads = ['sem']

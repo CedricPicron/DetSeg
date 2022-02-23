@@ -24,8 +24,9 @@ def build_heads(args):
         heads (Dict): Dictionary with specified head modules.
     """
 
-    # Initialize empty dictionary of head modules
+    # Initialize empty dictionary of head modules and get metadata
     heads = {}
+    metadata = args.metadata
 
     # Initialize 'requires_masks' command-line argument
     args.requires_masks = False
@@ -71,7 +72,7 @@ def build_heads(args):
             loss_dict = {**loss_dict, 'l1_loss_weight': args.brd_l1_loss_weight}
             loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}
 
-            brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict)
+            brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict, metadata)
             heads[head_type] = brd_head
 
         elif head_type == 'dfd':
@@ -113,7 +114,7 @@ def build_heads(args):
             inf_dict = {**inf_dict, 'ins_threshold': args.dfd_inf_ins_threshold}
             inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
 
-            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict)
+            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, metadata)
             heads[head_type] = dfd_head
 
         elif head_type == 'dod':
@@ -203,7 +204,7 @@ def build_heads(args):
 
             pred_dict = {'pred_thr': args.mbd_pred_thr}
 
-            mbd_head = MBD(sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict)
+            mbd_head = MBD(sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict, metadata)
             heads[head_type] = mbd_head
 
         elif head_type == 'ret':
@@ -225,7 +226,7 @@ def build_heads(args):
             test_dict = {**test_dict, 'nms_threshold': args.ret_nms_threshold}
             test_dict = {**test_dict, 'max_detections': args.ret_max_detections}
 
-            ret_head = RetinaHead(num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict)
+            ret_head = RetinaHead(num_classes, map_ids, in_feat_sizes, pred_head_dict, loss_dict, test_dict, metadata)
             heads[head_type] = ret_head
 
         elif head_type == 'sbd':
@@ -327,14 +328,14 @@ def build_heads(args):
             ffn_dict = {**ffn_dict, 'norm': args.sbd_ffn_norm, 'act_fn': args.sbd_ffn_act_fn, 'skip': True}
 
             sbd_args = (dod, state_dict, osi_dict, ae_dict, se_dict, cls_dict, box_dict, match_dict, loss_dict)
-            sbd_args = (*sbd_args, pred_dict, update_dict, ca_dict, sa_dict, ffn_dict)
+            sbd_args = (*sbd_args, pred_dict, update_dict, ca_dict, sa_dict, ffn_dict, metadata)
 
             sbd_head = SBD(*sbd_args)
             heads[head_type] = sbd_head
 
         elif head_type == 'sem':
             args.requires_masks = True
-            head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight]
+            head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, metadata]
 
             sem_head = SemanticSegHead(args.core_out_sizes, *head_args)
             heads[head_type] = sem_head

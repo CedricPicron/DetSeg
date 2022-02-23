@@ -17,15 +17,15 @@ def collate_fn(batch):
 
     Args:
         batch (List): List of size [batch_size] containing tuples of:
-            - image (Images): Structure containing the image tensor after data augmentation;
-            - tgt_dict (Dict): Target dictionary containing following keys:
+            - image (Images): structure containing the image tensor after data augmentation;
+            - tgt_dict (Dict): target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
                 - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
 
     Returns:
         images (Images): New Images structure containing the concatenated Images structures across batch entries.
-        tgt_dict (Dict): New target dictionary with concatenated items across batch entries containing following keys:
+        tgt_dict (Dict): New target dictionary potentially containing following keys (empty when no annotations):
             - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
@@ -37,6 +37,11 @@ def collate_fn(batch):
 
     # Concatenate images across batch entries
     images = Images.cat(images)
+
+    # Return if target dictionaries are empty
+    if not tgt_dicts[0]:
+        tgt_dict = {}
+        return images, tgt_dict
 
     # Concatenate target labels and target boxes across batch entries
     tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts])

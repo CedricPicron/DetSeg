@@ -32,9 +32,9 @@ def get_parser():
 
     # Dataset
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
-    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during validation')
-    parser.add_argument('--train_split', default='train2017', type=str, help='name of the training split')
-    parser.add_argument('--eval_split', default='val2017', type=str, help='name of the evaluation split')
+    parser.add_argument('--train_split', default='2017_train', type=str, help='name of the training split')
+    parser.add_argument('--eval_split', default='2017_val', type=str, help='name of the evaluation split')
+    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during evaluation')
 
     # Data loading
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
@@ -48,6 +48,8 @@ def get_parser():
     parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
 
     # * Performance
+    parser.add_argument('--perf_save_res', action='store_true', help='save results even when having annotations')
+    parser.add_argument('--perf_save_tag', default='single_scale', type=str, help='tag used in evaluation file names')
     parser.add_argument('--perf_with_vis', action='store_true', help='also gather visualizations during evaluation')
 
     # * Visualization
@@ -570,7 +572,9 @@ def main(args):
 
         # Evaluate model performance and return
         elif args.eval_task == 'performance':
-            evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, visualize=args.perf_with_vis)
+            perf_kwargs = {'save_stats': True, 'save_results': args.perf_save_res, 'save_tag': args.perf_save_tag}
+            perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis}
+            evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
             return
 
         # Visualize model predictions and return
@@ -589,7 +593,7 @@ def main(args):
                 msg += "loss and analysis dictionaries are image-specific."
                 print(msg)
 
-            evaluate(model, eval_dataloader, output_dir=output_dir, print_freq=1, save_stats=False, visualize=True)
+            evaluate(model, eval_dataloader, output_dir=output_dir, print_freq=1, visualize=True)
             return
 
         # Raise error
