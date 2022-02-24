@@ -134,7 +134,7 @@ class CocoDataset(VisionDataset):
         if hasattr(self, 'coco'):
             image_path = self.root / self.coco.loadImgs(image_id)[0]['file_name']
         elif hasattr(self, 'filenames'):
-            image_path = self.root / self.filenames[image_id]
+            image_path = self.root / self.filenames[index]
         else:
             error_msg = "Neither the 'coco' attribute nor the 'filenames' attribute is set."
             raise ValueError(error_msg)
