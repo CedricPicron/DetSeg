@@ -75,7 +75,7 @@ def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
 
 @torch.no_grad()
 def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, print_freq=10, save_stats=False,
-             save_results=False, save_tag='single_scale', visualize=False):
+             save_results=False, save_tag='single_scale', visualize=False, vis_score_thr=0.4):
     """
     Evaluates model on data from given dataloader. It additionally computes visualizations if 'visualize' is set.
 
@@ -90,6 +90,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
         save_tag (str): String containing tag used at the end of evaluation file names (default='single_scale').
         visualize (bool): Boolean indicating whether visualizations should be computed (default=False).
+        vis_score_thr (float): Threshold indicating the minimum score for a detection to be drawn (default=0.4).
 
     Returns:
         eval_stats (Dict): Dictionary containing the evaluation statistics.
@@ -112,6 +113,9 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         vis_dir = output_dir / 'visualization'
         vis_dir.mkdir(exist_ok=True)
 
+    # Get fixed model keyword arguments
+    model_kwargs = {'extended_analysis': True, 'visualize': visualize, 'vis_score_thr': vis_score_thr}
+
     # Initialize metric logger
     metric_logger = MetricLogger(delimiter="  ")
     header = "Evaluation:" if epoch is None else f"Eval epoch {epoch}:"
@@ -125,7 +129,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
 
         # Get prediction, loss and analysis dictionaries
         tgt_dict = tgt_dict if tgt_dict else None
-        output_dicts = model(images, tgt_dict=tgt_dict, extended_analysis=True, visualize=visualize)
+        output_dicts = model(images, tgt_dict=tgt_dict, **model_kwargs)
 
         if tgt_dict is not None:
             pred_dicts, loss_dict, analysis_dict = output_dicts[:3]

@@ -945,7 +945,7 @@ class DFD(nn.Module):
 
             return pred_dicts
 
-    def visualize(self, images, pred_dicts, tgt_dict, score_threshold=0.4):
+    def visualize(self, images, pred_dicts, tgt_dict=None, vis_score_thr=0.4, **kwargs):
         """
         Draws predicted and target bounding boxes on given full-resolution images.
 
@@ -967,12 +967,13 @@ class DFD(nn.Module):
                 - nms_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW];
                 - ins_ins_logits (List): List [batch_size, num_maps] with ins logits of shape [num_dets+1, fH, fW].
 
-            tgt_dict (Dict): Target dictionary containing at least following keys:
+            tgt_dict (Dict): Optional target dictionary containing at least following keys when given:
                 - labels (List): list of size [batch_size] with class indices of shape [num_targets];
                 - boxes (List): list of size [batch_size] with normalized Boxes structure of size [num_targets];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
 
-            score_threshold (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
+            vis_score_thr (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             images_dict (Dict): Dictionary of images with drawn predicted and target bounding boxes.
@@ -981,15 +982,17 @@ class DFD(nn.Module):
         # Get keys found in draw dictionaries
         draw_dict_keys = ['labels', 'boxes', 'scores', 'sizes']
 
-        # Get draw dictionaries for predictions
-        pred_draw_dicts = []
+        # Initialize list of draw dictionaries and list of dictionary names
+        draw_dicts = []
+        dict_names = []
 
-        for pred_dict in pred_dicts:
+        # Get prediction draw dictionaries and dictionary names
+        for i, pred_dict in enumerate(pred_dicts, 1):
             pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
             well_defined = pred_boxes.well_defined()
 
             pred_scores = pred_dict['scores'][well_defined]
-            sufficient_score = pred_scores >= score_threshold
+            sufficient_score = pred_scores >= vis_score_thr
 
             pred_labels = pred_dict['labels'][well_defined][sufficient_score]
             pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
@@ -997,24 +1000,26 @@ class DFD(nn.Module):
             pred_batch_ids = pred_dict['batch_ids'][well_defined][sufficient_score]
 
             pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
-            pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(tgt_dict['sizes'])
+            pred_sizes = torch.tensor(pred_sizes).cumsum(dim=0).to(pred_scores.device)
 
             draw_dict_values = [pred_labels, pred_boxes, pred_scores, pred_sizes]
-            pred_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
-            pred_draw_dicts.append(pred_draw_dict)
+            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
 
-        # Get draw dictionary for targets
-        tgt_labels = torch.cat(tgt_dict['labels'])
-        tgt_boxes = Boxes.cat(tgt_dict['boxes']).to_img_scale(images).to_format('xyxy').boxes
-        tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
-        tgt_sizes = tgt_dict['sizes']
+            draw_dicts.append(draw_dict)
+            dict_names.append(f'pred_{i}')
 
-        draw_dict_values = [tgt_labels, tgt_boxes, tgt_scores, tgt_sizes]
-        tgt_draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+        # Get target draw dictionary and dictionary name if target dictionary is provided
+        if tgt_dict is not None:
+            tgt_labels = torch.cat(tgt_dict['labels'])
+            tgt_boxes = Boxes.cat(tgt_dict['boxes']).to_img_scale(images).to_format('xyxy').boxes
+            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
+            tgt_sizes = tgt_dict['sizes']
 
-        # Combine draw dicationaries and get corresponding dictionary names
-        draw_dicts = [*pred_draw_dicts, tgt_draw_dict]
-        dict_names = [f'pred_{i+1}'for i in range(len(pred_dicts))] + ['tgt']
+            draw_dict_values = [tgt_labels, tgt_boxes, tgt_scores, tgt_sizes]
+            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+
+            draw_dicts.append(draw_dict)
+            dict_names.append('tgt')
 
         # Get image sizes with and without padding in (width, height) format
         img_size_with_padding = images.size(mode='with_padding')

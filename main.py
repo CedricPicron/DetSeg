@@ -56,6 +56,7 @@ def get_parser():
     parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
     parser.add_argument('--image_offset', default=0, type=int, help='image id of first image to be visualized')
     parser.add_argument('--random_offset', action='store_true', help='generate random image offset')
+    parser.add_argument('--vis_score_thr', default=0.4, type=float, help='score threshold used during visualization')
 
     # Architecture
     parser.add_argument('--arch_type', default='bch', type=str, help='type of architecture module')
@@ -574,7 +575,7 @@ def main(args):
         elif args.eval_task == 'performance':
             perf_kwargs = {'save_stats': True, 'save_results': args.perf_save_res}
             perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
-            perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis}
+            perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis, 'vis_score_thr': args.vis_score_thr}
             evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
             return
 
@@ -594,7 +595,8 @@ def main(args):
                 msg += "loss and analysis dictionaries are image-specific."
                 print(msg)
 
-            evaluate(model, eval_dataloader, output_dir=output_dir, print_freq=1, visualize=True)
+            vis_kwargs = {'print_freq': 1, 'visualize': True, 'vis_score_thr': args.vis_score_thr}
+            evaluate(model, eval_dataloader, output_dir=output_dir, **vis_kwargs)
             return
 
         # Raise error

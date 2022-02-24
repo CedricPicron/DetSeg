@@ -266,7 +266,7 @@ class BVN(nn.Module):
 
             # Get and return annotated images, loss and analysis dictionaries (visualization only)
             if len(pred_heads) == 1:
-                images_dict = head.visualize(images, pred_dicts, tgt_dict)
+                images_dict = head.visualize(images, pred_dicts, tgt_dict, **kwargs)
             else:
                 error_msg = f"BVN only supports visualization for models with a single head (got {len(pred_heads)})."
                 raise RuntimeError(error_msg)

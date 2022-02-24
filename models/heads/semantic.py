@@ -254,7 +254,7 @@ class SemanticSegHead(nn.Module):
 
         return loss_dict, analysis_dict
 
-    def visualize(self, images, pred_dicts, tgt_dict):
+    def visualize(self, images, pred_dicts, tgt_dict=None, **kwargs):
         """
         Draws predicted and target semantic segmentations on given full-resolution images.
 
@@ -264,17 +264,23 @@ class SemanticSegHead(nn.Module):
             pred_dicts (List): List of prediction dictionaries with each dictionary containing following keys:
                 - semantic_maps (List): predicted semantic segmentation maps of shape [batch_size, fH, fW].
 
-            tgt_dict (Dict): Target dictionary containing at least following key:
+            tgt_dict (Dict): Optional target dictionary containing at least following key when given:
                 - semantic_maps (List): semantic segmentation maps with class indices of shape [batch_size, fH, fW].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             images_dict (Dict): Dictionary of images with drawn predicted and target semantic segmentations.
         """
 
-        # Combine prediction and target semantic maps and get corresponding map names
-        semantic_maps = [map for p in pred_dicts for map in p['semantic_maps']] + tgt_dict['semantic_maps']
+        # Get prediction semantic maps and map names
+        semantic_maps = [map for p in pred_dicts for map in p['semantic_maps']]
         map_names = [f'pred_{i}_f{j}' for i, p in enumerate(pred_dicts, 1) for j in range(len(p['semantic_maps']))]
-        map_names.extend([f'tgt_f{j}' for j in range(len(tgt_dict['semantic_maps']))])
+
+        # Get target semantic maps and map names if target dictionary is provided
+        if tgt_dict is not None:
+            semantic_maps = semantic_maps + tgt_dict['semantic_maps']
+            map_names.extend([f'tgt_f{j}' for j in range(len(tgt_dict['semantic_maps']))])
 
         # Get possible map sizes in (height, width) format
         map_width, map_height = images.size(mode='with_padding')
