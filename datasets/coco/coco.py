@@ -1,7 +1,6 @@
 """
 COCO dataset/evaluator and build function.
 """
-import copy
 import contextlib
 import json
 import os
@@ -9,32 +8,34 @@ from pathlib import Path
 
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as COCO_SPLITS
+from detectron2.layers import batched_nms
 import numpy as np
 from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as coco_mask
 import torch
-from torchvision.datasets.vision import VisionDataset
+from torch.utils.data import Dataset
 
-import datasets.transforms as T
+from datasets.transforms import get_train_transforms, get_eval_transforms
 from structures.boxes import Boxes
 from structures.images import Images
 import utils.distributed as distributed
 
 
-class CocoDataset(VisionDataset):
+class CocoDataset(Dataset):
     """
     Class implementing the CocoDataset dataset.
 
     Attributes:
         root (Path): Path to directory with COCO images.
-        transforms (object): Transforms object to be applied on the image and target dictionary (if provided).
+        transforms (List): List [num_transforms] of transforms applied to image (and targets if available).
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
         coco (COCO): Optional object containing COCO annotations.
         image_ids (List): List [num_images] of image indices, sorted in ascending order.
         file_names (List): Optional list [num_images] of image file names aligned with image_ids list.
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+
         requires_masks (bool): Boolean indicating whether target dictionaries require masks.
     """
 
@@ -44,7 +45,7 @@ class CocoDataset(VisionDataset):
 
         Args:
             image_dir (Path): Path to directory with COCO images.
-            transforms (object): Transforms object to be applied on the image and target dictionary (if provided).
+            transforms (List): List [num_transforms] of transforms applied to image (and targets if available).
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             annotation_file (Path): Path to annotation file with COCO annotations (default=None).
             info_file (Path): Path to file with additional image information, but no annotations (default=None).
@@ -54,9 +55,12 @@ class CocoDataset(VisionDataset):
             ValueError: Error when no annotation or info file is provided.
         """
 
-        # Initialization of VisionDataset
-        super().__init__(image_dir, transforms=transforms)
+        # Set base attributes
+        self.root = image_dir
+        self.transforms = transforms
+        self.metadata = metadata
 
+        # Process annotation or info file
         if annotation_file is not None:
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
@@ -77,7 +81,6 @@ class CocoDataset(VisionDataset):
             raise ValueError(error_msg)
 
         # Set additional attributes
-        self.metadata = metadata
         self.requires_masks = requires_masks
 
     @staticmethod
@@ -114,7 +117,7 @@ class CocoDataset(VisionDataset):
         Implements the __getitem__ method of the CocoDataset dataset.
 
         Args:
-            index (int): Index selecting one of the dataset images.
+            index (int): Index selecting one of the dataset (image, transform) combinations.
 
         Returns:
             image (Images): Structure containing the image tensor after data augmentation.
@@ -128,13 +131,15 @@ class CocoDataset(VisionDataset):
             ValueError: Error when neither the 'coco' attribute nor the 'filenames' attribute is set.
         """
 
-        # Load image and place it into Images structure
-        image_id = self.image_ids[index]
+        # Get image index and transform
+        image_id = self.image_ids[index // len(self.transforms)]
+        transform = self.transforms[index % len(self.transforms)]
 
+        # Load image and place it into Images structure
         if hasattr(self, 'coco'):
             image_path = self.root / self.coco.loadImgs(image_id)[0]['file_name']
         elif hasattr(self, 'filenames'):
-            image_path = self.root / self.filenames[index]
+            image_path = self.root / self.filenames[index // len(self.transforms)]
         else:
             error_msg = "Neither the 'coco' attribute nor the 'filenames' attribute is set."
             raise ValueError(error_msg)
@@ -175,7 +180,7 @@ class CocoDataset(VisionDataset):
                 tgt_dict['masks'] = masks[well_defined]
 
         # Perform image and target dictionary transformations
-        image, tgt_dict = self.transforms(image, tgt_dict)
+        image, tgt_dict = transform(image, tgt_dict)
 
         # Only keep targets with well-defined boxes
         if 'boxes' in tgt_dict:
@@ -192,11 +197,11 @@ class CocoDataset(VisionDataset):
         Implements the __len__ method of the CocoDataset dataset.
 
         Returns:
-            dataset_length (int): Dataset length measured as the number of images in the dataset.
+            dataset_length (int): Dataset length measured as the number of images times the number of transforms.
         """
 
         # Get dataset length
-        dataset_length = len(self.image_ids)
+        dataset_length = len(self.image_ids) * len(self.transforms)
 
         return dataset_length
 
@@ -211,49 +216,51 @@ class CocoEvaluator(object):
         metrics (List): List of strings containing the evaluation metrics to be used.
         result_dicts (Dict): Dictionary of lists containing prediction results in COCO results format for each metric.
 
+        eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
+        nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections.
+
         Additional attributes when the evaluation dataset contains annotations:
             coco (COCO): Object containing the COCO dataset annotations.
             sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric.
-            image_evals (Dict): Dictionary of lists containing image evaluations for each metric.
     """
 
-    def __init__(self, eval_dataset, metrics=['bbox']):
+    def __init__(self, eval_dataset, metrics=['bbox'], nms_thr=0.5):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             eval_dataset (CocoDataset): The evaluation dataset.
             metrics (List): List of strings containing the evaluation metrics to be used (default=['bbox']).
+            nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
         """
 
-        # Set common attributes
+        # Set base attributes
         self.image_ids = []
         self.metadata = eval_dataset.metadata
         self.metrics = metrics
         self.result_dicts = {metric: [] for metric in self.metrics}
 
+        # Set NMS attributes
+        self.eval_nms = len(eval_dataset.transforms) > 1
+        self.nms_thr = nms_thr
+
         # Set additional attributes when evaluation dataset has annotations
         if hasattr(eval_dataset, 'coco'):
             self.coco = eval_dataset.coco
             self.sub_evaluators = {metric: COCOeval(self.coco, iouType=metric) for metric in self.metrics}
-            self.image_evals = {metric: [] for metric in self.metrics}
 
     def reset(self):
         """
-        Resets the CocoEvaluator evaluator.
+        Resets the image_ids and result_dicts attributes of the CocoEvaluator evaluator.
         """
 
         # Reset image_ids and result_dicts attributes
         self.image_ids = []
         self.result_dicts = {metric: [] for metric in self.metrics}
 
-        # Reset image_evals attribute if annotations are available
-        if hasattr(self, 'coco'):
-            self.image_evals = {metric: [] for metric in self.metrics}
-
     def update(self, images, pred_dict):
         """
-        Updates the evaluator object with the given predictions for the images with the given image ids.
+        Updates result dictionaries of the evaluator object based on the given images and corresponding predictions.
 
         Args:
             images (Images): Images structure containing the batched images.
@@ -320,181 +327,88 @@ class CocoEvaluator(object):
             # Update result_dicts attribute
             self.result_dicts[metric].extend(result_dicts)
 
-            # Update image_evals attribute if annotations are available
-            if hasattr(self, 'coco'):
-                with open(os.devnull, 'w') as devnull:
-                    with contextlib.redirect_stdout(devnull):
-                        coco_api_predictions = COCO.loadRes(self.coco, result_dicts)
-
-                sub_evaluator = self.sub_evaluators[metric]
-                sub_evaluator.cocoDt = coco_api_predictions
-                sub_evaluator.params.imgIds = images.image_ids
-
-                image_evals = CocoEvaluator.evaluate(sub_evaluator)
-                self.image_evals[metric].append(image_evals)
-
-    @staticmethod
-    def evaluate(sub_evaluator):
+    def evaluate(self, device='cpu'):
         """
-        Evaluates a metric from given sub_evaluator.
-
-        Copied from pycocotools, but without print statements and with additional post-processing.
+        Perform evaluation by finalizing the result dictionaries and by comparing with ground-truth (if available).
 
         Args:
-            sub_evaluator (COCOeval): Object used for evaluating a specific metric on COCO.
+            device (str): String containing the type of device used during NMS (default='cpu').
+
+        Raises:
+            ValueError: Error when none of the allowed NMS metrics match one of the evaluation metrics.
         """
 
-        # Copied from pycocotools, but without print statements
-        p = sub_evaluator.params
-        p.imgIds = list(np.unique(p.imgIds))
+        # Synchronize image indices and make them unique
+        gathered_image_ids = distributed.all_gather(self.image_ids)
+        self.image_ids = [image_id for list in gathered_image_ids for image_id in list]
+        self.image_ids = list(np.unique(self.image_ids))
 
-        if p.useCats:
-            p.catIds = list(np.unique(p.catIds))
-
-        p.maxDets = sorted(p.maxDets)
-        sub_evaluator.params = p
-
-        sub_evaluator._prepare()
-        catIds = p.catIds if p.useCats else [-1]
-
-        if p.iouType == 'segm' or p.iouType == 'bbox':
-            computeIoU = sub_evaluator.computeIoU
-        elif p.iouType == 'keypoints':
-            computeIoU = sub_evaluator.computeOks
-
-        sub_evaluator.ious = {(imgId, catId): computeIoU(imgId, catId)
-                              for imgId in p.imgIds
-                              for catId in catIds}
-
-        evaluateImg = sub_evaluator.evaluateImg
-        maxDet = p.maxDets[-1]
-        evalImgs = [evaluateImg(imgId, catId, areaRng, maxDet)
-                    for catId in catIds
-                    for areaRng in p.areaRng
-                    for imgId in p.imgIds]
-
-        # Some post-processing (not in pycocotools)
-        evalImgs = np.asarray(evalImgs).reshape(len(catIds), len(p.areaRng), len(p.imgIds))
-        sub_evaluator._paramsEval = copy.deepcopy(sub_evaluator.params)
-
-        return evalImgs
-
-    def synchronize_between_processes(self):
-        """
-        Synchronization of CocoEvaluator objects across different processes.
-        """
-
+        # Synchronize result dictionaries for each evaluation metric
         for metric in self.metrics:
             gathered_result_dicts = distributed.all_gather(self.result_dicts[metric])
             self.result_dicts[metric] = [result_dict for list in gathered_result_dicts for result_dict in list]
 
-            if hasattr(self, 'coco'):
-                self.image_evals[metric] = np.concatenate(self.image_evals[metric], axis=2)
-                CocoEvaluator.sync_evaluator(self.sub_evaluators[metric], self.image_ids, self.image_evals[metric])
+        # Peform NMS if requested
+        if self.eval_nms:
+            boxes = {image_id: [] for image_id in self.image_ids}
+            scores = {image_id: [] for image_id in self.image_ids}
+            labels = {image_id: [] for image_id in self.image_ids}
+            result_ids = {image_id: [] for image_id in self.image_ids}
+            keep_result_ids = []
 
-    @staticmethod
-    def sync_evaluator(sub_evaluator, image_ids, image_evals):
-        """
-        Synchronization of sub-evaluators across different processes.
+            allowed_metrics = ['bbox', 'segm', 'keypoints']
+            nms_metrics = [metric for metric in self.metrics if metric in allowed_metrics]
 
-        Args:
-            sub_evaluator (COCOeval): Object used for evaluating a specific metric on COCO.
-            image_ids (List): List of image indices processed by this CocoEvaluator.
-            image_evals (List): List of image evaluations processed by this CocoEvaluator.
-        """
+            if len(nms_metrics) > 0:
+                nms_metric = nms_metrics[0]
+            else:
+                error_msg = f"NMS requires at least one metric from {allowed_metrics}, but got {self.metrics}."
+                raise ValueError(error_msg)
 
-        # Merge image indices and image evaluations across processes
-        merged_image_ids, merged_image_evals = CocoEvaluator.merge(image_ids, image_evals)
+            for result_id, result_dict in enumerate(self.result_dicts[nms_metric]):
+                image_id = result_dict['image_id']
+                label = result_dict['category_id']
+                box = result_dict['bbox'].copy()
+                score = result_dict['score']
 
-        # Update sub-evaluator with merged image indices and evaluations
-        sub_evaluator.evalImgs = merged_image_evals
-        sub_evaluator.params.imgIds = merged_image_ids
-        sub_evaluator._paramsEval = copy.deepcopy(sub_evaluator.params)
+                box[2] = box[0] + box[2]
+                box[3] = box[1] + box[3]
 
-    @staticmethod
-    def merge(image_ids, image_evals):
-        """
-        Merges image indices and image evaluations across different processes.
+                boxes[image_id].append(box)
+                scores[image_id].append(score)
+                labels[image_id].append(label)
+                result_ids[image_id].append(result_id)
 
-        Args:
-            image_ids (List): List of image indices processed by this CocoEvaluator.
-            image_evals (List): List of image evaluations processed by this CocoEvaluator.
+            for image_id in self.image_ids:
+                boxes_i = torch.tensor(boxes[image_id], device=device)
+                scores_i = torch.tensor(scores[image_id], device=device)
+                labels_i = torch.tensor(labels[image_id], device=device)
+                result_ids_i = torch.tensor(result_ids[image_id], device=device)
 
-        Returns:
-            merged_image_ids (List): List of merged image indices from all processes.
-            merged_image_evals (List): List of merged image evaluations from all processes.
-        """
+                keep_ids = batched_nms(boxes_i, scores_i, labels_i, iou_threshold=self.nms_thr)[:100]
+                keep_result_ids_i = result_ids_i[keep_ids].tolist()
+                keep_result_ids.extend(keep_result_ids_i)
 
-        # Gather image indices and image evaluations across processes
-        gathered_image_ids = distributed.all_gather(image_ids)
-        gathered_image_evals = distributed.all_gather(image_evals)
+            for metric in self.metrics:
+                result_dicts = self.result_dicts[metric]
+                result_dicts = [result_dict for i, result_dict in enumerate(result_dicts) if i in keep_result_ids]
+                self.result_dicts[metric] = result_dicts
 
-        # Create merged lists
-        merged_image_ids = []
-        for image_ids in gathered_image_ids:
-            merged_image_ids.extend(image_ids)
-
-        merged_image_evals = []
-        for image_evals in gathered_image_evals:
-            merged_image_evals.append(image_evals)
-
-        # Keep only unique (and in sorted order) images
-        merged_image_ids = np.array(merged_image_ids)
-        merged_image_evals = np.concatenate(merged_image_evals, axis=2)
-
-        merged_image_ids, idx = np.unique(merged_image_ids, return_index=True)
-        merged_image_evals = merged_image_evals[..., idx]
-
-        merged_image_ids = list(merged_image_ids)
-        merged_image_evals = list(merged_image_evals.flatten())
-
-        return merged_image_ids, merged_image_evals
-
-    def accumulate(self):
-        """
-        Accumulates evaluations for each metric and stores them in their corresponding sub-evaluator.
-        """
-
+        # Compare with ground-truth annotations if available
         if hasattr(self, 'coco'):
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
-                    for sub_evaluator in self.sub_evaluators.values():
+                    for metric in self.metrics:
+                        sub_evaluator = self.sub_evaluators[metric]
+                        sub_evaluator.cocoDt = self.coco.loadRes(self.result_dicts[metric])
+                        sub_evaluator.params.imgIds = self.image_ids
+                        sub_evaluator.evaluate()
                         sub_evaluator.accumulate()
 
-    def summarize(self):
-        """
-        Summarizes evaluations for each metric and prints them.
-        """
-
-        if hasattr(self, 'coco'):
-            for metric, sub_evaluator in self.sub_evaluators.items():
-                print(f"Evaluation metric: {metric}")
-                sub_evaluator.summarize()
-
-
-def get_coco_transforms():
-    """
-    Function returning the COCO training and evaluation transforms.
-
-    Returns:
-        train_transforms (object): The COCO training transforms.
-        eval_transforms (object): The COCO evaluation transforms.
-    """
-
-    crop = T.Compose([T.RandomResize([400, 500, 600]), T.RandomSizeCrop(384, 600)])
-    scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
-    default_resize = T.RandomResize(scales, max_size=1333)
-    cropped_resize = T.Compose([crop, default_resize])
-
-    hflip = T.RandomHorizontalFlip()
-    train_resize = T.RandomSelect(default_resize, cropped_resize)
-    eval_resize = T.RandomResize([800], max_size=1333)
-    to_tensor = T.ToTensor()
-
-    train_transforms = T.Compose([hflip, train_resize, to_tensor])
-    eval_transforms = T.Compose([eval_resize, to_tensor])
-
-    return train_transforms, eval_transforms
+        # Print evaluation summary for each evaluation metric
+        for metric in self.metrics:
+            print(f"Evaluation metric: {metric}")
+            self.sub_evaluators[metric].summarize()
 
 
 def build_coco(args):
@@ -518,21 +432,20 @@ def build_coco(args):
     # Get root directory containing datasets
     root = Path() / 'datasets'
 
-    # Get training and evaluation transforms
-    train_transforms, eval_transforms = get_coco_transforms()
-
     # Initialize empty datasets dictionary
     datasets = {}
 
     # Get training dataset if needed
     if not args.eval:
         image_dir = root / COCO_SPLITS['coco'][f'coco_{args.train_split}'][0]
+        train_transforms = get_train_transforms(args.train_transforms_type)
         metadata = MetadataCatalog.get(f'coco_{args.train_split}')
         annotation_file = root / COCO_SPLITS['coco'][f'coco_{args.train_split}'][1]
         datasets['train'] = CocoDataset(image_dir, train_transforms, metadata, annotation_file=annotation_file)
 
     # Get evaluation dataset
     image_dir = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][0]
+    eval_transforms = get_eval_transforms(args.eval_transforms_type)
     metadata = MetadataCatalog.get(f'coco_{args.eval_split}')
     annotation_file = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
     info_file = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'test' in args.eval_split else None
@@ -542,7 +455,7 @@ def build_coco(args):
 
     # Get evaluator
     if args.evaluator == 'detection':
-        evaluator = CocoEvaluator(datasets['eval'], metrics=['bbox'])
+        evaluator = CocoEvaluator(datasets['eval'], metrics=['bbox'], nms_thr=args.eval_nms_thr)
     elif args.evaluator == 'none':
         evaluator = None
     else:

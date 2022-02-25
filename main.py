@@ -35,6 +35,11 @@ def get_parser():
     parser.add_argument('--train_split', default='2017_train', type=str, help='name of the training split')
     parser.add_argument('--eval_split', default='2017_val', type=str, help='name of the evaluation split')
     parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during evaluation')
+    parser.add_argument('--eval_nms_thr', default=0.5, type=float, help='IoU threshold during evaluation NMS')
+
+    # Transforms
+    parser.add_argument('--train_transforms_type', default='multi_scale', type=str, help='training transforms type')
+    parser.add_argument('--eval_transforms_type', default='single_scale', type=str, help='evaluation transforms type')
 
     # Data loading
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')

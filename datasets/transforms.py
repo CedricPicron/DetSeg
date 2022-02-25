@@ -517,3 +517,92 @@ class Compose(object):
             compose_string += f"\n    {i}: {transform}"
 
         return compose_string
+
+
+# 6. Functions getting training and evaluation transforms
+def get_train_transforms(transforms_type='multi_scale'):
+    """
+    Function getting a list containing the specified training transforms.
+
+    Args:
+        transforms_type (str): String containing the training transforms type (default='multi_scale').
+
+    Returns:
+        transforms (List): List [num_train_transforms] containing training transforms.
+
+    Raises:
+        ValueError: Error when an unknown training transforms type is provided.
+    """
+
+    # Get training transforms
+    if transforms_type == 'single_scale':
+        hflip = RandomHorizontalFlip()
+        resize = RandomResize([800], max_size=1333)
+        to_tensor = ToTensor()
+        transforms = [Compose([hflip, resize, to_tensor])]
+
+    elif transforms_type == 'multi_scale':
+        scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+        default_resize = RandomResize(scales, max_size=1333)
+
+        crop = Compose([RandomResize([400, 500, 600]), RandomSizeCrop(384, 600)])
+        cropped_resize = Compose([crop, default_resize])
+
+        hflip = RandomHorizontalFlip()
+        resize = RandomSelect(default_resize, cropped_resize)
+        to_tensor = ToTensor()
+        transforms = [Compose([hflip, resize, to_tensor])]
+
+    else:
+        error_msg = f"Unknown training transforms type (got '{transforms_type}')."
+        raise ValueError(error_msg)
+
+    return transforms
+
+
+def get_eval_transforms(transforms_type='single_scale'):
+    """
+    Function getting a list containing the specified evaluation transforms.
+
+    Args:
+        transform_type (str): String containing the evaluation transforms type (default='single_scale').
+
+    Returns:
+        transforms (List): List [num_eval_transforms] containing evaluation transforms.
+
+    Raises:
+        ValueError: Error when an unknown evaluation transforms type is provided.
+    """
+
+    # Get evaluation transforms
+    if transforms_type == 'single_scale':
+        resize = RandomResize([800], max_size=1333)
+        to_tensor = ToTensor()
+        transforms = [Compose([resize, to_tensor])]
+
+    elif transforms_type == 'single_scale_flip':
+        hflip = RandomHorizontalFlip(flip_prob=1.0)
+        resize = RandomResize([800], max_size=1333)
+        to_tensor = ToTensor()
+        transforms = [Compose([resize, to_tensor]), Compose([hflip, resize, to_tensor])]
+
+    elif transforms_type == 'multi_scale':
+        scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
+        resizes = [RandomResize([scale]) for scale in scales]
+        to_tensor = ToTensor()
+        transforms = [Compose([resize, to_tensor]) for resize in resizes]
+
+    elif transforms_type == 'multi_scale_flip':
+        hflip = RandomHorizontalFlip(flip_prob=1.0)
+        scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
+        resizes = [RandomResize([scale]) for scale in scales]
+        to_tensor = ToTensor()
+
+        transforms = [Compose([resize, to_tensor]) for resize in resizes]
+        transforms.extend([Compose([hflip, resize, to_tensor]) for resize in resizes])
+
+    else:
+        error_msg = f"Unknown evaluation transforms type (got '{transforms_type}')."
+        raise ValueError(error_msg)
+
+    return transforms

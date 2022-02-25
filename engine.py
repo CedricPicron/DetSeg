@@ -164,12 +164,10 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
                 filename = ('_').join([str(image_id), *key_parts[:-1]])
                 Image.fromarray(image).save(f'{vis_dir / filename}.png')
 
-    # Accumulate predictions from all images and summarize
+    # Perform evaluations
     if evaluators is not None:
         for evaluator in evaluators:
-            evaluator.synchronize_between_processes()
-            evaluator.accumulate()
-            evaluator.summarize()
+            evaluator.evaluate(device=device)
 
     # Get epoch evaluation statistics
     metric_logger.synchronize_between_processes()
