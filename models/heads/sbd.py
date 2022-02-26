@@ -827,8 +827,10 @@ class SBD(nn.Module):
             ValueError: Error when invalid duplicate removal mechanism is provided.
         """
 
-        # Get batch size
+        # Get batch size, device and number of classes
         batch_size = len(cls_preds)
+        device = cls_preds[0].device
+        num_classes = cls_preds[0].shape[1] - 1
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -840,9 +842,13 @@ class SBD(nn.Module):
         # Get predictions for every batch entry
         for i in range(batch_size):
 
-            # Get prediction labels and scores
-            cls_preds_i = cls_preds[i][:, :-1]
-            scores_i, labels_i = cls_preds_i.sigmoid().max(dim=1)
+            # Get prediction labels
+            num_preds_i = len(cls_preds[i])
+            labels_i = torch.arange(num_classes, device=device)
+            labels_i = labels_i[None, :].expand(num_preds_i, -1).reshape(-1)
+
+            # Get prediction scores
+            scores_i = cls_preds[i][:, :-1].sigmoid().view(-1)
 
             # Get prediction boxes
             if 'abs' in self.state_type:
@@ -858,6 +864,9 @@ class SBD(nn.Module):
             else:
                 error_msg = f"Invalid object state type '{self.state_type}'."
                 raise ValueError(error_msg)
+
+            boxes_i.boxes = boxes_i.boxes[:, None, :].expand(-1, num_classes, -1)
+            boxes_i.boxes = boxes_i.boxes.reshape(-1, 4)
 
             # Only keep entries with well-defined boxes
             well_defined = boxes_i.well_defined()
@@ -896,8 +905,7 @@ class SBD(nn.Module):
             pred_dict['batch_ids'].append(torch.full_like(labels_i, i))
 
             if return_obj_ids:
-                num_preds_i = len(cls_preds_i)
-                obj_ids_i = torch.arange(num_preds_i, device=cls_preds_i.device)
+                obj_ids_i = torch.arange(num_preds_i, device=device)
                 obj_ids_i = obj_ids_i[well_defined][top_pred_ids][non_dup_ids]
                 pred_dict['obj_ids'].append(obj_ids_i)
 
