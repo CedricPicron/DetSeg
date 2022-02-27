@@ -405,10 +405,9 @@ class CocoEvaluator(object):
                         sub_evaluator.evaluate()
                         sub_evaluator.accumulate()
 
-        # Print evaluation summary for each evaluation metric
-        for metric in self.metrics:
-            print(f"Evaluation metric: {metric}")
-            self.sub_evaluators[metric].summarize()
+            for metric in self.metrics:
+                print(f"Evaluation metric: {metric}")
+                self.sub_evaluators[metric].summarize()
 
 
 def build_coco(args):
