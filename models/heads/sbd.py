@@ -810,6 +810,7 @@ class SBD(nn.Module):
             cls_preds (List): List [batch_size] of classification predictions of shape [num_preds, num_cls_labels].
             box_preds (List): List [batch_size] of bounding box predictions of shape [num_preds, 4].
             pred_anchors (List): List [batch_size] of prediction anchors of size [num_preds] (default=None).
+            return_obj_ids (bool): Boolean indicating whether to return object indices of predictions (default=False).
 
         Returns:
             pred_dict (Dict): Prediction dictionary containing following keys:
