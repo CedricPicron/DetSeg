@@ -10,6 +10,7 @@ from detectron2.data import MetadataCatalog
 from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as COCO_SPLITS
 from detectron2.layers import batched_nms
 import numpy as np
+import pandas as pd
 from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
@@ -389,10 +390,14 @@ class CocoEvaluator(object):
                 keep_result_ids_i = result_ids_i[keep_ids].tolist()
                 keep_result_ids.extend(keep_result_ids_i)
 
+            result_ids = set(range(len(self.result_dicts[nms_metric])))
+            keep_result_ids = set(keep_result_ids)
+            drop_result_ids = result_ids - keep_result_ids
+
             for metric in self.metrics:
-                result_dicts = self.result_dicts[metric]
-                result_dicts = [result_dict for i, result_dict in enumerate(result_dicts) if i in keep_result_ids]
-                self.result_dicts[metric] = result_dicts
+                data = pd.DataFrame(self.result_dicts[metric])
+                data.drop(index=drop_result_ids, inplace=True)
+                self.result_dicts[metric] = data.to_dict('records')
 
         # Compare with ground-truth annotations if available
         if hasattr(self, 'coco'):
