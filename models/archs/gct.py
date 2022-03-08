@@ -189,10 +189,11 @@ class GCT(nn.Module):
 
                     for j in range_obj:
                         tgt_xy = pixel_xy[(graph_seg_map == j).view(-1)]
-                        tgt_box_ij = torch.cat([tgt_xy.amin(dim=0), tgt_xy.amax(dim=0) + pixel_size], dim=0)
+                        tgt_box_ij = torch.cat([tgt_xy.amin(dim=0), tgt_xy.amax(dim=0)], dim=0)
                         tgt_boxes.append(tgt_box_ij)
 
                 tgt_boxes = torch.stack(tgt_boxes, dim=0)
+                tgt_boxes = tgt_boxes + torch.cat([-pixel_size/2, pixel_size/2], dim=0)
                 tgt_boxes = Boxes(tgt_boxes, format='xyxy', **box_kwargs)
                 tgt_boxes = tgt_boxes.to_format('cxcywh')
 
