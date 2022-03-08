@@ -906,7 +906,7 @@ class SBD(nn.Module):
             pred_dict['batch_ids'].append(torch.full_like(labels_i, i))
 
             if return_obj_ids:
-                obj_ids_i = torch.arange(num_preds_i, device=device)
+                obj_ids_i = torch.arange(num_preds_i, device=device).repeat_interleave(num_classes, dim=0)
                 obj_ids_i = obj_ids_i[well_defined][top_pred_ids][non_dup_ids]
                 pred_dict['obj_ids'].append(obj_ids_i)
 
