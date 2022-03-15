@@ -266,6 +266,9 @@ def get_parser():
     parser.add_argument('--dod_pred_num_pos', default=5, type=int, help='number of positive anchors per DOD target')
     parser.add_argument('--dod_pred_max_dets', default=100, type=int, help='maximum number of DOD detections')
 
+    # * General Vision Decoder (GVD) head
+    parser.add_argument('--gvd_cfg_path', default='', type=str, help='path to GVD head config')
+
     # * Map-Based Detector (MBD) head
     parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
     parser.add_argument('--mbd_hrae_layers', default=1, type=int, help='number of layers of HRAE network')

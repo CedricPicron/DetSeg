@@ -3,11 +3,14 @@ General build function for heads.
 """
 from copy import deepcopy
 
+from mmcv import Config
+
 from .binary import BinarySegHead
 from .brd import BRD
 from .dfd import DFD
 from .dod import DOD
 from .mbd import MBD
+from models.build import build_model
 from .retina import RetinaHead
 from .sbd import SBD
 from .semantic import SemanticSegHead
@@ -153,6 +156,13 @@ def build_heads(args):
 
             dod_head = DOD(in_feat_size, net_dict, anchor_dict, sel_dict, tgt_dict, loss_dict, pred_dict)
             heads[head_type] = dod_head
+
+        elif head_type == 'gvd':
+            gvd_cfg = Config.fromfile(args.gvd_cfg_path)
+            args.requires_masks = gvd_cfg.model.pop('requires_masks', True)
+
+            gvd_head = build_model(gvd_cfg.model)
+            heads[head_type] = gvd_head
 
         elif head_type == 'mbd':
             in_feat_size = args.core_out_sizes[0]

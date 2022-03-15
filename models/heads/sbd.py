@@ -82,7 +82,7 @@ class SBD(nn.Module):
     def __init__(self, dod, state_dict, osi_dict, ae_dict, se_dict, cls_dict, box_dict, match_dict, loss_dict,
                  pred_dict, update_dict, ca_dict, sa_dict, ffn_dict, metadata):
         """
-        Initializes the SBD module.
+        Initializes the SBD head.
 
         Args:
             dod (DOD): Dense object discovery (DOD) module selecting promising features corresponding to objects.
@@ -931,7 +931,7 @@ class SBD(nn.Module):
             images (Images): Images structure containing the batched images (default=None).
             stand_alone (bool): Boolean indicating whether the SBD module operates as stand-alone (default=True).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
-            kwargs (Dict): Dictionary of keyword arguments not used by this module, but passed to some sub-modules.
+            kwargs (Dict): Dictionary of additional keyword arguments passed to some underlying modules and methods.
 
         Returns:
             * If SBD module in training mode (i.e. during training):
