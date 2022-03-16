@@ -72,6 +72,7 @@ class GVD(nn.Module):
 
         Returns:
             group_init_feats (FloatTensor): Group initialization features of shape [num_groups, group_feat_size].
+            group_batch_ids (LongTensor): Batch indices of group features of shape [num_groups].
 
         Raises:
             ValueError: Error when an invalid type of group initialization is provided.
@@ -79,14 +80,24 @@ class GVD(nn.Module):
 
         # Perform group initialization
         if self.group_init_type == 'learned':
-            group_init_feats = self.group_init_feats
+            batch_size = feat_maps[0].size(dim=0)
+            group_init_feats = self.group_init_feats.expand(batch_size, -1)
+
+            device = self.group_init_feats.device
+            num_groups = self.group_init_feats.size(dim=0)
+            group_batch_ids = torch.arange(batch_size, device=device).repeat_interleave(num_groups)
 
         elif self.group_init_type == 'selected':
             sel_out_dict = self.group_init_sel(feat_maps=feat_maps, tgt_dict=tgt_dict, **kwargs)
-            group_init_feats = sel_out_dict.pop('feats')
+
+            group_init_feats = sel_out_dict.pop('sel_feats')
+            group_batch_ids = sel_out_dict.pop('batch_ids')
 
             sel_loss_dict = sel_out_dict.pop('loss_dict', {})
             sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
+
+            sel_loss_dict = {f'sel_{k}': v for k, v in sel_loss_dict.items()}
+            sel_analysis_dict = {f'sel_{k}': v for k, v in sel_analysis_dict.items()}
 
             loss_dict.update(sel_loss_dict) if loss_dict is not None else None
             analysis_dict.update(sel_analysis_dict) if analysis_dict is not None else None
@@ -96,7 +107,7 @@ class GVD(nn.Module):
             error_msg = f"Invalid type of group initialization (got '{self.group_init_type}')."
             raise ValueError(error_msg)
 
-        return group_init_feats
+        return group_init_feats, group_batch_ids
 
     def forward(self, feat_maps, tgt_dict=None, visualize=False, **kwargs):
         """
@@ -132,6 +143,6 @@ class GVD(nn.Module):
         # Get initial group features
         group_init_kwargs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
         group_init_kwargs = {**group_init_kwargs, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
-        group_feats = self.perform_group_initialization(**group_init_kwargs, **kwargs)
+        group_feats, group_batch_ids = self.perform_group_initialization(**group_init_kwargs, **kwargs)
 
-        return group_feats, loss_dict, analysis_dict
+        return group_feats, group_batch_ids, loss_dict, analysis_dict
