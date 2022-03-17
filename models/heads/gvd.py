@@ -96,9 +96,6 @@ class GVD(nn.Module):
             sel_loss_dict = sel_out_dict.pop('loss_dict', {})
             sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
 
-            sel_loss_dict = {f'sel_{k}': v for k, v in sel_loss_dict.items()}
-            sel_analysis_dict = {f'sel_{k}': v for k, v in sel_analysis_dict.items()}
-
             loss_dict.update(sel_loss_dict) if loss_dict is not None else None
             analysis_dict.update(sel_analysis_dict) if analysis_dict is not None else None
             storage_dict.update(sel_out_dict) if storage_dict is not None else None
