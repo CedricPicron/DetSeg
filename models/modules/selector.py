@@ -32,16 +32,16 @@ class AnchorSelector(nn.Module):
         logits (Sequential): Module computing the selection logits for each feature-anchor combination.
 
         sel_attrs (Dict): Dictionary containing following selection-related attributes:
-            - type (str): string containing the type of selection procedure;
+            - mode (str): string containing the selection mode;
             - abs_thr (float): absolute threshold used during selection;
             - rel_thr (int): relative threshold used during selection.
 
         post (Sequential): Post-processing module operating on selected features.
-        match (nn.Module): Module performing matching between anchors and target boxes.
+        matcher (nn.Module): Module performing matching between anchors and target boxes.
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_cfg, pre_logits_cfg, sel_cfg, post_cfg, match_cfg, loss_cfg, init_prob=0.01):
+    def __init__(self, anchor_cfg, pre_logits_cfg, sel_cfg, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01):
         """
         Initializes the AnchorSelector module.
 
@@ -50,10 +50,13 @@ class AnchorSelector(nn.Module):
             pre_logits_cfg (Dict): Configuration dictionary specifying the pre-logits module.
             sel_cfg (Dict): Configuration dictionary specifying the selection procedure.
             post_cfg (Dict): Configuration dictionary specifying the post-processing module.
-            match_cfg (Dict): Configuration dictionary specifying the matcher module.
+            matcher_cfg (Dict): Configuration dictionary specifying the matcher module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
         """
+
+        # Initialization of default nn.Module
+        super().__init__()
 
         # Set anchor attributes
         self.anchor_attrs = anchor_cfg
@@ -61,9 +64,13 @@ class AnchorSelector(nn.Module):
         # Build logits module
         pre_logits = build_model(pre_logits_cfg)
 
-        in_feat_size = pre_logits_cfg['out_channels']
+        if isinstance(pre_logits_cfg, list):
+            in_feat_size = pre_logits_cfg[-1]['out_channels']
+        else:
+            in_feat_size = pre_logits_cfg['out_channels']
+
         num_cell_anchors = anchor_cfg['num_sizes'] * len(anchor_cfg['aspect_ratios'])
-        proj_logits = ProjConv(in_feat_size, num_cell_anchors)
+        proj_logits = ProjConv(in_feat_size, num_cell_anchors, skip=False)
 
         init_logits_bias = -(math.log((1 - init_prob) / init_prob))
         torch.nn.init.constant_(proj_logits.conv.bias, init_logits_bias)
@@ -79,7 +86,7 @@ class AnchorSelector(nn.Module):
         self.post = Sequential(self.post) if not isinstance(self.post, Sequential) else self.post
 
         # Build matcher module
-        self.match = build_model(match_cfg)
+        self.matcher = build_model(matcher_cfg)
 
         # Build loss module
         self.loss = build_model(loss_cfg)
@@ -97,7 +104,7 @@ class AnchorSelector(nn.Module):
             sel_feats (FloatTensor): Features of selected feature-anchor combinations of shape [num_selecs].
 
         Raises:
-            ValueError: Error when an invalid type of selection procedure is provided.
+            ValueError: Error when an invalid selection mode is provided.
         """
 
         # Get selection logits
@@ -109,32 +116,32 @@ class AnchorSelector(nn.Module):
 
         batch_size, num_anchors = sel_probs.size()
         device = sel_probs.device
-        sel_type = self.sel_attrs['type']
+        sel_mode = self.sel_attrs['mode']
 
-        if 'abs' in sel_type:
+        if 'abs' in sel_mode:
             abs_sel_ids = torch.arange(batch_size * num_anchors, device=device)
             abs_sel_ids = abs_sel_ids[sel_probs.flatten() >= self.sel_attrs['abs_thr']]
 
-        elif 'rel' in sel_type:
+        elif 'rel' in sel_mode:
             rel_sel_ids = torch.topk(sel_probs, self.sel_attrs['rel_thr'], dim=1, sorted=False).indices
-            rel_sel_ids = num_anchors * torch.arange(batch_size, device)[:, None] * rel_sel_ids
+            rel_sel_ids = rel_sel_ids + num_anchors * torch.arange(batch_size, device=device)[:, None]
             rel_sel_ids = rel_sel_ids.flatten()
 
-        if sel_type == 'abs':
+        if sel_mode == 'abs':
             sel_ids = abs_sel_ids
 
-        elif sel_type == 'abs_and_rel':
+        elif sel_mode == 'abs_and_rel':
             sel_ids, counts = torch.cat([abs_sel_ids, rel_sel_ids], dim=0).unique(return_counts=True)
             sel_ids = sel_ids[counts == 2]
 
-        elif sel_type == 'abs_or_rel':
+        elif sel_mode == 'abs_or_rel':
             sel_ids = torch.cat([abs_sel_ids, rel_sel_ids], dim=0).unique()
 
-        elif sel_type == 'rel':
+        elif sel_mode == 'rel':
             sel_ids = rel_sel_ids
 
         else:
-            error_msg = f"Invalid type of selection procedure (got '{sel_type}')."
+            error_msg = f"Invalid selection mode (got '{sel_mode}')."
             raise ValueError(error_msg)
 
         # Get selected features
@@ -142,7 +149,7 @@ class AnchorSelector(nn.Module):
         feats = feats.flatten(0, 1)
 
         num_cell_anchors = logit_maps[0].size(dim=1)
-        feat_ids = sel_ids // num_cell_anchors
+        feat_ids = torch.div(sel_ids, num_cell_anchors, rounding_mode='floor')
         sel_feats = feats[feat_ids]
 
         return sel_logits, sel_ids, sel_feats
@@ -183,7 +190,7 @@ class AnchorSelector(nn.Module):
         out_dict['sel_ids'] = sel_ids
 
         # Get batch and cell anchor indices
-        batch_ids = sel_ids // len(anchors)
+        batch_ids = torch.div(sel_ids, len(anchors), rounding_mode='floor')
         out_dict['batch_ids'] = batch_ids
 
         num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
@@ -194,19 +201,44 @@ class AnchorSelector(nn.Module):
         out_dict['sel_feats'] = sel_feats
 
         # Get boxes corresponding to selected features
-        batch_size = len(sel_ids) / len(anchors)
-        sel_boxes = anchors[sel_ids // batch_size]
+        batch_size = sel_logits.size(dim=0)
+        anchor_ids = torch.div(sel_ids, batch_size, rounding_mode='floor')
+
+        sel_boxes = anchors[anchor_ids]
         out_dict['sel_boxes'] = sel_boxes
 
         # Get selection loss (trainval only)
         if tgt_dict is not None:
 
             # Perform matching
-            match_labels, matched_qry_ids, matched_tgt_ids = self.match(anchors, tgt_dict['boxes'])
-            match_labels = None
+            tgt_boxes = tgt_dict['boxes']
+            tgts_per_img = tgt_boxes.boxes_per_img
+
+            cum_tgts_per_img = tgts_per_img.cumsum(dim=0)
+            cum_tgts_per_img = torch.cat([cum_tgts_per_img.new_zeros([1]), cum_tgts_per_img], dim=0)
+
+            match_labels_list = []
+            matched_qry_ids_list = []
+            matched_tgt_ids_list = []
+
+            for i in range(batch_size):
+                tgt_i0, tgt_i1 = cum_tgts_per_img[i:i+2]
+                tgt_boxes_i = tgt_boxes[tgt_i0:tgt_i1]
+                match_labels_i, matched_qry_ids_i, matched_tgt_ids_i = self.matcher(anchors, tgt_boxes_i)
+
+                matched_qry_ids_i = matched_qry_ids_i + i * len(anchors)
+                matched_tgt_ids_i = matched_tgt_ids_i + tgt_i0
+
+                match_labels_list.append(match_labels_i)
+                matched_qry_ids_list.append(matched_qry_ids_i)
+                matched_tgt_ids_list.append(matched_tgt_ids_i)
+
+            match_labels = torch.cat(match_labels_list, dim=0)
+            matched_qry_ids = torch.cat(matched_qry_ids_list, dim=0)
+            matched_tgt_ids = torch.cat(matched_tgt_ids_list, dim=0)
 
             # Get selection loss
-            loss_mask = match_labels != 1
+            loss_mask = match_labels != -1
             pred_logits = sel_logits.flatten()[loss_mask]
             tgt_labels = match_labels[loss_mask]
 
@@ -215,8 +247,21 @@ class AnchorSelector(nn.Module):
             out_dict['loss_dict'] = loss_dict
 
             # Get percentage of targets found
-            tgt_found = None
-            analysis_dict['tgt_found'] = tgt_found
+            cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
+            inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
+
+            num_matches = len(matched_qry_ids)
+            inv_ids = inv_ids[:num_matches]
+
+            tgt_found_mask = counts[inv_ids] == 2
+            tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
+
+            num_tgts_found = len(tgt_found_ids)
+            num_tgts = len(tgt_boxes)
+
+            tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
+            tgt_found = torch.tensor([tgt_found], device=tgt_found_ids.device)
+            analysis_dict['sel_tgt_found'] = 100 * tgt_found
 
         # Add analysis dictionary to output dictionary
         out_dict['analysis_dict'] = analysis_dict

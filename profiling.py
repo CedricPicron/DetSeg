@@ -20,8 +20,8 @@ from structures.images import Images
 
 # Lists of model and sort choices
 model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'dfd', 'dod']
-model_choices = [*model_choices, 'fpn', 'gc', 'gct', 'mbd', 'mmdet_arch', 'mmdet_backbone', 'mmdet_core', 'resnet']
-model_choices = [*model_choices, 'ret', 'sbd', 'sem']
+model_choices = [*model_choices, 'fpn', 'gc', 'gct', 'gvd', 'mbd', 'mmdet_arch', 'mmdet_backbone', 'mmdet_core']
+model_choices = [*model_choices, 'resnet', 'ret', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
 # Argument parsing
@@ -385,6 +385,33 @@ elif profiling_args.model == 'gct':
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
     backward_stmt = "model(**inputs)"
+
+elif profiling_args.model == 'gvd':
+    main_args.num_classes = 80
+    main_args.heads = ['gvd']
+    main_args.gvd_cfg_path = './configs/gvd/sel_v0.py'
+    model = build_heads(main_args)['gvd'].to('cuda')
+
+    feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
+    feat_map4 = torch.randn(2, 256, 64, 64).to('cuda')
+    feat_map5 = torch.randn(2, 256, 32, 32).to('cuda')
+    feat_map6 = torch.randn(2, 256, 16, 16).to('cuda')
+    feat_map7 = torch.randn(2, 256, 8, 8).to('cuda')
+    feat_maps = [feat_map3, feat_map4, feat_map5, feat_map6, feat_map7]
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)[0].sum().backward()"
 
 elif profiling_args.model == 'mbd':
     main_args.metadata = MetadataCatalog.get('coco_2017_val')

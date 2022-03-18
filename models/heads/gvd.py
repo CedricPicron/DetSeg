@@ -15,12 +15,12 @@ class GVD(nn.Module):
     Class implementing the General Vision Decoder (GVD) head.
 
     Attributes:
-        group_init_type (str): String containing the type of group initialization.
+        group_init_mode (str): String containing the group initialization mode.
 
-        If group_init_type is 'learned':
+        If group_init_mode is 'learned':
             group_init_feats (Parameter): Parameter with group initialization features [num_groups, group_feat_size].
 
-        If group_init_type is 'selected':
+        If group_init_mode is 'selected':
             group_init_sel (nn.Module): Module obtaining group initialization features by selecting from input maps.
     """
 
@@ -32,31 +32,31 @@ class GVD(nn.Module):
             group_init_cfg (Dict): Configuration dictionary specifying the group initialization.
 
         Raises:
-            ValueError: Error when an invalid type of group initialization is provided.
+            ValueError: Error when an invalid group initialization mode is provided.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
         # Set attributes related to group initialization
-        self.group_init_type = group_init_cfg['type']
+        self.group_init_mode = group_init_cfg['mode']
 
-        if self.group_init_type == 'learned':
+        if self.group_init_mode == 'learned':
             num_groups = group_init_cfg['num_groups']
             group_feat_size = group_init_cfg['feat_size']
             param_data = torch.randn(num_groups, group_feat_size)
             self.group_init_feats = Parameter(param_data, requires_grad=True)
 
-        elif self.group_init_type == 'selected':
+        elif self.group_init_mode == 'selected':
             sel_cfg = group_init_cfg['sel_cfg']
             self.group_init_sel = build_model(sel_cfg)
 
         else:
-            error_msg = f"Invalid type of group initialization (got '{self.group_init_type}')."
+            error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
             raise ValueError(error_msg)
 
-    def group_initialization(self, feat_maps=None, tgt_dict=None, loss_dict=None, analysis_dict=None,
-                             storage_dict=None, **kwargs):
+    def group_init(self, feat_maps=None, tgt_dict=None, loss_dict=None, analysis_dict=None, storage_dict=None,
+                   **kwargs):
         """
         Method performing group initialization, i.e. obtaining the initial group features.
 
@@ -75,19 +75,21 @@ class GVD(nn.Module):
             group_batch_ids (LongTensor): Batch indices of group features of shape [num_groups].
 
         Raises:
-            ValueError: Error when an invalid type of group initialization is provided.
+            ValueError: Error when an invalid group initialization mode is provided.
         """
 
         # Perform group initialization
-        if self.group_init_type == 'learned':
+        if self.group_init_mode == 'learned':
             batch_size = feat_maps[0].size(dim=0)
-            group_init_feats = self.group_init_feats.expand(batch_size, -1)
+            group_init_feats = self.group_init_feats[None, :, :].expand(batch_size, -1, -1)
+            group_init_feats = group_init_feats.flatten(0, 1)
 
             device = self.group_init_feats.device
             num_groups = self.group_init_feats.size(dim=0)
-            group_batch_ids = torch.arange(batch_size, device=device).repeat_interleave(num_groups)
+            group_batch_ids = torch.arange(batch_size, device=device)
+            group_batch_ids = group_batch_ids[:, None].expand(-1, num_groups).flatten()
 
-        elif self.group_init_type == 'selected':
+        elif self.group_init_mode == 'selected':
             sel_out_dict = self.group_init_sel(feat_maps=feat_maps, tgt_dict=tgt_dict, **kwargs)
 
             group_init_feats = sel_out_dict.pop('sel_feats')
@@ -101,7 +103,7 @@ class GVD(nn.Module):
             storage_dict.update(sel_out_dict) if storage_dict is not None else None
 
         else:
-            error_msg = f"Invalid type of group initialization (got '{self.group_init_type}')."
+            error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
             raise ValueError(error_msg)
 
         return group_init_feats, group_batch_ids
@@ -124,7 +126,6 @@ class GVD(nn.Module):
 
         Raises:
             ValueError: Error when visualizations are requested.
-            ValueError: Error when an invalid type of group initialization is provided.
         """
 
         # Check inputs
@@ -137,9 +138,9 @@ class GVD(nn.Module):
         analysis_dict = {}
         storage_dict = {}
 
-        # Get initial group features
+        # Perform group initialization
         group_init_kwargs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
         group_init_kwargs = {**group_init_kwargs, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
-        group_feats, group_batch_ids = self.perform_group_initialization(**group_init_kwargs, **kwargs)
+        group_feats, group_batch_ids = self.group_init(**group_init_kwargs, **kwargs)
 
         return group_feats, group_batch_ids, loss_dict, analysis_dict
