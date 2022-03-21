@@ -4678,18 +4678,19 @@ class SelfAttn1d(nn.Module):
         # Set skip attribute
         self.skip = skip
 
-    def forward(self, in_feats, add_encs=None, mul_encs=None, **kwargs):
+    def forward(self, in_feats, mul_encs=None, add_encs=None, cum_feats_batch=None, **kwargs):
         """
         Forward method of the SelfAttn1d module.
 
         Args:
-            in_feats (FloatTensor): Input features of shape [*, num_feats, in_size].
-            add_encs (FloatTensor): Encodings added to queries of shape [*, num_in_feats, in_size] (default=None).
-            mul_encs (FloatTensor): Encodings multiplied by queries of shape [*, num_in_feats, in_size] (default=None).
+            in_feats (FloatTensor): Input features of shape [num_feats, in_size].
+            mul_encs (FloatTensor): Encodings multiplied by queries/keys of shape [num_feats, in_size] (default=None).
+            add_encs (FloatTensor): Encodings added to queries/keys of shape [num_feats, in_size] (default=None).
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
-            out_feats (FloatTensor): Output features of shape [*, num_feats, out_size].
+            out_feats (FloatTensor): Output features of shape [num_feats, out_size].
         """
 
         # Apply optional normalization and activation function modules
@@ -4697,22 +4698,26 @@ class SelfAttn1d(nn.Module):
         delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
         delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
 
-        # Apply multi-head attention module
-        orig_shape = delta_feats.shape
-        delta_feats = delta_feats.view(-1, *orig_shape[-2:]).transpose(0, 1)
-        values = delta_feats
+        # Get query-key and value features
+        qk_feats = val_feats = delta_feats[:, None, :]
 
         if mul_encs is not None:
-            delta_feats = delta_feats * mul_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
+            qk_feats = qk_feats * mul_encs[:, None, :]
 
         if add_encs is not None:
-            delta_feats = delta_feats + add_encs.view(-1, *orig_shape[-2:]).transpose(0, 1)
+            qk_feats = qk_feats + add_encs[:, None, :]
 
-        queries = keys = delta_feats
-        delta_feats = self.mha(queries, keys, values, need_weights=False)[0]
-        delta_feats = delta_feats.transpose(0, 1).view(*orig_shape[:-1], -1)
+        # Apply multi-head attention module
+        mha_feats = torch.zeros_like(val_feats)
+
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, len(in_feats)], device=in_feats.device)
+
+        for i0, i1 in zip(cum_feats_batch[:-1], cum_feats_batch[1:]):
+            mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], need_weights=False)[0]
 
         # Get output features
-        out_feats = in_feats + delta_feats if self.skip else delta_feats
+        mha_feats = mha_feats[:, 0, :]
+        out_feats = in_feats + mha_feats if self.skip else mha_feats
 
         return out_feats

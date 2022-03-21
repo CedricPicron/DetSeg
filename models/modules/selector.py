@@ -170,7 +170,7 @@ class AnchorSelector(nn.Module):
             out_dict (Dict): Output dictionary containing following keys:
                 - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
                 - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
-                - batch_ids (LongTensor): batch indices of selected features of shape [num_selecs];
+                - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
                 - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
                 - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs];
                 - loss_dict (Dict): dictionary with the selection loss (trainval only);
@@ -189,19 +189,22 @@ class AnchorSelector(nn.Module):
         sel_logits, sel_ids, sel_feats = self.perform_selection(feat_maps)
         out_dict['sel_ids'] = sel_ids
 
-        # Get batch and cell anchor indices
+        # Get cumulative number of selected features per batch entry
+        batch_size = sel_logits.size(dim=0)
         batch_ids = torch.div(sel_ids, len(anchors), rounding_mode='floor')
-        out_dict['batch_ids'] = batch_ids
 
+        cum_feats_batch = torch.stack([(batch_ids == i).sum() for i in range(batch_size)]).cumsum(dim=0)
+        cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
+        out_dict['cum_feats_batch'] = torch.arange(batch_size+1, device=batch_ids.device) * 300
+
+        # Perform post-processing on selected features
         num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
         cell_anchor_ids = sel_ids % num_cell_anchors
 
-        # Perform post-processing on selected features
         sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
         out_dict['sel_feats'] = sel_feats
 
         # Get boxes corresponding to selected features
-        batch_size = sel_logits.size(dim=0)
         anchor_ids = torch.div(sel_ids, batch_size, rounding_mode='floor')
 
         sel_boxes = anchors[anchor_ids]

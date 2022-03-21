@@ -6,4 +6,27 @@ model = dict(
         num_groups=300,
         feat_size=256,
     ),
+    dec_layer_cfg=[
+        dict(
+            type='SelfAttn1d',
+            in_size=256,
+            out_size=256,
+            norm='layer',
+            act_fn='',
+            skip=True,
+            num_heads=8,
+        ),
+        dict(
+            type='TwoStepMLP',
+            in_size=256,
+            hidden_size=1024,
+            out_size=256,
+            norm1='layer',
+            norm2='',
+            act_fn1='',
+            act_fn2='relu',
+            skip=True,
+        ),
+    ],
+    num_dec_layers=6,
 )

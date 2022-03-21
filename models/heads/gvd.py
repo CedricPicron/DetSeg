@@ -22,14 +22,18 @@ class GVD(nn.Module):
 
         If group_init_mode is 'selected':
             group_init_sel (nn.Module): Module obtaining group initialization features by selecting from input maps.
+
+        dec_layers (nn.ModuleList): List of size [num_dec_layers] containing the decoder layers.
     """
 
-    def __init__(self, group_init_cfg):
+    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers):
         """
         Initializes the GVD head.
 
         Args:
             group_init_cfg (Dict): Configuration dictionary specifying the group initialization.
+            dec_layer_cfg (Dict): Configuration dictionary specifying a single decoder layer.
+            num_dec_layers (int): Integer containing the number decoder layers.
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -55,6 +59,9 @@ class GVD(nn.Module):
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
             raise ValueError(error_msg)
 
+        # Build list with decoder layers
+        self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg) for _ in range(num_dec_layers)])
+
     def group_init(self, feat_maps=None, tgt_dict=None, loss_dict=None, analysis_dict=None, storage_dict=None,
                    **kwargs):
         """
@@ -72,7 +79,7 @@ class GVD(nn.Module):
 
         Returns:
             group_init_feats (FloatTensor): Group initialization features of shape [num_groups, group_feat_size].
-            group_batch_ids (LongTensor): Batch indices of group features of shape [num_groups].
+            cum_feats_batch (LongTensor): Cumulative number of group features per batch entry of shape [batch_size+1].
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -85,15 +92,14 @@ class GVD(nn.Module):
             group_init_feats = group_init_feats.flatten(0, 1)
 
             device = self.group_init_feats.device
-            num_groups = self.group_init_feats.size(dim=0)
-            group_batch_ids = torch.arange(batch_size, device=device)
-            group_batch_ids = group_batch_ids[:, None].expand(-1, num_groups).flatten()
+            num_feats_batch = self.group_init_feats.size(dim=0)
+            cum_feats_batch = torch.arange(batch_size+1, device=device) * num_feats_batch
 
         elif self.group_init_mode == 'selected':
             sel_out_dict = self.group_init_sel(feat_maps=feat_maps, tgt_dict=tgt_dict, **kwargs)
 
             group_init_feats = sel_out_dict.pop('sel_feats')
-            group_batch_ids = sel_out_dict.pop('batch_ids')
+            cum_feats_batch = sel_out_dict.pop('cum_feats_batch')
 
             sel_loss_dict = sel_out_dict.pop('loss_dict', {})
             sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
@@ -106,7 +112,7 @@ class GVD(nn.Module):
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
             raise ValueError(error_msg)
 
-        return group_init_feats, group_batch_ids
+        return group_init_feats, cum_feats_batch
 
     def forward(self, feat_maps, tgt_dict=None, visualize=False, **kwargs):
         """
@@ -141,6 +147,14 @@ class GVD(nn.Module):
         # Perform group initialization
         group_init_kwargs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
         group_init_kwargs = {**group_init_kwargs, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
-        group_feats, group_batch_ids = self.group_init(**group_init_kwargs, **kwargs)
+        group_feats, cum_feats_batch = self.group_init(**group_init_kwargs, **kwargs)
 
-        return group_feats, group_batch_ids, loss_dict, analysis_dict
+        # Iterate over decoder layers and apply heads when needed
+        for dec_id, dec_layer in enumerate(self.dec_layers):
+
+            # Apply decoder layer
+            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch)
+
+            # Apply heads if needed
+
+        return group_feats, loss_dict, analysis_dict
