@@ -10,6 +10,72 @@ from models.build import build_model, MODELS
 
 
 @MODELS.register_module()
+class ModuleSelector(nn.Module):
+    """
+    Class implementing the ModuleSelector module.
+
+    The ModuleSelector contains a list of modules, with each module having the same architecture, but different
+    weights. In the forward pass, every input feature is provided with a corresponding module id, determining which
+    module to apply to each input feature.
+
+    Attributes:
+        module_list (nn.ModuleList): List of size [num_modules] containing the modules to choose from.
+        out_feat_size (int): Integer containing the output feature size.
+    """
+
+    def __init__(self, module_cfg, num_modules, out_feat_size=None):
+        """
+        Initializes the ModuleSelector module.
+
+        Args:
+            module_cfg (Dict): Configuration dictionary specifying the architecture of the modules.
+            num_modules (int): Integer containing the number of modules to choose from.
+            out_feat_size (int): Integer containing the output feature size (default=None).
+
+        Raises:
+            ValueError: Error when the output feature size cannot be inferred and was not given as input argument.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build list with modules to choose from
+        self.module_list = nn.ModuleList([build_model(module_cfg) for _ in range(num_modules)])
+
+        # Set attribute containing the output feature size
+        self.out_feat_size = module_cfg.get('out_size', out_feat_size)
+
+        if self.out_feat_size is None:
+            error_msg = "The output feature size must either be inferred through the 'out_size' key of the module "
+            error_msg += "configuration dictionary, or must be provided by the 'out_feat_size' input argument."
+            raise ValueError(error_msg)
+
+    def forward(self, in_feats, module_ids):
+        """
+        Forward method of the ModuleSelector module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size]
+            module_ids (LongTensor): Module indices corresponding to each input feature of shape [num_feats].
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, out_feat_size].
+        """
+
+        # Initialize output features
+        num_feats = in_feats.size(dim=0)
+        out_feats = in_feats.new_zeros([num_feats, self.out_feat_size])
+
+        # Apply requested module to each input feature
+        for module_id in range(len(self.module_list)):
+            apply_mask = module_ids == module_id
+            module = self.module_list[module_id]
+            out_feats[apply_mask] = module(in_feats[apply_mask])
+
+        return out_feats
+
+
+@MODELS.register_module()
 class Sequential(nn.Sequential):
     """
     Class implementing the enhanced Sequential module.
