@@ -71,6 +71,23 @@ model = dict(
     ),
     dec_layer_cfg=[
         dict(
+            type='BoxCrossAttn',
+            attn_cfg=dict(
+                type='DeformableAttn',
+                in_size=256,
+                sample_size=256,
+                out_size=256,
+                norm='layer',
+                act_fn='',
+                skip=True,
+                version=1,
+                num_heads=8,
+                num_levels=5,
+                num_points=1,
+                val_size=256,
+            ),
+        ),
+        dict(
             type='SelfAttn1d',
             in_size=256,
             out_size=256,

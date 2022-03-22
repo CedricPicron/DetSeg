@@ -10,10 +10,11 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from models.build import MODELS
+from models.build import build_model, MODELS
 from models.extensions.deformable.modules import MSDA3D
 from models.extensions.deformable.python.insert import pytorch_maps_insert_2d, pytorch_maps_insert_3d
 from models.extensions.deformable.python.sample import pytorch_maps_sample_2d, pytorch_maps_sample_3d
+from structures.boxes import Boxes
 
 
 @MODELS.register_module()
@@ -217,6 +218,144 @@ class Attn2d(nn.Module):
         out_feat_map = out_feat_map.permute(0, 3, 1, 2)
 
         return out_feat_map
+
+
+@MODELS.register_module()
+class BoxCrossAttn(nn.Module):
+    """
+    Class implementing the BoxCrossAttn module.
+
+    Attributes:
+        attn (nn.Module): Module performing the actual box-based cross-attention.
+    """
+
+    def __init__(self, attn_cfg):
+        """
+        Initializes the BoxCrossAttn module.
+
+        Args:
+            attn_cfg (Dict): Configuration dictionary specifying the underlying box-based cross-attention module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying box-based cross-attention module
+        self.attn = build_model(attn_cfg)
+
+    def forward(self, in_feats, storage_dict, cum_feats_batch=None):
+        """
+        Forward method of the BoxCrossAttn module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, in_size].
+
+            storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure containing the batched images (default=None);
+                - sel_boxes (Boxes): structure with boxes obtained during selection of size [num_feats].
+
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, out_size].
+
+        Raises:
+            ValueError: Error when storage dictionary does not have key-value pair to obtain sample priors.
+            ValueError: Error when storage dictionary does not have key-value pair to obtain sample features.
+            ValueError: Error when storage dictionary does not have key-value pair to obtain sample map shapes.
+            ValueError: Error when storage dictionary does not have key-value pair to obtain sample map start indices.
+        """
+
+        # Get device
+        device = in_feats.device
+
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, len(in_feats)], device=device)
+
+        # Add sample priors to storage dictionary if needed
+        if 'sample_priors' not in storage_dict:
+
+            if 'sel_boxes' in storage_dict:
+                sample_priors = storage_dict['sel_boxes'].clone()
+
+            else:
+                keys = ['sel_boxes']
+                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample priors."
+                raise ValueError(error_msg)
+
+            images = storage_dict['images']
+            sample_priors_list = []
+
+            for i, image in enumerate(images):
+                i0 = cum_feats_batch[i].item()
+                i1 = cum_feats_batch[i+1].item()
+
+                sample_priors_i = sample_priors[i0:i1].normalize(image)
+                sample_priors_list.append(sample_priors_i)
+
+            sample_priors = Boxes.cat(sample_priors_list)
+            sample_priors = sample_priors.to_format('cxcywh')
+            storage_dict['sample_priors'] = sample_priors.boxes
+
+        # Add sample features to storage dictionary if needed
+        if 'sample_feats' not in storage_dict:
+
+            if 'feat_maps' in storage_dict:
+                feat_maps = storage_dict['feat_maps']
+                sample_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
+                storage_dict['sample_feats'] = sample_feats
+
+            else:
+                keys = ['feat_maps']
+                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample features."
+                raise ValueError(error_msg)
+
+        # Add sample map shapes to storage dictionary if needed
+        if 'sample_map_shapes' not in storage_dict:
+
+            if 'feat_maps' in storage_dict:
+                feat_maps = storage_dict['feat_maps']
+                sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=device)
+                storage_dict['sample_map_shapes'] = sample_map_shapes
+
+            else:
+                keys = ['feat_maps']
+                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample map shapes."
+                raise ValueError(error_msg)
+
+        # Add sample map start indices to storage dictionary if needed
+        if 'sample_map_start_ids' not in storage_dict:
+
+            if 'feat_maps' in storage_dict:
+                sample_map_start_ids = storage_dict['sample_map_shapes'].prod(dim=1).cumsum(dim=0)[:-1]
+                sample_map_start_ids = torch.cat([sample_map_start_ids.new_zeros([1]), sample_map_start_ids], dim=0)
+                storage_dict['sample_map_start_ids'] = sample_map_start_ids
+
+            else:
+                keys = ['feat_maps']
+                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample map start indices."
+                raise ValueError(error_msg)
+
+        # Perform box-based cross-attention
+        attn_kwargs = {k: v for k, v in storage_dict.items() if k in ('sample_map_shapes', 'sample_map_start_ids')}
+        batch_size = len(cum_feats_batch) - 1
+        out_feats_list = []
+
+        for i in range(batch_size):
+            i0 = cum_feats_batch[i].item()
+            i1 = cum_feats_batch[i+1].item()
+
+            attn_kwargs['sample_priors'] = storage_dict['sample_priors'][i0:i1]
+            attn_kwargs['sample_feats'] = storage_dict['sample_feats'][i]
+
+            out_feats_i = self.attn(in_feats[i0:i1], **attn_kwargs)
+            out_feats_list.append(out_feats_i)
+
+        out_feats = torch.cat(out_feats_list, dim=0)
+
+        return out_feats
 
 
 @MODELS.register_module()

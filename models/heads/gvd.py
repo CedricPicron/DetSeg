@@ -114,7 +114,7 @@ class GVD(nn.Module):
 
         return group_init_feats, cum_feats_batch
 
-    def forward(self, feat_maps, tgt_dict=None, visualize=False, **kwargs):
+    def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
         """
         Forward method of the GVD head.
 
@@ -127,6 +127,7 @@ class GVD(nn.Module):
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
+            images (Images): Images structure containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of additional keyword arguments passed to some underlying modules and methods.
 
@@ -142,7 +143,7 @@ class GVD(nn.Module):
         # Initialize empty loss, analysis and storage dictionaries
         loss_dict = {} if tgt_dict is not None else None
         analysis_dict = {}
-        storage_dict = {}
+        storage_dict = {'feat_maps': feat_maps, 'images': images}
 
         # Perform group initialization
         group_init_kwargs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
@@ -153,7 +154,8 @@ class GVD(nn.Module):
         for dec_id, dec_layer in enumerate(self.dec_layers):
 
             # Apply decoder layer
-            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch)
+            dec_kwargs = {'loss_dict': loss_dict, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
+            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch, **dec_kwargs)
 
             # Apply heads if needed
 
