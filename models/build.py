@@ -9,7 +9,7 @@ from mmdet.models.builder import MODELS as MMDET_MODELS
 from torch import nn
 
 
-def build_model_from_cfg(cfg, registry, default_args=None):
+def build_model_from_cfg(cfg, registry, default_args=None, sequential=False):
     """
     Build model from one or multiple configuration dictionaries.
 
@@ -21,6 +21,7 @@ def build_model_from_cfg(cfg, registry, default_args=None):
         cfg (Dict, List[Dict]): One or multiple configuration dictionaries specifying the model to be built.
         registry (Registry): A registry containing various model types.
         default_args (Dict): Default arguments to build the model (default=None).
+        sequential (bool): Boolean indicating whether the model should be an instance of Sequential (default=False).
 
     Returns:
         model (nn.Module): Model built from the given configuration dictionary.
@@ -42,7 +43,7 @@ def build_model_from_cfg(cfg, registry, default_args=None):
 
     # Concatenate sub-modules if needed
     seq_module = registry.get('Sequential')
-    model = seq_module(*modules) if len(modules) > 1 else modules[0]
+    model = seq_module(*modules) if (len(modules) > 1 or sequential) else modules[0]
 
     return model
 
@@ -60,7 +61,7 @@ NN_MODELS._scope = 'nn'
 MODELS._add_children(NN_MODELS)
 
 
-def build_model(cfg):
+def build_model(cfg, sequential=False):
     """
     Function building a model from the given configuration dictionary.
 
@@ -68,12 +69,13 @@ def build_model(cfg):
 
     Args:
         cfg (Dict, List[Dict]): One or multiple configuration dictionaries specifying the model to be built.
+        sequential (bool): Boolean indicating whether the model should be an instance of Sequential (default=False).
 
     Returns:
         model (nn.Module): Model built from the given configuration dictionary.
     """
 
     # Build model from given configuration
-    model = MODELS.build(cfg)
+    model = MODELS.build(cfg, sequential=sequential)
 
     return model

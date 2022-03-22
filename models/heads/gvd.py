@@ -60,7 +60,7 @@ class GVD(nn.Module):
             raise ValueError(error_msg)
 
         # Build list with decoder layers
-        self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg) for _ in range(num_dec_layers)])
+        self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg, sequential=True) for _ in range(num_dec_layers)])
 
     def group_init(self, feat_maps=None, tgt_dict=None, loss_dict=None, analysis_dict=None, storage_dict=None,
                    **kwargs):

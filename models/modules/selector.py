@@ -82,8 +82,7 @@ class AnchorSelector(nn.Module):
         self.sel_attrs = sel_cfg
 
         # Build post-processing module
-        self.post = build_model(post_cfg)
-        self.post = Sequential(self.post) if not isinstance(self.post, Sequential) else self.post
+        self.post = build_model(post_cfg, sequential=True)
 
         # Build matcher module
         self.matcher = build_model(matcher_cfg)
