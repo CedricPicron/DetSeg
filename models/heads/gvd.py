@@ -24,9 +24,11 @@ class GVD(nn.Module):
             group_init_sel (nn.Module): Module obtaining group initialization features by selecting from input maps.
 
         dec_layers (nn.ModuleList): List of size [num_dec_layers] containing the decoder layers.
+        heads (nn.ModuleList): List of size [num_heads] containing the heads.
+        head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
     """
 
-    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers):
+    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers, head_cfgs, head_apply_ids):
         """
         Initializes the GVD head.
 
@@ -34,6 +36,8 @@ class GVD(nn.Module):
             group_init_cfg (Dict): Configuration dictionary specifying the group initialization.
             dec_layer_cfg (Dict): Configuration dictionary specifying a single decoder layer.
             num_dec_layers (int): Integer containing the number decoder layers.
+            head_cfgs (List): List of size [num_heads] with the configuration dictionaries specifying the heads.
+            head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -62,19 +66,23 @@ class GVD(nn.Module):
         # Build list with decoder layers
         self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg, sequential=True) for _ in range(num_dec_layers)])
 
-    def group_init(self, feat_maps=None, tgt_dict=None, loss_dict=None, analysis_dict=None, storage_dict=None,
-                   **kwargs):
+        # Set attributes related to the heads
+        self.heads = nn.ModuleList([build_model(head_cfg)] for head_cfg in head_cfgs)
+        self.head_apply_ids = head_apply_ids
+
+    def group_init(self, storage_dict, tgt_dict=None, loss_dict=None, analysis_dict=None, **kwargs):
         """
         Method performing group initialization, i.e. obtaining the initial group features.
 
-        Key-value pairs might be added to the given loss, analysis and storage dictionaries.
+        Key-value pairs might be added to the given storage, loss and analysis dictionaries.
 
         Args:
-            feat_maps (List): List [num_maps] with maps of shape [batch_size, feat_size, fH, fW] (default=None).
+            storage_dict (Dict): Dictionary storing all kinds of key-value pairs, containing at least following key:
+                - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW].
+
             tgt_dict (Dict): Dictionary with ground-truth targets used during trainval (default=None).
             loss_dict (Dict): Dictionary with different weighted loss terms used during training (default=None).
             analysis_dict (Dict): Dictionary with different analyses used for logging purposes only (default=None).
-            storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest (default=None).
             kwargs (Dict): Dictionary of additional keyword arguments passed to underlying modules.
 
         Returns:
@@ -84,6 +92,9 @@ class GVD(nn.Module):
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
         """
+
+        # Retrieve feature maps from storage dictionary
+        feat_maps = storage_dict['feat_maps']
 
         # Perform group initialization
         if self.group_init_mode == 'learned':
@@ -104,9 +115,9 @@ class GVD(nn.Module):
             sel_loss_dict = sel_out_dict.pop('loss_dict', {})
             sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
 
+            storage_dict.update(sel_out_dict)
             loss_dict.update(sel_loss_dict) if loss_dict is not None else None
             analysis_dict.update(sel_analysis_dict) if analysis_dict is not None else None
-            storage_dict.update(sel_out_dict) if storage_dict is not None else None
 
         else:
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
@@ -131,6 +142,12 @@ class GVD(nn.Module):
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of additional keyword arguments passed to some underlying modules and methods.
 
+        Returns:
+            return_list (List): List of size [num_returns] possibly containing following items to return:
+                pred_dicts (List): list of size [num_pred_dicts] with prediction dictionaries (evaluation only);
+                loss_dict (Dict): dictionary with different weighted loss terms used during training (trainval only);
+                analysis_dict (Dict): dictionary with different analyses used for logging purposes only.
+
         Raises:
             ValueError: Error when visualizations are requested.
         """
@@ -140,23 +157,38 @@ class GVD(nn.Module):
             error_msg = "The GVD head currently does not provide visualizations."
             raise ValueError(error_msg)
 
-        # Initialize empty loss, analysis and storage dictionaries
+        # Initialize storage, loss, analysis and prediction dictionaries
+        storage_dict = {'feat_maps': feat_maps, 'images': images}
         loss_dict = {} if tgt_dict is not None else None
         analysis_dict = {}
-        storage_dict = {'feat_maps': feat_maps, 'images': images}
+
+        # Initialize empty list for prediction dictionaries
+        pred_dicts = [] if not self.training else None
+
+        # Collect above dictionaries and list into a single dictionary
+        dict_kwargs = {'storage_dict': storage_dict, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
+        dict_kwargs = {**dict_kwargs, 'analysis_dict': analysis_dict, 'pred_dicts': pred_dicts}
 
         # Perform group initialization
-        group_init_kwargs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
-        group_init_kwargs = {**group_init_kwargs, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
-        group_feats, cum_feats_batch = self.group_init(**group_init_kwargs, **kwargs)
+        group_feats, cum_feats_batch = self.group_init(**dict_kwargs, **kwargs)
+
+        # Apply heads if needed
+        if 0 in self.head_apply_ids:
+            self.apply_heads(**dict_kwargs, **kwargs)
 
         # Iterate over decoder layers and apply heads when needed
-        for dec_id, dec_layer in enumerate(self.dec_layers):
+        for dec_id, dec_layer in enumerate(self.dec_layers, 1):
 
             # Apply decoder layer
-            dec_kwargs = {'loss_dict': loss_dict, 'analysis_dict': analysis_dict, 'storage_dict': storage_dict}
-            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch, **dec_kwargs)
+            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch, **dict_kwargs, **kwargs)
 
             # Apply heads if needed
+            if dec_id in self.head_apply_ids:
+                self.apply_heads(**dict_kwargs, **kwargs)
 
-        return group_feats, loss_dict, analysis_dict
+        # Get list with items to return
+        return_list = [analysis_dict]
+        return_list.insert(0, loss_dict) if tgt_dict is not None else None
+        return_list.insert(0, pred_dicts) if not self.training else None
+
+        return return_list

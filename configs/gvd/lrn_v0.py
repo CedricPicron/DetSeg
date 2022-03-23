@@ -29,4 +29,6 @@ model = dict(
         ),
     ],
     num_dec_layers=6,
+    head_cfgs=[],
+    head_apply_ids=[],
 )
