@@ -109,6 +109,43 @@ model = dict(
         ),
     ],
     num_dec_layers=6,
-    head_cfgs=[],
-    head_apply_ids=[],
+    head_cfgs=[
+        dict(
+            type='BaseClsHead',
+            logits_cfg=[
+                dict(
+                    type='OneStepMLP',
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=False,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=1,
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=81,
+                    bias=True,
+                ),
+            ],
+            matcher_cfg=None,
+            loss_cfg=dict(
+                type='SigmoidFocalLoss',
+                alpha=0.25,
+                gamma=2.0,
+                reduction='sum',
+                weight=1.0,
+            ),
+        ),
+    ],
+    head_apply_ids=[6],
 )

@@ -67,7 +67,7 @@ class GVD(nn.Module):
         self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg, sequential=True) for _ in range(num_dec_layers)])
 
         # Set attributes related to the heads
-        self.heads = nn.ModuleList([build_model(head_cfg)] for head_cfg in head_cfgs)
+        self.heads = nn.ModuleList([build_model(head_cfg) for head_cfg in head_cfgs])
         self.head_apply_ids = head_apply_ids
 
     def group_init(self, storage_dict, tgt_dict=None, loss_dict=None, analysis_dict=None, **kwargs):
@@ -166,25 +166,34 @@ class GVD(nn.Module):
         pred_dicts = [] if not self.training else None
 
         # Collect above dictionaries and list into a single dictionary
-        dict_kwargs = {'storage_dict': storage_dict, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
-        dict_kwargs = {**dict_kwargs, 'analysis_dict': analysis_dict, 'pred_dicts': pred_dicts}
+        local_kwargs = {'storage_dict': storage_dict, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
+        local_kwargs = {**local_kwargs, 'analysis_dict': analysis_dict, 'pred_dicts': pred_dicts}
 
         # Perform group initialization
-        group_feats, cum_feats_batch = self.group_init(**dict_kwargs, **kwargs)
+        group_feats, cum_feats_batch = self.group_init(**local_kwargs, **kwargs)
+        local_kwargs['cum_feats_batch'] = cum_feats_batch
 
         # Apply heads if needed
         if 0 in self.head_apply_ids:
-            self.apply_heads(**dict_kwargs, **kwargs)
+            local_kwargs['in_feats'] = group_feats
+            [head(mode='pred', **local_kwargs, **kwargs) for head in self.heads]
+
+            if tgt_dict is not None:
+                [head(mode='loss', **local_kwargs, **kwargs) for head in self.heads]
 
         # Iterate over decoder layers and apply heads when needed
         for dec_id, dec_layer in enumerate(self.dec_layers, 1):
 
             # Apply decoder layer
-            group_feats = dec_layer(group_feats, cum_feats_batch=cum_feats_batch, **dict_kwargs, **kwargs)
+            group_feats = dec_layer(group_feats, **local_kwargs, **kwargs)
 
             # Apply heads if needed
             if dec_id in self.head_apply_ids:
-                self.apply_heads(**dict_kwargs, **kwargs)
+                local_kwargs['in_feats'] = group_feats
+                [head(mode='pred', **local_kwargs, **kwargs) for head in self.heads]
+
+                if tgt_dict is not None:
+                    [head(mode='loss', **local_kwargs, **kwargs) for head in self.heads]
 
         # Get list with items to return
         return_list = [analysis_dict]

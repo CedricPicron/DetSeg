@@ -411,7 +411,7 @@ elif profiling_args.model == 'gvd':
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
     globals_dict = {'model': model, 'inputs': inputs}
     forward_stmt = "model(**inputs)"
-    backward_stmt = "model(**inputs)[0].sum().backward()"
+    backward_stmt = "sum(model(**inputs)[0].values()).backward()"
 
 elif profiling_args.model == 'mbd':
     main_args.metadata = MetadataCatalog.get('coco_2017_val')
