@@ -62,7 +62,7 @@ class BaseClsHead(nn.Module):
 
         return storage_dict
 
-    def forward_loss(self, storage_dict, loss_dict, analysis_dict=None, **kwargs):
+    def forward_loss(self, storage_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
         Forward method of the BaseClsHead module.
 
@@ -73,6 +73,7 @@ class BaseClsHead(nn.Module):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            id (int): Integer containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -94,15 +95,18 @@ class BaseClsHead(nn.Module):
         # Get classification loss
         num_labels = cls_logits.size(dim=1)
         cls_targets_oh = F.one_hot(cls_targets, num_classes=num_labels)
-
         cls_loss = self.loss(cls_logits, cls_targets_oh)
-        loss_dict['cls_loss'] = cls_loss
 
-        # Get classificatio accuracy if needed
+        key_name = f'cls_loss_{id}' if id is not None else 'cls_loss'
+        loss_dict[key_name] = cls_loss
+
+        # Get classification accuracy if needed
         if analysis_dict is not None:
             cls_preds = cls_logits.argmax(dim=1)
-            cls_acc = (cls_preds == cls_targets).sum() / len(cls_preds)
-            analysis_dict['cls_acc'] = 100 * cls_acc
+            cls_acc = (cls_preds == cls_targets).sum(dim=0) / len(cls_preds)
+
+            key_name = f'cls_acc_{id}' if id is not None else 'cls_acc'
+            analysis_dict[key_name] = 100 * cls_acc
 
         return loss_dict, analysis_dict
 
@@ -112,7 +116,7 @@ class BaseClsHead(nn.Module):
 
         Args:
             mode (str): String containing the forward mode chosen from ['pred', 'loss'].
-            kwargs (Dict): Dictionary of keyword arguments passed to underlying forward method.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying forward method.
 
         Raises:
             ValueError: Error when an invalid forward mode is provided.

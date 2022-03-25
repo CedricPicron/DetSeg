@@ -111,6 +111,7 @@ class GVD(nn.Module):
 
             group_init_feats = sel_out_dict.pop('sel_feats')
             cum_feats_batch = sel_out_dict.pop('cum_feats_batch')
+            storage_dict['prior_boxes'] = sel_out_dict.get('sel_boxes', None)
 
             sel_loss_dict = sel_out_dict.pop('loss_dict', {})
             sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
@@ -176,10 +177,10 @@ class GVD(nn.Module):
         # Apply heads if needed
         if 0 in self.head_apply_ids:
             local_kwargs['in_feats'] = group_feats
-            [head(mode='pred', **local_kwargs, **kwargs) for head in self.heads]
+            [head(mode='pred', id=0, **local_kwargs, **kwargs) for head in self.heads]
 
             if tgt_dict is not None:
-                [head(mode='loss', **local_kwargs, **kwargs) for head in self.heads]
+                [head(mode='loss', id=0, **local_kwargs, **kwargs) for head in self.heads]
 
         # Iterate over decoder layers and apply heads when needed
         for dec_id, dec_layer in enumerate(self.dec_layers, 1):
@@ -190,10 +191,10 @@ class GVD(nn.Module):
             # Apply heads if needed
             if dec_id in self.head_apply_ids:
                 local_kwargs['in_feats'] = group_feats
-                [head(mode='pred', **local_kwargs, **kwargs) for head in self.heads]
+                [head(mode='pred', id=dec_id, **local_kwargs, **kwargs) for head in self.heads]
 
                 if tgt_dict is not None:
-                    [head(mode='loss', **local_kwargs, **kwargs) for head in self.heads]
+                    [head(mode='loss', id=dec_id, **local_kwargs, **kwargs) for head in self.heads]
 
         # Get list with items to return
         return_list = [analysis_dict]

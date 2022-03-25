@@ -253,7 +253,7 @@ class BoxCrossAttn(nn.Module):
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images (default=None);
-                - sel_boxes (Boxes): structure with boxes obtained during selection of size [num_feats].
+                - prior_boxes (Boxes): structure with prior bounding boxes of size [num_feats].
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
 
@@ -277,11 +277,11 @@ class BoxCrossAttn(nn.Module):
         # Add sample priors to storage dictionary if needed
         if 'sample_priors' not in storage_dict:
 
-            if 'sel_boxes' in storage_dict:
-                sample_priors = storage_dict['sel_boxes'].clone()
+            if 'prior_boxes' in storage_dict:
+                sample_priors = storage_dict['prior_boxes'].clone()
 
             else:
-                keys = ['sel_boxes']
+                keys = ['prior_boxes']
                 error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample priors."
                 raise ValueError(error_msg)
 
