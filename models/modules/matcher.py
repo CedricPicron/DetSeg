@@ -20,75 +20,129 @@ class BoxMatcher(nn.Module):
         - ignore label with value -1 (query has no matching verdict).
 
     Attributes:
+        qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
+        tgt_key (str): String with key to retrieve the target boxes from the target dictionary.
         box_metric (str): String containing the metric computing similarities between query and target boxes.
         sim_matcher (nn.Module): Module matching queries with targets based on the given similarity matrix.
     """
 
-    def __init__(self, sim_matcher_cfg, box_metric='iou'):
+    def __init__(self, qry_key, sim_matcher_cfg, tgt_key='boxes', box_metric='iou'):
         """
         Initializes the BoxMatcher module.
 
         Args:
+            qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
             sim_matcher_cfg (Dict): Configuration dictionary specifying the similarity matcher.
+            tgt_key (str): String with key to retrieve the target boxes from the target dictionary (default='boxes').
             box_metric (str): String with metric computing similarities between query and target boxes (default='iou').
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set attribute with bounding box metric
-        self.box_metric = box_metric
-
         # Build similarity matcher
         self.sim_matcher = build_model(sim_matcher_cfg)
 
-    def forward(self, qry_boxes, tgt_boxes):
+        # Set remaining attributes
+        self.qry_key = qry_key
+        self.tgt_key = tgt_key
+        self.box_metric = box_metric
+
+    def forward(self, storage_dict, tgt_dict, **kwargs):
         """
         Forward method of BoxMatcher module.
 
         Args:
-            qry_boxes (Boxes): Structure containing axis-aligned query boxes of size [num_queries].
-            tgt_boxes (Boxes): Structure containing axis-aligned target boxes of size [num_targets].
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_queries].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - {self.tgt_key} (Boxes): structure containing axis-aligned target boxes of size [num_targets].
+
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
-            match_labels (LongTensor): Match labels corresponding to each query of shape [num_queries].
-            matched_qry_ids (LongTensor): Indices of matched queries of shape [num_pos_queries].
-            matched_tgt_ids (LongTensor): Indices of corresponding matched targets of shape [num_pos_queries].
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
+                matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
         Raises:
             ValueError: Error when an invalid bounding box metric is provided.
         """
 
-        # Get number of query and target boxes
-        num_queries = len(qry_boxes)
-        num_targets = len(tgt_boxes)
+        # Retrieve query and target boxes
+        qry_boxes = storage_dict[self.qry_key]
+        tgt_boxes = tgt_dict[self.tgt_key]
 
         # Get device
         device = qry_boxes.boxes.device
 
-        # Handle case where there are no query or target boxes and return
-        if (num_queries == 0) or (num_targets == 0):
-            match_labels = torch.zeros(num_queries, device=device)
-            matched_qry_ids = torch.zeros(0, device=device)
-            matched_tgt_ids = torch.zeros(0, device=device)
+        # Get list of query and target boxes per image
+        qry_boxes = qry_boxes.split(qry_boxes.boxes_per_img.tolist())
+        tgt_boxes = tgt_boxes.split(tgt_boxes.boxes_per_img.tolist())
 
-            return match_labels, matched_qry_ids, matched_tgt_ids
+        if len(qry_boxes) == 1 and len(tgt_boxes) > 1:
+            qry_boxes = qry_boxes * len(tgt_boxes)
 
-        # Get similarity matrix between query and target boxes
-        if self.box_metric == 'giou':
-            sim_matrix = box_giou(qry_boxes, tgt_boxes)
+        # Initialize query and target offsets
+        qry_offset = 0
+        tgt_offset = 0
 
-        elif self.box_metric == 'iou':
-            sim_matrix = box_iou(qry_boxes, tgt_boxes)
+        # Intialize lists with matching results
+        match_labels_list = []
+        matched_qry_ids_list = []
+        matched_tgt_ids_list = []
 
-        else:
-            error_msg = f"Invalid bounding box metric (got '{self.box_metric}')."
-            raise ValueError(error_msg)
+        # Perform matching per image
+        for qry_boxes_i, tgt_boxes_i in zip(qry_boxes, tgt_boxes):
 
-        # Perform matching based on similarity matrix
-        match_labels, matched_qry_ids, matched_tgt_ids = self.sim_matcher(sim_matrix)
+            # Get number of query and target boxes
+            num_queries = len(qry_boxes_i)
+            num_targets = len(tgt_boxes_i)
 
-        return match_labels, matched_qry_ids, matched_tgt_ids
+            # Case where there are both queries and targets
+            if (num_queries > 0) and (num_targets > 0):
+
+                # Get similarity matrix between query and target boxes
+                if self.box_metric == 'giou':
+                    sim_matrix = box_giou(qry_boxes_i, tgt_boxes_i)
+
+                elif self.box_metric == 'iou':
+                    sim_matrix = box_iou(qry_boxes_i, tgt_boxes_i)
+
+                else:
+                    error_msg = f"Invalid bounding box metric (got '{self.box_metric}')."
+                    raise ValueError(error_msg)
+
+                # Perform matching based on similarity matrix
+                match_labels_i, matched_qry_ids_i, matched_tgt_ids_i = self.sim_matcher(sim_matrix)
+
+            # Case where there are no queries or targets
+            else:
+                match_labels_i = torch.zeros(num_queries, device=device)
+                matched_qry_ids_i = torch.zeros(0, device=device)
+                matched_tgt_ids_i = torch.zeros(0, device=device)
+
+            # Add query and target offsets to indices
+            matched_qry_ids_i = matched_qry_ids_i + qry_offset
+            matched_tgt_ids_i = matched_tgt_ids_i + tgt_offset
+
+            # Update query and target offsets
+            qry_offset += num_queries
+            tgt_offset += num_targets
+
+            # Add image-specific mathcing resutls to list
+            match_labels_list.append(match_labels_i)
+            matched_qry_ids_list.append(matched_qry_ids_i)
+            matched_tgt_ids_list.append(matched_tgt_ids_i)
+
+        # Concatenate matching results and add them to storage dictionary
+        storage_dict['match_labels'] = torch.cat(match_labels_list, dim=0)
+        storage_dict['matched_qry_ids'] = torch.cat(matched_qry_ids_list, dim=0)
+        storage_dict['matched_tgt_ids'] = torch.cat(matched_tgt_ids_list, dim=0)
+
+        return storage_dict
 
 
 @MODELS.register_module()

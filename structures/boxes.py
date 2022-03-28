@@ -447,6 +447,24 @@ class Boxes(object):
 
         return self
 
+    def split(self, split_size_or_sections):
+        """
+        Splits the bounding boxes into chunks of bounding boxes.
+
+        Args:
+            split_size_or_sections (int or List):
+                1) integer containing the (maximum) size of each chunk;
+                2) list of size [num_chunks] with integers containing the sizes of each chunk.
+
+        Returns:
+            boxes_list (List): List with chunks of bounding boxes of size [num_chunks].
+        """
+
+        boxes_list = self.boxes.split(split_size_or_sections, dim=0)
+        boxes_list = [Boxes(boxes, self.format, self.normalized) for boxes in boxes_list]
+
+        return boxes_list
+
     def to(self, *args, **kwargs):
         """
         Performs type and/or device conversion for the tensors within the Boxes structure.

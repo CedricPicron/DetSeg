@@ -70,19 +70,14 @@ class GVD(nn.Module):
         self.heads = nn.ModuleList([build_model(head_cfg) for head_cfg in head_cfgs])
         self.head_apply_ids = head_apply_ids
 
-    def group_init(self, storage_dict, tgt_dict=None, loss_dict=None, analysis_dict=None, **kwargs):
+    def group_init(self, storage_dict, **kwargs):
         """
         Method performing group initialization, i.e. obtaining the initial group features.
 
-        Key-value pairs might be added to the given storage, loss and analysis dictionaries.
-
         Args:
-            storage_dict (Dict): Dictionary storing all kinds of key-value pairs, containing at least following key:
+            storage_dict (Dict): Storage dictionary containing at least following key:
                 - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW].
 
-            tgt_dict (Dict): Dictionary with ground-truth targets used during trainval (default=None).
-            loss_dict (Dict): Dictionary with different weighted loss terms used during training (default=None).
-            analysis_dict (Dict): Dictionary with different analyses used for logging purposes only (default=None).
             kwargs (Dict): Dictionary of additional keyword arguments passed to underlying modules.
 
         Returns:
@@ -93,11 +88,10 @@ class GVD(nn.Module):
             ValueError: Error when an invalid group initialization mode is provided.
         """
 
-        # Retrieve feature maps from storage dictionary
-        feat_maps = storage_dict['feat_maps']
-
         # Perform group initialization
         if self.group_init_mode == 'learned':
+            feat_maps = storage_dict['feat_maps']
+
             batch_size = feat_maps[0].size(dim=0)
             group_init_feats = self.group_init_feats[None, :, :].expand(batch_size, -1, -1)
             group_init_feats = group_init_feats.flatten(0, 1)
@@ -107,18 +101,11 @@ class GVD(nn.Module):
             cum_feats_batch = torch.arange(batch_size+1, device=device) * num_feats_batch
 
         elif self.group_init_mode == 'selected':
-            sel_out_dict = self.group_init_sel(feat_maps=feat_maps, tgt_dict=tgt_dict, **kwargs)
+            self.group_init_sel(storage_dict=storage_dict, **kwargs)
 
-            group_init_feats = sel_out_dict.pop('sel_feats')
-            cum_feats_batch = sel_out_dict.pop('cum_feats_batch')
-            storage_dict['prior_boxes'] = sel_out_dict.get('sel_boxes', None)
-
-            sel_loss_dict = sel_out_dict.pop('loss_dict', {})
-            sel_analysis_dict = sel_out_dict.pop('analysis_dict', {})
-
-            storage_dict.update(sel_out_dict)
-            loss_dict.update(sel_loss_dict) if loss_dict is not None else None
-            analysis_dict.update(sel_analysis_dict) if analysis_dict is not None else None
+            group_init_feats = storage_dict.pop('sel_feats')
+            cum_feats_batch = storage_dict.pop('cum_feats_batch')
+            storage_dict['prior_boxes'] = storage_dict.pop('sel_boxes', None)
 
         else:
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."

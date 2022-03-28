@@ -74,19 +74,19 @@ class BaseClsHead(nn.Module):
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
             id (int): Integer containing the head id (default=None).
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional key:
-                - cls_loss (FloatTensor): tensor containing the weighted classification loss of shape [1].
+                - cls_loss (FloatTensor): tensor containing the weighted classification loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
-                - cls_acc (FloatTensor): tensor containing the classification accuracy of shape [1].
+                - cls_acc (FloatTensor): tensor containing the classification accuracy of shape [].
         """
 
         # Perform matching if matcher is available
         if hasattr(self, 'matcher'):
-            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict)
+            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve classification logits and targets
         cls_logits = storage_dict['cls_logits']
@@ -103,7 +103,7 @@ class BaseClsHead(nn.Module):
         # Get classification accuracy if needed
         if analysis_dict is not None:
             cls_preds = cls_logits.argmax(dim=1)
-            cls_acc = (cls_preds == cls_targets).sum(dim=0) / len(cls_preds)
+            cls_acc = (cls_preds == cls_targets).sum() / len(cls_preds)
 
             key_name = f'cls_acc_{id}' if id is not None else 'cls_acc'
             analysis_dict[key_name] = 100 * cls_acc

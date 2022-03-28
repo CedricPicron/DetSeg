@@ -41,14 +41,14 @@ class AnchorSelector(nn.Module):
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_cfg, pre_logits_cfg, sel_cfg, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01):
+    def __init__(self, anchor_attrs, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01):
         """
         Initializes the AnchorSelector module.
 
         Args:
-            anchor_cfg (Dict): Configuration dictionary specifying the anchors.
+            anchor_attrs (Dict): Attribute dictionary specifying the anchor generator.
             pre_logits_cfg (Dict): Configuration dictionary specifying the pre-logits module.
-            sel_cfg (Dict): Configuration dictionary specifying the selection procedure.
+            sel_attrs (Dict): Attribute dictionary specifying the selection procedure.
             post_cfg (Dict): Configuration dictionary specifying the post-processing module.
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
@@ -58,8 +58,8 @@ class AnchorSelector(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set anchor attributes
-        self.anchor_attrs = anchor_cfg
+        # Set anchor-related attributes
+        self.anchor_attrs = anchor_attrs
 
         # Build logits module
         pre_logits = build_model(pre_logits_cfg)
@@ -69,7 +69,7 @@ class AnchorSelector(nn.Module):
         else:
             in_feat_size = pre_logits_cfg['out_channels']
 
-        num_cell_anchors = anchor_cfg['num_sizes'] * len(anchor_cfg['aspect_ratios'])
+        num_cell_anchors = anchor_attrs['num_sizes'] * len(anchor_attrs['aspect_ratios'])
         proj_logits = ProjConv(in_feat_size, num_cell_anchors, skip=False)
 
         init_logits_bias = -(math.log((1 - init_prob) / init_prob))
@@ -78,8 +78,8 @@ class AnchorSelector(nn.Module):
         seq_dict = OrderedDict([('pre', pre_logits), ('proj', proj_logits)])
         self.logits = Sequential(seq_dict)
 
-        # Set selection attributes
-        self.sel_attrs = sel_cfg
+        # Set selection-related attributes
+        self.sel_attrs = sel_attrs
 
         # Build post-processing module
         self.post = build_model(post_cfg, sequential=True)
@@ -153,102 +153,54 @@ class AnchorSelector(nn.Module):
 
         return sel_logits, sel_ids, sel_feats
 
-    def forward(self, feat_maps, tgt_dict=None, **kwargs):
+    def get_selection_loss(self, sel_logits, storage_dict, tgt_dict, loss_dict, analysis_dict=None, **kwargs):
         """
-        Forward method of the AnchorSelector module.
+        Method computing the selection loss.
+
+        The method also computes the percentage of targets found, if an analysis dictionary is provided.
 
         Args:
-            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+            sel_logits (FloatTensor): Selection logits of shape [batch_size, num_anchors].
 
-            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following key:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs].
+
+            tgt_dict (Dict): Target dictionary used containing at least following key:
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total].
 
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            loss_dict (Dict): Dictionary containing different weighted loss terms.
+            analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
-            out_dict (Dict): Output dictionary containing following keys:
-                - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
-                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
-                - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
-                - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
-                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs];
-                - loss_dict (Dict): dictionary with the selection loss (trainval only);
-                - analysis_dict (Dict): dictionary with different selection analyses used for logging purposes only.
+            loss_dict (Dict): Loss dictionary containing following additional key:
+                - sel_loss (FloatTensor): tensor containing the selection loss of shape [].
+
+            analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
+                - sel_tgt_found (FloatTensor): tensor containing the percentage of targets found of shape [].
         """
 
-        # Initialize empty analysis and output dictionary
-        analysis_dict = {}
-        out_dict = {}
+        # Retrieve selection indices
+        sel_ids = storage_dict['sel_ids']
 
-        # Get anchors
-        anchors = get_anchors(feat_maps, **self.anchor_attrs)
-        out_dict['anchors'] = anchors
+        # Perform matching
+        self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        # Perform selection
-        sel_logits, sel_ids, sel_feats = self.perform_selection(feat_maps)
-        out_dict['sel_ids'] = sel_ids
+        # Get selection loss
+        match_labels = storage_dict['match_labels']
 
-        # Get cumulative number of selected features per batch entry
-        batch_size = sel_logits.size(dim=0)
-        batch_ids = torch.div(sel_ids, len(anchors), rounding_mode='floor')
+        loss_mask = match_labels != -1
+        pred_logits = sel_logits.flatten()[loss_mask]
+        tgt_labels = match_labels[loss_mask]
 
-        cum_feats_batch = torch.stack([(batch_ids == i).sum() for i in range(batch_size)]).cumsum(dim=0)
-        cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
-        out_dict['cum_feats_batch'] = torch.arange(batch_size+1, device=batch_ids.device) * 300
+        sel_loss = self.loss(pred_logits, tgt_labels)
+        loss_dict['sel_loss'] = sel_loss
 
-        # Perform post-processing on selected features
-        num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
-        cell_anchor_ids = sel_ids % num_cell_anchors
+        # Get percentage of targets found
+        if analysis_dict is not None:
+            matched_qry_ids = storage_dict['matched_qry_ids']
+            matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
-        out_dict['sel_feats'] = sel_feats
-
-        # Get boxes corresponding to selected features
-        anchor_ids = torch.div(sel_ids, batch_size, rounding_mode='floor')
-
-        sel_boxes = anchors[anchor_ids]
-        out_dict['sel_boxes'] = sel_boxes
-
-        # Get selection loss (trainval only)
-        if tgt_dict is not None:
-
-            # Perform matching
-            tgt_boxes = tgt_dict['boxes']
-            tgts_per_img = tgt_boxes.boxes_per_img
-
-            cum_tgts_per_img = tgts_per_img.cumsum(dim=0)
-            cum_tgts_per_img = torch.cat([cum_tgts_per_img.new_zeros([1]), cum_tgts_per_img], dim=0)
-
-            match_labels_list = []
-            matched_qry_ids_list = []
-            matched_tgt_ids_list = []
-
-            for i in range(batch_size):
-                tgt_i0, tgt_i1 = cum_tgts_per_img[i:i+2]
-                tgt_boxes_i = tgt_boxes[tgt_i0:tgt_i1]
-                match_labels_i, matched_qry_ids_i, matched_tgt_ids_i = self.matcher(anchors, tgt_boxes_i)
-
-                matched_qry_ids_i = matched_qry_ids_i + i * len(anchors)
-                matched_tgt_ids_i = matched_tgt_ids_i + tgt_i0
-
-                match_labels_list.append(match_labels_i)
-                matched_qry_ids_list.append(matched_qry_ids_i)
-                matched_tgt_ids_list.append(matched_tgt_ids_i)
-
-            match_labels = torch.cat(match_labels_list, dim=0)
-            matched_qry_ids = torch.cat(matched_qry_ids_list, dim=0)
-            matched_tgt_ids = torch.cat(matched_tgt_ids_list, dim=0)
-
-            # Get selection loss
-            loss_mask = match_labels != -1
-            pred_logits = sel_logits.flatten()[loss_mask]
-            tgt_labels = match_labels[loss_mask]
-
-            sel_loss = self.loss(pred_logits, tgt_labels)
-            loss_dict = {'sel_loss': sel_loss}
-            out_dict['loss_dict'] = loss_dict
-
-            # Get percentage of targets found
             cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
             inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
 
@@ -259,13 +211,68 @@ class AnchorSelector(nn.Module):
             tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
 
             num_tgts_found = len(tgt_found_ids)
-            num_tgts = len(tgt_boxes)
+            num_tgts = len(tgt_dict['boxes'])
 
             tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
-            tgt_found = torch.tensor([tgt_found], device=tgt_found_ids.device)
+            tgt_found = torch.tensor(tgt_found, device=tgt_found_ids.device)
             analysis_dict['sel_tgt_found'] = 100 * tgt_found
 
-        # Add analysis dictionary to output dictionary
-        out_dict['analysis_dict'] = analysis_dict
+        return loss_dict, analysis_dict
 
-        return out_dict
+    def forward(self, storage_dict, tgt_dict=None, **kwargs):
+        """
+        Forward method of the AnchorSelector module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW].
+
+            tgt_dict (Dict): Dictionary containing the ground-truth targets during trainval (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
+                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
+                - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
+                - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
+                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs].
+        """
+
+        # Retrieve feature maps from storage dictionary
+        feat_maps = storage_dict['feat_maps']
+
+        # Get anchors
+        anchors = get_anchors(feat_maps, **self.anchor_attrs)
+        storage_dict['anchors'] = anchors
+
+        # Perform selection
+        sel_logits, sel_ids, sel_feats = self.perform_selection(feat_maps)
+        storage_dict['sel_ids'] = sel_ids
+
+        # Get cumulative number of selected features per batch entry
+        batch_size = sel_logits.size(dim=0)
+        batch_ids = torch.div(sel_ids, len(anchors), rounding_mode='floor')
+
+        cum_feats_batch = torch.stack([(batch_ids == i).sum() for i in range(batch_size)]).cumsum(dim=0)
+        cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
+        storage_dict['cum_feats_batch'] = torch.arange(batch_size+1, device=batch_ids.device) * 300
+
+        # Perform post-processing on selected features
+        num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
+        cell_anchor_ids = sel_ids % num_cell_anchors
+
+        sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
+        storage_dict['sel_feats'] = sel_feats
+
+        # Get boxes corresponding to selected features
+        anchor_ids = torch.div(sel_ids, batch_size, rounding_mode='floor')
+        sel_boxes = anchors[anchor_ids]
+        sel_boxes.boxes_per_img = cum_feats_batch.diff()
+        storage_dict['sel_boxes'] = sel_boxes
+
+        # Get selection loss during trainval
+        if tgt_dict is not None:
+            self.get_selection_loss(sel_logits, storage_dict=storage_dict, tgt_dict=tgt_dict, **kwargs)
+
+        return storage_dict

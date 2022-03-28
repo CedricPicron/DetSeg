@@ -55,10 +55,10 @@ class SigmoidFocalLoss(nn.Module):
                 loss (FloatTensor): Tensor with element-wise sigmoid focal losses of shape [*]
 
             * If self.reduction is 'mean':
-                loss (FloatTensor): Mean of tensor with element-wise sigmoid focal losses of shape [1].
+                loss (FloatTensor): Mean of tensor with element-wise sigmoid focal losses of shape [].
 
             * If self.reduction is 'sum':
-                loss (FloatTensor): Sum of tensor with element-wise sigmoid focal losses of shape [1].
+                loss (FloatTensor): Sum of tensor with element-wise sigmoid focal losses of shape [].
         """
 
         # Get weighted sigmoid focal loss
@@ -374,10 +374,10 @@ class SmoothL1Loss(nn.Module):
                 loss (FloatTensor): Tensor with element-wise smooth L1 losses of shape [*]
 
             * If self.reduction is 'mean':
-                loss (FloatTensor): Mean of tensor with element-wise smooth L1 losses of shape [1].
+                loss (FloatTensor): Mean of tensor with element-wise smooth L1 losses of shape [].
 
             * If self.reduction is 'sum':
-                loss (FloatTensor): Sum of tensor with element-wise smooth L1 losses of shape [1].
+                loss (FloatTensor): Sum of tensor with element-wise smooth L1 losses of shape [].
         """
 
         # Get weighted smooth L1 loss

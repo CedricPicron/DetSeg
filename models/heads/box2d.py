@@ -39,7 +39,7 @@ class BaseBox2dHead(nn.Module):
             box_encoding (str): String containing the type of box encoding scheme.
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
-            dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism (default=None).
+            dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
         """
@@ -233,14 +233,14 @@ class BaseBox2dHead(nn.Module):
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
             id (int): Integer containing the head id (default=None).
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional key:
-                - box_loss (FloatTensor): tensor containing the 2D bounding box loss of shape [1].
+                - box_loss (FloatTensor): tensor containing the 2D bounding box loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
-                - box_acc (FloatTensor): tensor containing the 2D bounding box accuracy of shape [1].
+                - box_acc (FloatTensor): tensor containing the 2D bounding box accuracy of shape [].
 
         Raises:
             ValueError: Error when an invalid type of box encoding scheme is provided.
@@ -248,7 +248,7 @@ class BaseBox2dHead(nn.Module):
 
         # Perform matching if matcher is available
         if hasattr(self, 'matcher'):
-            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict)
+            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve 2D bounding box logits and correspoding target boxes
         box_logits = storage_dict['box_logits']
@@ -271,7 +271,7 @@ class BaseBox2dHead(nn.Module):
         # Get 2D bounding box accuracy if needed
         if analysis_dict is not None:
             pred_boxes = storage_dict['pred_boxes'].detach()
-            box_acc = box_iou(pred_boxes, tgt_boxes).diag().mean(dim=0)
+            box_acc = box_iou(pred_boxes, tgt_boxes).diag().mean()
 
             key_name = f'box_acc_{id}' if id is not None else 'box_acc'
             analysis_dict[key_name] = 100 * box_acc

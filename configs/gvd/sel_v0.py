@@ -5,7 +5,7 @@ model = dict(
         mode='selected',
         sel_cfg=dict(
             type='AnchorSelector',
-            anchor_cfg=dict(
+            anchor_attrs=dict(
                 map_ids=(3, 4, 5, 6, 7),
                 num_sizes=3,
                 scale_factor=4.0,
@@ -31,7 +31,7 @@ model = dict(
                     skip=True,
                 ),
             ],
-            sel_cfg=dict(
+            sel_attrs=dict(
                 mode='rel',
                 rel_thr=300,
             ),
@@ -50,6 +50,8 @@ model = dict(
             ),
             matcher_cfg=dict(
                 type='BoxMatcher',
+                qry_key='anchors',
+                tgt_key='boxes',
                 box_metric='iou',
                 sim_matcher_cfg=dict(
                     type='SimMatcher',
