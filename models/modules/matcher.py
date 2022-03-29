@@ -63,9 +63,9 @@ class BoxMatcher(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional keys:
-                match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
-                matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
         Raises:
             ValueError: Error when an invalid bounding box metric is provided.
@@ -120,9 +120,9 @@ class BoxMatcher(nn.Module):
 
             # Case where there are no queries or targets
             else:
-                match_labels_i = torch.zeros(num_queries, device=device)
-                matched_qry_ids_i = torch.zeros(0, device=device)
-                matched_tgt_ids_i = torch.zeros(0, device=device)
+                match_labels_i = torch.zeros(num_queries, dtype=torch.int64, device=device)
+                matched_qry_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
+                matched_tgt_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
 
             # Add query and target offsets to indices
             matched_qry_ids_i = matched_qry_ids_i + qry_offset
@@ -215,9 +215,9 @@ class SimMatcher(nn.Module):
 
         # Handle case where there are no queries or targets and return
         if (num_queries == 0) or (num_targets == 0):
-            match_labels = torch.zeros(num_queries, device=device)
-            matched_qry_ids = torch.zeros(0, device=device)
-            matched_tgt_ids = torch.zeros(0, device=device)
+            match_labels = torch.zeros(num_queries, dtype=torch.int64, device=device)
+            matched_qry_ids = torch.zeros(0, dtype=torch.int64, device=device)
+            matched_tgt_ids = torch.zeros(0, dtype=torch.int64, device=device)
 
             return match_labels, matched_qry_ids, matched_tgt_ids
 

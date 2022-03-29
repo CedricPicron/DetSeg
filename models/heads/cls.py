@@ -2,6 +2,7 @@
 Collection of classification heads.
 """
 
+import torch
 from torch import nn
 import torch.nn.functional as F
 
@@ -62,14 +63,19 @@ class BaseClsHead(nn.Module):
 
         return storage_dict
 
-    def forward_loss(self, storage_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
         Forward method of the BaseClsHead module.
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys (after matching):
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - cls_targets (LongTensor): target classification labels of shape [num_feats].
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - labels (LongTensor): target class indices of shape [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
@@ -86,14 +92,29 @@ class BaseClsHead(nn.Module):
 
         # Perform matching if matcher is available
         if hasattr(self, 'matcher'):
-            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        # Retrieve classification logits and targets
+        # Retrieve classification logits and matching results
         cls_logits = storage_dict['cls_logits']
-        cls_targets = storage_dict['cls_targets']
+        match_labels = storage_dict['match_labels']
+        matched_qry_ids = storage_dict['matched_qry_ids']
+        matched_tgt_ids = storage_dict['matched_tgt_ids']
+
+        # Get classification logits with corresponding targets
+        pos_cls_logits = cls_logits[matched_qry_ids]
+        pos_cls_targets = tgt_dict['labels'][matched_tgt_ids]
+
+        neg_mask = match_labels == 0
+        num_negs = neg_mask.sum().item()
+        num_labels = cls_logits.size(dim=1)
+
+        neg_cls_logits = cls_logits[neg_mask]
+        neg_cls_targets = torch.full([num_negs], num_labels-1, device=cls_logits.device)
+
+        cls_logits = torch.cat([pos_cls_logits, neg_cls_logits], dim=0)
+        cls_targets = torch.cat([pos_cls_targets, neg_cls_targets], dim=0)
 
         # Get classification loss
-        num_labels = cls_logits.size(dim=1)
         cls_targets_oh = F.one_hot(cls_targets, num_classes=num_labels)
         cls_loss = self.loss(cls_logits, cls_targets_oh)
 

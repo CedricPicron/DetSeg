@@ -139,7 +139,21 @@ model = dict(
                     bias=True,
                 ),
             ],
-            matcher_cfg=None,
+            matcher_cfg=dict(
+                type='BoxMatcher',
+                qry_key='pred_boxes',
+                tgt_key='boxes',
+                box_metric='iou',
+                sim_matcher_cfg=dict(
+                    type='SimMatcher',
+                    mode='static',
+                    static_mode='abs_and_rel',
+                    abs_pos=0.4,
+                    abs_neg=0.3,
+                    rel_pos=5,
+                    rel_neg=10,
+                ),
+            ),
             loss_cfg=dict(
                 type='SigmoidFocalLoss',
                 alpha=0.25,

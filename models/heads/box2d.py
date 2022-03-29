@@ -221,14 +221,19 @@ class BaseBox2dHead(nn.Module):
 
         return storage_dict
 
-    def forward_loss(self, storage_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
         Forward method of the BaseBox2dHead module.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following keys (after matching):
+            storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
-                - tgt_boxes (Boxes): target 2D bouning boxes of size [num_feats].
+                - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - boxes (Boxes): target 2D bounding boxes of size [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
@@ -248,15 +253,38 @@ class BaseBox2dHead(nn.Module):
 
         # Perform matching if matcher is available
         if hasattr(self, 'matcher'):
-            self.matcher(storage_dict=storage_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        # Retrieve 2D bounding box logits and correspoding target boxes
+        # Retrieve 2D bounding box logits and matching results
         box_logits = storage_dict['box_logits']
-        tgt_boxes = storage_dict['tgt_boxes']
+        matched_qry_ids = storage_dict['matched_qry_ids']
+        matched_tgt_ids = storage_dict['matched_tgt_ids']
+
+        # Handle case where there are no positive matches
+        if len(matched_qry_ids) == 0:
+
+            # Get 2D bounding box loss
+            box_loss = 0.0 * box_logits.sum()
+            key_name = f'box_loss_{id}' if id is not None else 'box_loss'
+            loss_dict[key_name] = box_loss
+
+            # Get 2D bounding box accuracy if needed
+            if analysis_dict is not None:
+                box_acc = 1.0 if len(tgt_dict['boxes']) == 0 else 0.0
+                box_acc = torch.tensor(box_acc, dtype=box_loss.dtype, device=box_loss.device)
+
+                key_name = f'box_acc_{id}' if id is not None else 'box_acc'
+                analysis_dict[key_name] = 100 * box_acc
+
+            return loss_dict, analysis_dict
+
+        # Get 2D bounding box logits with corresponding target boxes
+        box_logits = box_logits[matched_qry_ids]
+        tgt_boxes = tgt_dict['boxes'][matched_tgt_ids]
 
         # Get 2D bounding box targets
         if self.box_encoding == 'prior_boxes':
-            prior_boxes = storage_dict['prior_boxes']
+            prior_boxes = storage_dict['prior_boxes'][matched_qry_ids]
             box_targets = get_box_deltas(prior_boxes, tgt_boxes)
 
         else:
@@ -271,6 +299,7 @@ class BaseBox2dHead(nn.Module):
         # Get 2D bounding box accuracy if needed
         if analysis_dict is not None:
             pred_boxes = storage_dict['pred_boxes'].detach()
+            pred_boxes = pred_boxes[matched_qry_ids]
             box_acc = box_iou(pred_boxes, tgt_boxes).diag().mean()
 
             key_name = f'box_acc_{id}' if id is not None else 'box_acc'

@@ -256,7 +256,7 @@ class AnchorSelector(nn.Module):
 
         cum_feats_batch = torch.stack([(batch_ids == i).sum() for i in range(batch_size)]).cumsum(dim=0)
         cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
-        storage_dict['cum_feats_batch'] = torch.arange(batch_size+1, device=batch_ids.device) * 300
+        storage_dict['cum_feats_batch'] = cum_feats_batch
 
         # Perform post-processing on selected features
         num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
@@ -266,7 +266,7 @@ class AnchorSelector(nn.Module):
         storage_dict['sel_feats'] = sel_feats
 
         # Get boxes corresponding to selected features
-        anchor_ids = torch.div(sel_ids, batch_size, rounding_mode='floor')
+        anchor_ids = sel_ids % len(anchors)
         sel_boxes = anchors[anchor_ids]
         sel_boxes.boxes_per_img = cum_feats_batch.diff()
         storage_dict['sel_boxes'] = sel_boxes
