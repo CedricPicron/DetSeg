@@ -28,9 +28,11 @@ class BaseBox2dHead(nn.Module):
         max_dets (int): Integer with the maximum number of returned 2D object detection predictions.
         loss (nn.Module): Module computing the 2D bounding box loss.
         matcher (nn.Module): Optional module determining the 2D target boxes.
+        report_match_stats (bool): Boolean indicating whether to report matching statistics.
     """
 
-    def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, dup_attrs=None, max_dets=None, matcher_cfg=None):
+    def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, dup_attrs=None, max_dets=None, matcher_cfg=None,
+                 report_match_stats=True):
         """
         Initializes the BaseBox2dHead module.
 
@@ -42,6 +44,7 @@ class BaseBox2dHead(nn.Module):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
         """
 
         # Initialization of default nn.Module
@@ -62,6 +65,7 @@ class BaseBox2dHead(nn.Module):
         self.get_dets = get_dets
         self.dup_attrs = dup_attrs
         self.max_dets = max_dets
+        self.report_match_stats = report_match_stats
 
     @torch.no_grad()
     def compute_dets(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -245,7 +249,7 @@ class BaseBox2dHead(nn.Module):
             loss_dict (Dict): Loss dictionary containing following additional key:
                 - box_loss (FloatTensor): 2D bounding box loss of shape [].
 
-            analysis_dict (Dict): Analysis dictionary containing following additional keys (if not None):
+            analysis_dict (Dict): Analysis dictionary (possibly) containing following additional keys (if not None):
                 - box_multi_tgt_qry (FloatTensor): percentage of queries matched to multiple targets of shape [];
                 - box_matched_qry (FloatTensor): percentage of matched queries of shape [];
                 - box_matched_tgt (FloatTensor): percentage of matched targets of shape [];
@@ -267,8 +271,8 @@ class BaseBox2dHead(nn.Module):
         # Get device
         device = box_logits.device
 
-        # Perform some analyses if needed
-        if analysis_dict is not None:
+        # Report matching statistics if needed
+        if self.report_match_stats and analysis_dict is not None:
 
             # Get percentage of queries matched to multiple targets
             num_qrys = len(box_logits)

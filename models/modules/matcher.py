@@ -164,9 +164,11 @@ class SimMatcher(nn.Module):
         abs_neg (float): Absolute threshold determining negative query labels during static matching.
         rel_pos (int): Relative threshold determining positive query labels during static matching.
         rel_neg (int): Relative threshold determining negative query labels during static matching.
+        multi_tgt (bool): Boolean indicating whether queries can be matched with multiple targets.
     """
 
-    def __init__(self, mode='static', static_mode='rel', abs_pos=0.5, abs_neg=0.3, rel_pos=5, rel_neg=10):
+    def __init__(self, mode='static', static_mode='rel', abs_pos=0.5, abs_neg=0.3, rel_pos=5, rel_neg=10,
+                 multi_tgt=True):
         """
         Initializes the SimMatcher module.
 
@@ -177,6 +179,7 @@ class SimMatcher(nn.Module):
             abs_neg (float): Absolute threshold determining negative labels during static matching (default=0.3).
             rel_pos (int): Relative threshold determining positive labels during static matching (default=5).
             rel_neg (int): Relative threshold determining negative labels during static matching (default=10).
+            multi_tgt (bool): Boolean indicating whether queries can be matched with multiple targets (default=True).
         """
 
         # Initialization of default nn.Module
@@ -189,6 +192,7 @@ class SimMatcher(nn.Module):
         self.abs_neg = abs_neg
         self.rel_pos = rel_pos
         self.rel_neg = rel_neg
+        self.multi_tgt = multi_tgt
 
     def forward(self, sim_matrix):
         """
@@ -261,6 +265,15 @@ class SimMatcher(nn.Module):
         else:
             error_msg = f"Invalid matching mode (got {self.mode})."
             raise ValueError(error_msg)
+
+        # Remove matches if queries cannot be matched with multiple targets
+        if not self.multi_tgt:
+            best_qry_ids = torch.arange(num_queries, device=device)
+            best_tgt_ids = torch.argmax(pos_mask.to(torch.float) * sim_matrix, dim=1)
+
+            best_tgt_mask = torch.zeros_like(pos_mask)
+            best_tgt_mask[best_qry_ids, best_tgt_ids] = True
+            pos_mask = pos_mask & best_tgt_mask
 
         # Get match labels
         match_labels = torch.full(size=(num_queries,), fill_value=-1, device=device)
