@@ -84,10 +84,10 @@ class BaseClsHead(nn.Module):
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional key:
-                - cls_loss (FloatTensor): tensor containing the weighted classification loss of shape [].
+                - cls_loss (FloatTensor): classification loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
-                - cls_acc (FloatTensor): tensor containing the classification accuracy of shape [].
+                - cls_acc (FloatTensor): classification accuracy of shape [].
         """
 
         # Perform matching if matcher is available

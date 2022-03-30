@@ -159,11 +159,12 @@ class BaseBox2dHead(nn.Module):
 
             # Only keep top predictions if needed
             if self.max_dets is not None:
-                top_pred_ids = pred_scores_i.topk(self.max_dets)[1]
+                if len(pred_scores_i) > self.max_dets:
+                    top_pred_ids = pred_scores_i.topk(self.max_dets)[1]
 
-                pred_labels_i = pred_labels[top_pred_ids]
-                pred_boxes_i = pred_boxes[top_pred_ids]
-                pred_scores_i = pred_scores[top_pred_ids]
+                    pred_labels_i = pred_labels_i[top_pred_ids]
+                    pred_boxes_i = pred_boxes_i[top_pred_ids]
+                    pred_scores_i = pred_scores_i[top_pred_ids]
 
             pred_dict['labels'].append(pred_labels_i)
             pred_dict['boxes'].append(pred_boxes_i)
@@ -242,10 +243,13 @@ class BaseBox2dHead(nn.Module):
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional key:
-                - box_loss (FloatTensor): tensor containing the 2D bounding box loss of shape [].
+                - box_loss (FloatTensor): 2D bounding box loss of shape [].
 
-            analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
-                - box_acc (FloatTensor): tensor containing the 2D bounding box accuracy of shape [].
+            analysis_dict (Dict): Analysis dictionary containing following additional keys (if not None):
+                - box_multi_tgt_qry (FloatTensor): percentage of queries matched to multiple targets of shape [];
+                - box_matched_qry (FloatTensor): percentage of matched queries of shape [];
+                - box_matched_tgt (FloatTensor): percentage of matched targets of shape [];
+                - box_acc (FloatTensor): 2D bounding box accuracy of shape [].
 
         Raises:
             ValueError: Error when an invalid type of box encoding scheme is provided.
@@ -260,6 +264,38 @@ class BaseBox2dHead(nn.Module):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
+        # Get device
+        device = box_logits.device
+
+        # Perform some analyses if needed
+        if analysis_dict is not None:
+
+            # Get percentage of queries matched to multiple targets
+            num_qrys = len(box_logits)
+            qry_counts = matched_qry_ids.unique(return_counts=True)[1]
+
+            box_multi_tgt_qry = (qry_counts > 1).sum().item() / num_qrys if num_qrys > 0 else 0.0
+            box_matched_qry = torch.tensor(box_multi_tgt_qry, device=device)
+
+            key_name = f'box_multi_tgt_qry_{id}' if id is not None else 'box_multi_tgt_qry'
+            analysis_dict[key_name] = 100 * box_multi_tgt_qry
+
+            # Get percentage of matched queries
+            box_matched_qry = len(qry_counts) / num_qrys if num_qrys > 0 else 1.0
+            box_matched_qry = torch.tensor(box_matched_qry, device=device)
+
+            key_name = f'box_matched_qry_{id}' if id is not None else 'box_matched_qry'
+            analysis_dict[key_name] = 100 * box_matched_qry
+
+            # Get percentage of matched targets
+            num_tgts = len(tgt_dict['boxes'])
+
+            box_matched_tgt = len(matched_tgt_ids.unique()) / num_tgts if num_tgts > 0 else 1.0
+            box_matched_tgt = torch.tensor(box_matched_tgt, device=device)
+
+            key_name = f'box_matched_tgt_{id}' if id is not None else 'box_matched_tgt'
+            analysis_dict[key_name] = 100 * box_matched_tgt
+
         # Handle case where there are no positive matches
         if len(matched_qry_ids) == 0:
 
@@ -271,7 +307,7 @@ class BaseBox2dHead(nn.Module):
             # Get 2D bounding box accuracy if needed
             if analysis_dict is not None:
                 box_acc = 1.0 if len(tgt_dict['boxes']) == 0 else 0.0
-                box_acc = torch.tensor(box_acc, dtype=box_loss.dtype, device=box_loss.device)
+                box_acc = torch.tensor(box_acc, dtype=box_loss.dtype, device=device)
 
                 key_name = f'box_acc_{id}' if id is not None else 'box_acc'
                 analysis_dict[key_name] = 100 * box_acc
