@@ -389,7 +389,7 @@ elif profiling_args.model == 'gct':
 elif profiling_args.model == 'gvd':
     main_args.num_classes = 80
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v0.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v6.py'
     model = build_heads(main_args)['gvd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')

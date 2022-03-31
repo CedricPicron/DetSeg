@@ -173,6 +173,9 @@ class AnchorSelector(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
+            storage_dict (Dict): Storage dictionary possibly containing following additional key:
+                - sel_top_ids (LongTensor): top indices of selections per target of shape [top_limit, num_targets].
+
             loss_dict (Dict): Loss dictionary containing following additional key:
                 - sel_loss (FloatTensor): tensor containing the selection loss of shape [].
 
@@ -180,11 +183,25 @@ class AnchorSelector(nn.Module):
                 - sel_tgt_found (FloatTensor): tensor containing the percentage of targets found of shape [].
         """
 
-        # Retrieve selection indices
+        # Retrieve indices of selected feature-anchor combinations and get device
         sel_ids = storage_dict['sel_ids']
+        device = sel_ids.device
 
         # Perform matching
         self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+
+        # Get top indices of selections per target if needed
+        if 'top_qry_ids' in storage_dict:
+            top_old_ids = storage_dict['top_qry_ids']
+
+            max_old_id = max(sel_ids.amax().item(), top_old_ids.amax().item())
+            num_selecs = len(sel_ids)
+
+            new_ids = torch.full(size=[max_old_id+1], fill_value=-1, dtype=torch.int64, device=device)
+            new_ids[sel_ids] = torch.arange(num_selecs, device=device)
+
+            top_new_ids = new_ids[top_old_ids]
+            storage_dict['sel_top_ids'] = top_new_ids
 
         # Get selection loss
         match_labels = storage_dict['match_labels']
@@ -214,10 +231,10 @@ class AnchorSelector(nn.Module):
             num_tgts = len(tgt_dict['boxes'])
 
             tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
-            tgt_found = torch.tensor(tgt_found, device=tgt_found_ids.device)
+            tgt_found = torch.tensor(tgt_found, device=device)
             analysis_dict['sel_tgt_found'] = 100 * tgt_found
 
-        return loss_dict, analysis_dict
+        return storage_dict, loss_dict, analysis_dict
 
     def forward(self, storage_dict, tgt_dict=None, **kwargs):
         """

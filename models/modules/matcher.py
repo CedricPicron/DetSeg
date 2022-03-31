@@ -4,6 +4,7 @@ Collection of matcher modules.
 
 import torch
 from torch import nn
+from torch_scatter import scatter_min
 
 from models.build import build_model, MODELS
 from structures.boxes import box_giou, box_iou
@@ -50,7 +51,7 @@ class BoxMatcher(nn.Module):
 
     def forward(self, storage_dict, tgt_dict, **kwargs):
         """
-        Forward method of BoxMatcher module.
+        Forward method of the BoxMatcher module.
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
@@ -62,10 +63,11 @@ class BoxMatcher(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
-            storage_dict (Dict): Storage dictionary containing following additional keys:
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
                 - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries];
+                - top_qry_ids (LongTensor): optional top query indices per target of shape [top_limit, num_targets].
 
         Raises:
             ValueError: Error when an invalid bounding box metric is provided.
@@ -89,10 +91,13 @@ class BoxMatcher(nn.Module):
         qry_offset = 0
         tgt_offset = 0
 
-        # Intialize lists with matching results
+        # Intialize lists for per image outputs
         match_labels_list = []
         matched_qry_ids_list = []
         matched_tgt_ids_list = []
+
+        if self.sim_matcher.get_top_qry_ids:
+            top_qry_ids_list = []
 
         # Perform matching per image
         for qry_boxes_i, tgt_boxes_i in zip(qry_boxes, tgt_boxes):
@@ -116,7 +121,8 @@ class BoxMatcher(nn.Module):
                     raise ValueError(error_msg)
 
                 # Perform matching based on similarity matrix
-                match_labels_i, matched_qry_ids_i, matched_tgt_ids_i = self.sim_matcher(sim_matrix)
+                match_results = self.sim_matcher(sim_matrix)
+                match_labels_i, matched_qry_ids_i, matched_tgt_ids_i = match_results[:3]
 
             # Case where there are no queries or targets
             else:
@@ -128,19 +134,35 @@ class BoxMatcher(nn.Module):
             matched_qry_ids_i = matched_qry_ids_i + qry_offset
             matched_tgt_ids_i = matched_tgt_ids_i + tgt_offset
 
-            # Update query and target offsets
-            qry_offset += num_queries
-            tgt_offset += num_targets
-
-            # Add image-specific mathcing resutls to list
+            # Add image-specific matching results to lists
             match_labels_list.append(match_labels_i)
             matched_qry_ids_list.append(matched_qry_ids_i)
             matched_tgt_ids_list.append(matched_tgt_ids_i)
 
-        # Concatenate matching results and add them to storage dictionary
+            # Get image-specific top query indices if requested
+            if self.sim_matcher.get_top_qry_ids:
+
+                if (num_queries > 0) and (num_targets > 0):
+                    top_qry_ids_i = match_results[3]
+
+                else:
+                    top_limit = self.sim_matcher.top_limit
+                    top_qry_ids_i = torch.zeros(top_limit, num_targets, dtype=torch.int64, device=device)
+
+                top_qry_ids_i = top_qry_ids_i + qry_offset
+                top_qry_ids_list.append(top_qry_ids_i)
+
+            # Update query and target offsets
+            qry_offset += num_queries
+            tgt_offset += num_targets
+
+        # Concatenate matching results and top query indices if requested
         storage_dict['match_labels'] = torch.cat(match_labels_list, dim=0)
         storage_dict['matched_qry_ids'] = torch.cat(matched_qry_ids_list, dim=0)
         storage_dict['matched_tgt_ids'] = torch.cat(matched_tgt_ids_list, dim=0)
+
+        if self.sim_matcher.get_top_qry_ids:
+            storage_dict['top_qry_ids'] = torch.cat(top_qry_ids_list, dim=1)
 
         return storage_dict
 
@@ -164,11 +186,13 @@ class SimMatcher(nn.Module):
         abs_neg (float): Absolute threshold determining negative query labels during static matching.
         rel_pos (int): Relative threshold determining positive query labels during static matching.
         rel_neg (int): Relative threshold determining negative query labels during static matching.
-        multi_tgt (bool): Boolean indicating whether queries can be matched with multiple targets.
+        get_top_qry_ids (bool): Boolean indicating whether to get top query indices per target.
+        top_limit (int): Integer limiting the number of top query indices returned per target.
+        allow_multi_tgt (bool): Boolean indicating whether to allow multiple targets per query.
     """
 
     def __init__(self, mode='static', static_mode='rel', abs_pos=0.5, abs_neg=0.3, rel_pos=5, rel_neg=10,
-                 multi_tgt=True):
+                 get_top_qry_ids=False, top_limit=15, allow_multi_tgt=True):
         """
         Initializes the SimMatcher module.
 
@@ -179,7 +203,9 @@ class SimMatcher(nn.Module):
             abs_neg (float): Absolute threshold determining negative labels during static matching (default=0.3).
             rel_pos (int): Relative threshold determining positive labels during static matching (default=5).
             rel_neg (int): Relative threshold determining negative labels during static matching (default=10).
-            multi_tgt (bool): Boolean indicating whether queries can be matched with multiple targets (default=True).
+            get_top_qry_ids (bool): Boolean indicating whether to get top query indices per target (default=False).
+            top_limit (int): Integer limiting the number of top query indices returned per target (default=15).
+            allow_multi_tgt (bool): Boolean indicating whether to allow multiple targets per query (default=True).
         """
 
         # Initialization of default nn.Module
@@ -192,19 +218,23 @@ class SimMatcher(nn.Module):
         self.abs_neg = abs_neg
         self.rel_pos = rel_pos
         self.rel_neg = rel_neg
-        self.multi_tgt = multi_tgt
+        self.get_top_qry_ids = get_top_qry_ids
+        self.top_limit = top_limit
+        self.allow_multi_tgt = allow_multi_tgt
 
     def forward(self, sim_matrix):
         """
-        Forward method of SimMatcher module.
+        Forward method of the SimMatcher module.
 
         Args:
             sim_matrix (FloatTensor): Query-target similarity matrix of shape [num_queries, num_targets].
 
         Returns:
-            match_labels (LongTensor): Match labels corresponding to each query of shape [num_queries].
-            matched_qry_ids (LongTensor): Indices of matched queries of shape [num_pos_queries].
-            matched_tgt_ids (LongTensor): Indices of corresponding matched targets of shape [num_pos_queries].
+            return_list (List): List of size [num_returns] possibly containing following items to return:
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries];
+                - top_qry_ids (LongTensor): optional top query indices per target of shape [top_limit, num_targets].
 
         Raises:
             ValueError: Error when an invalid static matching mode is provided.
@@ -223,7 +253,13 @@ class SimMatcher(nn.Module):
             matched_qry_ids = torch.zeros(0, dtype=torch.int64, device=device)
             matched_tgt_ids = torch.zeros(0, dtype=torch.int64, device=device)
 
-            return match_labels, matched_qry_ids, matched_tgt_ids
+            if self.get_top_qry_ids:
+                top_qry_ids = torch.zeros(self.top_limit, num_targets, dtype=torch.int64, device=device)
+
+            return_list = [match_labels, matched_qry_ids, matched_tgt_ids]
+            return_list.append(top_qry_ids) if self.get_top_qry_ids else None
+
+            return return_list
 
         # Get positive and negative label masks
         if self.mode == 'static':
@@ -233,12 +269,14 @@ class SimMatcher(nn.Module):
                 abs_neg_mask = sim_matrix < self.abs_neg
 
             if 'rel' in self.static_mode:
-                non_neg_ids = torch.topk(sim_matrix, self.rel_neg, dim=0, sorted=True).indices
-                pos_ids = non_neg_ids[:self.rel_pos, :]
+                top_limit = max(self.rel_neg, int(self.get_top_qry_ids) * self.top_limit)
+                top_qry_ids = torch.topk(sim_matrix, top_limit, dim=0, sorted=True).indices
 
+                pos_ids = top_qry_ids[:self.rel_pos, :]
                 rel_pos_mask = torch.zeros_like(sim_matrix, dtype=torch.bool)
                 rel_pos_mask[pos_ids, torch.arange(num_targets)] = True
 
+                non_neg_ids = top_qry_ids[:self.rel_neg, :]
                 rel_neg_mask = torch.ones_like(sim_matrix, dtype=torch.bool)
                 rel_neg_mask[non_neg_ids, torch.arange(num_targets)] = False
 
@@ -266,8 +304,16 @@ class SimMatcher(nn.Module):
             error_msg = f"Invalid matching mode (got {self.mode})."
             raise ValueError(error_msg)
 
-        # Remove matches if queries cannot be matched with multiple targets
-        if not self.multi_tgt:
+        # Get top query indices if requested
+        if self.get_top_qry_ids:
+
+            if self.mode == 'static' and 'rel' in self.static_mode:
+                top_qry_ids = top_qry_ids[:self.top_limit]
+            else:
+                top_qry_ids = torch.topk(sim_matrix, self.top_limit, dim=0, sorted=True).indices
+
+        # Remove matches if multiple targets per query are not allowed
+        if not self.allow_multi_tgt:
             best_qry_ids = torch.arange(num_queries, device=device)
             best_tgt_ids = torch.argmax(pos_mask.to(torch.float) * sim_matrix, dim=1)
 
@@ -276,11 +322,134 @@ class SimMatcher(nn.Module):
             pos_mask = pos_mask & best_tgt_mask
 
         # Get match labels
-        match_labels = torch.full(size=(num_queries,), fill_value=-1, device=device)
+        match_labels = torch.full(size=[num_queries], fill_value=-1, device=device)
         match_labels[pos_mask.sum(dim=1) > 0] = 1
         match_labels[neg_mask.sum(dim=1) == num_targets] = 0
 
         # Get query and target indices of matches
         matched_qry_ids, matched_tgt_ids = pos_mask.nonzero(as_tuple=True)
 
-        return match_labels, matched_qry_ids, matched_tgt_ids
+        # Return matching results and top query indices if requested
+        return_list = [match_labels, matched_qry_ids, matched_tgt_ids]
+        return_list.append(top_qry_ids) if self.get_top_qry_ids else None
+
+        return return_list
+
+
+@MODELS.register_module()
+class TopMatcher(nn.Module):
+    """
+    Class implementing the TopMatcher module.
+
+    The module matches queries with targets, assigning one of following match labels to each query:
+        - positive label with value 1 (query matches with at least one target);
+        - negative label with value 0 (query does not match with any of the targets);
+        - ignore label with value -1 (query has no matching verdict).
+
+    Attributes:
+        ids_key (str): String with key to retrieve the top query indices per target.
+        qry_key (str): String with key to retrieve object from which the number of queries can be inferred.
+        top_pos (int): Integer with maximum query rank to be considered positive w.r.t. target.
+        top_neg (int): Integer with maximum query rank to be considered non-negative w.r.t. target.
+        allow_multi_tgt (bool): Boolean indicating whether to allow multiple targets per query.
+    """
+
+    def __init__(self, ids_key, qry_key, top_pos=15, top_neg=15, allow_multi_tgt=True):
+        """
+        Initializes the TopMatcher module.
+
+        Args:
+            ids_key (str): String with key to retrieve the top query indices per target.
+            qry_key (str): String with key to retrieve object from which the number of queries can be inferred.
+            top_pos (int): Integer with maximum query rank to be considered positive w.r.t. target (default=15).
+            top_neg (int): Integer with maximum query rank to be considered non-negative w.r.t. target (default=15).
+            allow_multi_tgt (bool): Boolean indicating whether to allow multiple targets per query (default=True).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.ids_key = ids_key
+        self.qry_key = qry_key
+        self.top_pos = top_pos
+        self.top_neg = top_neg
+        self.allow_multi_tgt = allow_multi_tgt
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the TopMatcher module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.ids_key} (LongTensor): top query indices per target of shape [top_limit, num_targets];
+                - (self.qry_key) (object): object from which the number of queries can be inferred.
+
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+        """
+
+        # Retrieve top query indices per target
+        top_qry_ids = storage_dict[self.ids_key]
+
+        # Get number of queries
+        num_queries = len(storage_dict[self.qry_key])
+
+        # Get device, top limit and number of targets
+        device = top_qry_ids.device
+        top_limit, num_targets = top_qry_ids.size()
+
+        # Handle case where there are no queries or targets and return
+        if (num_queries == 0) or (num_targets == 0):
+            storage_dict['match_labels'] = torch.zeros(num_queries, dtype=torch.int64, device=device)
+            storage_dict['matched_qry_ids'] = torch.zeros(0, dtype=torch.int64, device=device)
+            storage_dict['matched_tgt_ids'] = torch.zeros(0, dtype=torch.int64, device=device)
+
+            return storage_dict
+
+        # Get query, target and rank indices
+        qry_ids = top_qry_ids.flatten()
+
+        tgt_ids = torch.arange(num_targets, device=device)
+        tgt_ids = tgt_ids[None, :].expand(top_limit, -1).flatten()
+
+        rank_ids = torch.arange(top_limit, device=device)
+        rank_ids = rank_ids[:, None].expand(-1, num_targets).flatten()
+
+        # Filter query, target and rank indices
+        filter_mask = qry_ids >= 0
+
+        qry_ids = qry_ids[filter_mask]
+        tgt_ids = tgt_ids[filter_mask]
+        rank_ids = rank_ids[filter_mask]
+
+        # Get positive and non-negative label masks
+        pos_mask = rank_ids < self.top_pos
+        non_neg_mask = rank_ids < self.top_neg
+
+        # Get query and target indices of matches
+        matched_qry_ids = qry_ids[pos_mask]
+        matched_tgt_ids = tgt_ids[pos_mask]
+
+        # Remove matches if multiple targets per query are not allowed
+        if not self.allow_multi_tgt:
+            matched_qry_ids, inv_ids = matched_qry_ids.unique(return_inverse=True)
+            argmin_ids = scatter_min(rank_ids, inv_ids, dim=0)[1]
+            matched_tgt_ids = matched_tgt_ids[argmin_ids]
+
+        # Get match labels
+        match_labels = torch.zeros(num_queries, dtype=torch.int64, device=device)
+        match_labels[qry_ids[non_neg_mask]] = -1
+        match_labels[matched_qry_ids] = 1
+
+        # Add matching results to storage dictionary
+        storage_dict['match_labels'] = match_labels
+        storage_dict['matched_qry_ids'] = matched_qry_ids
+        storage_dict['matched_tgt_ids'] = matched_tgt_ids
+
+        return storage_dict

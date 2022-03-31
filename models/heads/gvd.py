@@ -132,9 +132,9 @@ class GVD(nn.Module):
 
         Returns:
             return_list (List): List of size [num_returns] possibly containing following items to return:
-                pred_dicts (List): list of size [num_pred_dicts] with prediction dictionaries (evaluation only);
-                loss_dict (Dict): dictionary with different weighted loss terms used during training (trainval only);
-                analysis_dict (Dict): dictionary with different analyses used for logging purposes only.
+                - pred_dicts (List): list of size [num_pred_dicts] with prediction dictionaries (evaluation only);
+                - loss_dict (Dict): dictionary with different weighted loss terms used during training (trainval only);
+                - analysis_dict (Dict): dictionary with different analyses used for logging purposes only.
 
         Raises:
             ValueError: Error when visualizations are requested.
