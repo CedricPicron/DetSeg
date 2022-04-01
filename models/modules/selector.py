@@ -10,7 +10,7 @@ from torch import nn
 from models.build import build_model, MODELS
 from models.modules.container import Sequential
 from models.modules.convolution import ProjConv
-from structures.boxes import get_anchors
+from structures.boxes import Boxes, get_anchors
 
 
 @MODELS.register_module()
@@ -37,11 +37,13 @@ class AnchorSelector(nn.Module):
             - rel_thr (int): relative threshold used during selection.
 
         post (Sequential): Post-processing module operating on selected features.
+        box_encoder (nn.Module): Module computing the box encodings of selected boxes.
         matcher (nn.Module): Module performing matching between anchors and target boxes.
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_attrs, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01):
+    def __init__(self, anchor_attrs, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01,
+                 box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
@@ -53,6 +55,7 @@ class AnchorSelector(nn.Module):
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
+            box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
         """
 
         # Initialization of default nn.Module
@@ -83,6 +86,10 @@ class AnchorSelector(nn.Module):
 
         # Build post-processing module
         self.post = build_model(post_cfg, sequential=True)
+
+        # Build box encoder module if needed
+        if box_encoder_cfg is not None:
+            self.box_encoder = build_model(box_encoder_cfg)
 
         # Build matcher module
         self.matcher = build_model(matcher_cfg)
@@ -241,19 +248,21 @@ class AnchorSelector(nn.Module):
         Forward method of the AnchorSelector module.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following key:
-                - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW].
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure of size [batch_size] containing the batched images.
 
             tgt_dict (Dict): Dictionary containing the ground-truth targets during trainval (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
-            storage_dict (Dict): Storage dictionary containing following additional keys:
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
                 - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
                 - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
                 - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
                 - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
-                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs].
+                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs];
+                - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_selecs, feat_size].
         """
 
         # Retrieve feature maps from storage dictionary
@@ -287,6 +296,25 @@ class AnchorSelector(nn.Module):
         sel_boxes = anchors[anchor_ids]
         sel_boxes.boxes_per_img = cum_feats_batch.diff()
         storage_dict['sel_boxes'] = sel_boxes
+
+        # Get encodings of selected boxes if needed
+        if hasattr(self, 'box_encoder'):
+            boxes = sel_boxes.clone()
+            images = storage_dict['images']
+            norm_boxes_list = []
+
+            for i, image in enumerate(images):
+                i0 = cum_feats_batch[i].item()
+                i1 = cum_feats_batch[i+1].item()
+
+                norm_boxes_i = boxes[i0:i1].normalize(image)
+                norm_boxes_list.append(norm_boxes_i)
+
+            norm_boxes = Boxes.cat(norm_boxes_list)
+            norm_boxes = norm_boxes.to_format('cxcywh')
+
+            box_encs = self.box_encoder(norm_boxes.boxes)
+            storage_dict['sel_box_encs'] = box_encs
 
         # Get selection loss during trainval
         if tgt_dict is not None:

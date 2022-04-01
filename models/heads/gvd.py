@@ -105,7 +105,9 @@ class GVD(nn.Module):
 
             group_init_feats = storage_dict.pop('sel_feats')
             cum_feats_batch = storage_dict.pop('cum_feats_batch')
+
             storage_dict['prior_boxes'] = storage_dict.pop('sel_boxes', None)
+            storage_dict['add_encs'] = storage_dict.pop('sel_box_encs', None)
 
         else:
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
@@ -126,7 +128,7 @@ class GVD(nn.Module):
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
-            images (Images): Images structure containing the batched images (default=None).
+            images (Images): Images structure of size [batch_size] containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of additional keyword arguments passed to some underlying modules and methods.
 
@@ -160,6 +162,7 @@ class GVD(nn.Module):
         # Perform group initialization
         group_feats, cum_feats_batch = self.group_init(**local_kwargs, **kwargs)
         local_kwargs['cum_feats_batch'] = cum_feats_batch
+        local_kwargs['add_encs'] = storage_dict.get('add_encs', None)
 
         # Apply heads if needed
         if 0 in self.head_apply_ids:

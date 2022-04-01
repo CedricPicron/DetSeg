@@ -252,8 +252,9 @@ class BoxCrossAttn(nn.Module):
 
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure containing the batched images (default=None);
-                - prior_boxes (Boxes): structure with prior bounding boxes of size [num_feats].
+                - images (Images): images structure of size [batch_size] containing the batched images;
+                - prior_boxes (Boxes): structure with prior bounding boxes of size [num_feats];
+                - add_encs (FloatTensor): encodings added to queries and keys of shape [num_feats, in_size].
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
 
@@ -349,6 +350,9 @@ class BoxCrossAttn(nn.Module):
 
             attn_kwargs['sample_priors'] = storage_dict['sample_priors'][i0:i1]
             attn_kwargs['sample_feats'] = storage_dict['sample_feats'][i]
+
+            if storage_dict.get('add_encs', None) is not None:
+                attn_kwargs['add_encs'] = storage_dict['add_encs'][i0:i1]
 
             out_feats_i = self.attn(in_feats[i0:i1], **attn_kwargs)
             out_feats_list.append(out_feats_i)
@@ -4847,10 +4851,12 @@ class SelfAttn1d(nn.Module):
             qk_feats = qk_feats + add_encs[:, None, :]
 
         # Apply multi-head attention module
-        mha_feats = torch.zeros_like(val_feats)
+        num_feats = len(in_feats)
+        out_size = self.mha.out_proj.weight.size(dim=0)
+        mha_feats = in_feats.new_empty([num_feats, 1, out_size])
 
         if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, len(in_feats)], device=in_feats.device)
+            cum_feats_batch = torch.tensor([0, num_feats], device=in_feats.device)
 
         for i0, i1 in zip(cum_feats_batch[:-1], cum_feats_batch[1:]):
             mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], need_weights=False)[0]
