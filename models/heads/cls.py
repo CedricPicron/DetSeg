@@ -16,8 +16,8 @@ class BaseClsHead(nn.Module):
 
     Attributes:
         logits (nn.Module): Module computing the classification logits.
-        loss (nn.Module): Module computing the classification loss.
         matcher (nn.Module): Optional module determining the target classification labels.
+        loss (nn.Module): Module computing the classification loss.
     """
 
     def __init__(self, logits_cfg, loss_cfg, matcher_cfg=None):
@@ -36,16 +36,16 @@ class BaseClsHead(nn.Module):
         # Build logits module
         self.logits = build_model(logits_cfg)
 
-        # Build loss module
-        self.loss = build_model(loss_cfg)
-
         # Build matcher module if needed
         if matcher_cfg is not None:
             self.matcher = build_model(matcher_cfg)
 
+        # Build loss module
+        self.loss = build_model(loss_cfg)
+
     def forward_pred(self, in_feats, storage_dict, **kwargs):
         """
-        Prediction forward method of the BaseClsHead module.
+        Forward prediction method of the BaseClsHead module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
@@ -65,7 +65,7 @@ class BaseClsHead(nn.Module):
 
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
-        Forward method of the BaseClsHead module.
+        Forward loss method of the BaseClsHead module.
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys (after matching):

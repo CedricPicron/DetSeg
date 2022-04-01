@@ -12,4 +12,5 @@ from .gvd import GVD  # noqa: F401
 from .mbd import MBD  # noqa: F401
 from .retina import RetinaHead, RetinaPredHead  # noqa: F401
 from .sbd import SBD  # noqa: F401
+from .seg import BaseSegHead  # noqa: F401
 from .semantic import SemanticSegHead  # noqa: F401

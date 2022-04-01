@@ -122,7 +122,7 @@ class GVD(nn.Module):
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
-            tgt_dict (Dict): Optional target dictionary used during trainval containing following keys:
+            tgt_dict (Dict): Optional target dictionary used during trainval possibly containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;

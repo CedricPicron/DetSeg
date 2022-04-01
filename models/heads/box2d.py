@@ -26,9 +26,9 @@ class BaseBox2dHead(nn.Module):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_dets (int): Integer with the maximum number of returned 2D object detection predictions.
-        loss (nn.Module): Module computing the 2D bounding box loss.
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
+        loss (nn.Module): Module computing the 2D bounding box loss.
     """
 
     def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, dup_attrs=None, max_dets=None, matcher_cfg=None,
@@ -53,12 +53,12 @@ class BaseBox2dHead(nn.Module):
         # Build logits module
         self.logits = build_model(logits_cfg)
 
-        # Build loss module
-        self.loss = build_model(loss_cfg)
-
         # Build matcher module if needed
         if matcher_cfg is not None:
             self.matcher = build_model(matcher_cfg)
+
+        # Build loss module
+        self.loss = build_model(loss_cfg)
 
         # Set remaining attributes
         self.box_encoding = box_encoding
@@ -186,7 +186,7 @@ class BaseBox2dHead(nn.Module):
 
     def forward_pred(self, in_feats, storage_dict, **kwargs):
         """
-        Prediction forward method of the BaseBox2dHead module.
+        Forward prediction method of the BaseBox2dHead module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
@@ -228,7 +228,7 @@ class BaseBox2dHead(nn.Module):
 
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
-        Forward method of the BaseBox2dHead module.
+        Forward loss method of the BaseBox2dHead module.
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
