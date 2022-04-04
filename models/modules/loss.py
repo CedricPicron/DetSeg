@@ -8,12 +8,65 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.build import MODELS
+from models.functional.loss import sigmoid_dice_loss
+
+
+@MODELS.register_module()
+class SigmoidDiceLoss(nn.Module):
+    """
+    Class implementing the SigmoidDiceLoss module.
+
+    Attributes:
+        reduction (str): String specifying the reduction operation applied on group-wise losses.
+        weight (float): Factor weighting the sigmoid DICE loss.
+    """
+
+    def __init__(self, reduction='mean', weight=1.0):
+        """
+        Initializes the SigmoidDiceLoss module.
+
+        Args:
+            reduction (str): String specifying the reduction operation applied on group-wise losses (default='mean').
+            weight (float): Factor weighting the sigmoid DICE loss (default=1.0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.reduction = reduction
+        self.weight = weight
+
+    def forward(self, pred_logits, tgt_labels):
+        """
+        Forward method of the SigmoidDiceLoss module.
+
+        Args:
+            pred_logits (FloatTensor): Prediction logits of shape [num_groups, group_size].
+            tgt_labels (Tensor): Binary target labels of shape [num_groups, group_size].
+
+        Returns:
+            * If self.reduction is 'none':
+                loss (FloatTensor): Tensor with group-wise sigmoid DICE losses of shape [*]
+
+            * If self.reduction is 'mean':
+                loss (FloatTensor): Mean of tensor with group-wise sigmoid DICE losses of shape [].
+
+            * If self.reduction is 'sum':
+                loss (FloatTensor): Sum of tensor with group-wise sigmoid DICE losses of shape [].
+        """
+
+        # Get weighted sigmoid DICE loss
+        tgt_labels = tgt_labels.to(pred_logits.dtype)
+        loss = self.weight * sigmoid_dice_loss(pred_logits, tgt_labels, reduction=self.reduction)
+
+        return loss
 
 
 @MODELS.register_module()
 class SigmoidFocalLoss(nn.Module):
     """
-    Class implementing the sigmoid focal loss module.
+    Class implementing the SigmoidFocalLoss module.
 
     Attributes:
         alpha (float): Alpha value of the sigmoid focal loss function.
@@ -69,9 +122,77 @@ class SigmoidFocalLoss(nn.Module):
 
 
 @MODELS.register_module()
+class SigmoidGroupBCELoss(nn.Module):
+    """
+    Class implementing the SigmoidGroupBCELoss module.
+
+    Attributes:
+        reduction (str): String specifying the reduction operation applied on group-wise losses.
+        weight (float): Factor weighting the sigmoid group BCE loss.
+    """
+
+    def __init__(self, reduction='mean', weight=1.0):
+        """
+        Initializes the SigmoidGroupBCELoss module.
+
+        Args:
+            reduction (str): String specifying the reduction operation applied on group-wise losses (default='mean').
+            weight (float): Factor weighting the sigmoid group BCE loss (default=1.0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.reduction = reduction
+        self.weight = weight
+
+    def forward(self, pred_logits, tgt_labels):
+        """
+        Forward method of the SigmoidGroupBCELoss module.
+
+        Args:
+            pred_logits (FloatTensor): Prediction logits of shape [num_groups, group_size].
+            tgt_labels (Tensor): Binary target labels of shape [num_groups, group_size].
+
+        Returns:
+            * If self.reduction is 'none':
+                loss (FloatTensor): Tensor with group-wise sigmoid BCE losses of shape [*]
+
+            * If self.reduction is 'mean':
+                loss (FloatTensor): Mean of tensor with group-wise sigmoid BCE losses of shape [].
+
+            * If self.reduction is 'sum':
+                loss (FloatTensor): Sum of tensor with group-wise sigmoid BCE losses of shape [].
+
+        Raises:
+            ValueError: Error when an invalid reduction string is provided.
+        """
+
+        # Get group-wise sigmoid BCE losses
+        tgt_labels = tgt_labels.to(pred_logits.dtype)
+        losses = F.binary_cross_entropy_with_logits(pred_logits, tgt_labels, reduction='none').mean(dim=1)
+
+        # Apply reduction operation on group-wise losses and return
+        if self.reduction == 'none':
+            return losses
+        elif self.reduction == 'mean':
+            loss = losses.mean()
+            return loss
+        elif self.reduction == 'sum':
+            loss = losses.sum()
+            return loss
+        else:
+            error_msg = f"Invalid reduction string (got '{self.reduction}')."
+            raise ValueError(error_msg)
+
+        return loss
+
+
+@MODELS.register_module()
 class SigmoidHillLoss(nn.Module):
     """
-    Class implementing the sigmoid hill loss module.
+    Class implementing the SigmoidHillLoss module.
 
     Attributes:
         low_left (float): Coordinate of low left constant to quadratic transition.
@@ -335,7 +456,7 @@ class SigmoidHillLoss(nn.Module):
 @MODELS.register_module()
 class SmoothL1Loss(nn.Module):
     """
-    Class implementing the smooth L1 loss module.
+    Class implementing the SmoothL1Loss module.
 
     Attributes:
         beta (float): Beta value of the smooth L1 loss function.

@@ -10,7 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.build import MODELS
-from models.functional.loss import dice_loss
+from models.functional.loss import sigmoid_dice_loss
 from models.functional.net import get_net_single
 from models.modules.container import Sequential
 from structures.boxes import box_iou, get_box_deltas, mask_to_box
@@ -273,7 +273,7 @@ class MBD (nn.Module):
 
         for seg_type, seg_weight in zip(self.seg_types, self.seg_weights):
             if seg_type == 'dice':
-                seg_loss = dice_loss(pred_maps, tgt_maps, reduction='sum')
+                seg_loss = sigmoid_dice_loss(pred_maps.flatten(1), tgt_maps.flatten(1), reduction='sum')
                 loss_dict['mbd_seg_loss'] += seg_weight * seg_loss
 
             elif seg_type == 'sigmoid_focal':

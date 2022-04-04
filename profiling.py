@@ -389,7 +389,7 @@ elif profiling_args.model == 'gct':
 elif profiling_args.model == 'gvd':
     main_args.num_classes = 80
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v9.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v11.py'
     model = build_heads(main_args)['gvd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -404,7 +404,8 @@ elif profiling_args.model == 'gvd':
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes, 'masks': masks}
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
 

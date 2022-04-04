@@ -76,6 +76,53 @@ class ModuleSelector(nn.Module):
 
 
 @MODELS.register_module()
+class ModuleSum(nn.Module):
+    """
+    Class implementing the ModuleSum module.
+
+    The ModuleSum module contains a list of sub-modules, where each of the sub-modules are applied on the input and
+    where the resulting outputs are added to yield the final output of the ModuleSum module.
+
+    Attributes:
+        sub_modules (nn.ModuleList): List of size [num_sub_modules] containing the sub-modules.
+    """
+
+    def __init__(self, sub_module_cfgs):
+        """
+        Initializes the ModuleSum module.
+
+        Args:
+            sub_module_cfgs (List): List of configuration dictionaries specifying the sub-modules.
+
+        Raises:
+            ValueError: Error when the output feature size cannot be inferred and was not given as input argument.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build list with sub-modules
+        self.sub_modules = nn.ModuleList([build_model(sub_module_cfg) for sub_module_cfg in sub_module_cfgs])
+
+    def forward(self, *args, **kwargs):
+        """
+        Forward method of the ModuleSum module.
+
+        Args:
+            args (Tuple): Tuple containing positional arguments.
+            kwargs (Dict): Dictionary containing keyword arguments.
+
+        Returns:
+            output (Any): Output obtained by summing outputs of individual sub-modules.
+        """
+
+        # Get output
+        output = sum(sub_module(*args, **kwargs) for sub_module in self.sub_modules)
+
+        return output
+
+
+@MODELS.register_module()
 class Sequential(nn.Sequential):
     """
     Class implementing the enhanced Sequential module.
