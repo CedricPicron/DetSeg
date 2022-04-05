@@ -19,7 +19,7 @@ def crop(image, tgt_dict, crop_region):
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
             - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
+            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width].
 
         crop_region (Tuple): Tuple delineating the cropped region in (left, top, right, bottom) format.
 
@@ -186,9 +186,10 @@ def hflip(image, tgt_dict):
 
     Args:
         image (Images): Images structure with PIL Image to be flipped horizontally.
+
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-            - masks (ByteTensor, optional): segmentation masks of shape [num_targets, height, width].
+            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width].
 
     Returns:
         image (Images): Updated Images structure with horizontally flipped PIL Image.
@@ -255,7 +256,7 @@ def pad(image, tgt_dict, padding):
         image (Images): Images structure with PIL Image to be padded.
 
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following key:
-            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
+            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width].
 
         padding (Tuple): Padding vector of size [4] with padding values in (left, top, right, bottom) format.
 
@@ -331,7 +332,7 @@ def resize(image, tgt_dict, size, max_size=None):
 
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-            - masks (ByteTensor): segmentation masks of shape [num_targets, height, width].
+            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width].
 
         size: It can be one of following two possibilities:
             1) size (int): integer containing the minimum size (width or height) to resize to;

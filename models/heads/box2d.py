@@ -83,10 +83,10 @@ class BaseBox2dHead(nn.Module):
         Returns:
             pred_dicts (List): List containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
-                    - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                    - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
-                    - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+                    - labels (LongTensor): predicted class indices of shape [num_preds];
+                    - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
+                    - scores (FloatTensor): normalized prediction scores of shape [num_preds];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.

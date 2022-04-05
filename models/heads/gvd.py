@@ -126,7 +126,7 @@ class GVD(nn.Module):
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             images (Images): Images structure of size [batch_size] containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).

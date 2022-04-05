@@ -97,19 +97,20 @@ class CocoDataset(Dataset):
             iW (int): Width of image corresponding to the input annotations.
 
         Returns:
-            masks (ByteTensor): Tensor of shape [num_targets, iH, iW] containing the segmentation masks.
+            masks (BoolTensor): Tensor containing the segmentation masks of shape [num_targets, iH, iW].
         """
 
-        # Get segmentations, with each segmentation represented as a list of polygons
+        # Get segmentations with each segmentation represented as a list of polygons
         segmentations = [annotation['segmentation'] for annotation in annotations]
 
         # Get segmentation masks corresponding to each segmentation
-        masks = torch.zeros(len(segmentations), iH, iW, dtype=torch.uint8)
+        masks = torch.empty(len(segmentations), iH, iW, dtype=torch.bool)
+
         for i, polygons in enumerate(segmentations):
             rle_objs = coco_mask.frPyObjects(polygons, iH, iW)
             mask = coco_mask.decode(rle_objs)
-            mask = mask[..., None] if len(mask.shape) < 3 else mask
-            masks[i] = torch.as_tensor(mask, dtype=torch.uint8).any(dim=2)
+            mask = mask[:, :, None] if len(mask.shape) == 2 else mask
+            masks[i] = torch.as_tensor(mask, dtype=torch.bool).any(dim=2)
 
         return masks
 
@@ -126,7 +127,7 @@ class CocoDataset(Dataset):
             tgt_dict (Dict): Target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
 
         Raises:
             ValueError: Error when neither the 'coco' attribute nor the 'filenames' attribute is set.

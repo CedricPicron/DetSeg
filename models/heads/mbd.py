@@ -170,7 +170,7 @@ class MBD (nn.Module):
             tgt_dict (Dict): Target dictionary potentially containing following keys:
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (ByteTensor): optional padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             sbd_boxes (List): List [batch_size] of Boxes structures predicted by the SBD module of size [num_objs].
             images (Images): Images structure containing the batched images.
@@ -317,7 +317,7 @@ class MBD (nn.Module):
             tgt_dict (Dict): Target dictionary potentially containing following keys:
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (ByteTensor): optional padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             images (Images): Images structure containing the batched images (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).

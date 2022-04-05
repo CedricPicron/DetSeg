@@ -181,7 +181,7 @@ elif profiling_args.model == 'bvn_bin':
 
     num_targets_total = 20
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    masks = (torch.randn(num_targets_total, 800, 800) > 1.0).to('cuda')
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
     tgt_dict = {'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
@@ -236,7 +236,7 @@ elif profiling_args.model == 'bvn_sem':
     num_targets_total = 20
     labels = torch.randint(main_args.num_classes, size=(num_targets_total,)).to('cuda')
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    masks = (torch.randn(num_targets_total, 800, 800) > 1.0).to('cuda')
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
     tgt_dict = {'labels': labels, 'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())

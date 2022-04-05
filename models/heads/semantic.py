@@ -129,7 +129,7 @@ class SemanticSegHead(nn.Module):
             tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
         Returns:
             * If tgt_dict is not None (i.e. during training and validation):

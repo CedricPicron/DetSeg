@@ -166,7 +166,7 @@ class BaseSegHead(nn.Module):
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - masks (ByteTensor): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).

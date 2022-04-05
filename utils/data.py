@@ -21,15 +21,16 @@ def collate_fn(batch):
             - tgt_dict (Dict): target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (ByteTensor, optional): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
 
     Returns:
         images (Images): New Images structure containing the concatenated Images structures across batch entries.
+
         tgt_dict (Dict): New target dictionary potentially containing following keys (empty when no annotations):
             - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor, optional): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+            - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
     """
 
     # Get batch images and target dictionaries
