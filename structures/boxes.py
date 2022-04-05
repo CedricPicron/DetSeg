@@ -914,34 +914,40 @@ def mask_to_box(masks, boxes_per_img=None):
     Function converting binary masks into smallest axis-aligned bounding boxes containing the masks.
 
     Args:
-        masks (BoolTensor): Tensor containing the binary masks of shape [num_masks, mH, mW].
+        masks (BoolTensor): Tensor containing the binary masks of shape [num_masks, H, W].
         boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
 
     Returns:
         boxes (Boxes): Boxes structure with smallest bounding boxes containing the masks of size [num_masks].
     """
 
-    # Add positive pixel in top-left corner of masks without positive pixels
-    mask_sizes = masks.flatten(start_dim=1).sum(dim=1)
-    masks[mask_sizes == 0, 0, 0] = True
+    # Get device and shape of masks
+    device = masks.device
+    H, W = masks.size()[1:]
 
-    # Get indices of positive mask pixels
-    mask_sizes = masks.flatten(start_dim=1).sum(dim=1)
-    pos_ids = torch.nonzero(masks, as_tuple=False)
-    pos_ids = torch.split(pos_ids, mask_sizes.tolist(), dim=0)
+    # Get left indices
+    left_ids = torch.arange(W, 0, -1, device=device)
+    left_ids = left_ids[None, None, :] * masks
+    left_ids = W - left_ids.flatten(1, 2).amax(dim=1)
 
-    # Get left, top, right and bottom indices
-    left_ids = torch.cat([pos_ids_i[:, 2].min()[None] for pos_ids_i in pos_ids], dim=0)
-    top_ids = torch.cat([pos_ids_i[:, 1].min()[None] for pos_ids_i in pos_ids], dim=0)
-    right_ids = torch.cat([pos_ids_i[:, 2].max()[None] for pos_ids_i in pos_ids], dim=0) + 1
-    bot_ids = torch.cat([pos_ids_i[:, 1].max()[None] for pos_ids_i in pos_ids], dim=0) + 1
+    # Get top indices
+    top_ids = torch.arange(H, 0, -1, device=device)
+    top_ids = top_ids[None, :, None] * masks
+    top_ids = H - top_ids.flatten(1, 2).amax(dim=1)
+
+    # Get right indices
+    right_ids = torch.arange(1, W+1, device=device)
+    right_ids = right_ids[None, None, :] * masks
+    right_ids = right_ids.flatten(1, 2).amax(dim=1)
+
+    # Get bottom indices
+    bot_ids = torch.arange(1, H+1, device=device)
+    bot_ids = bot_ids[None, :, None] * masks
+    bot_ids = bot_ids.flatten(1, 2).amax(dim=1)
 
     # Construct bounding boxes
-    mH, mW = masks.shape[-2:]
-    scales = torch.tensor([mW, mH, mW, mH], dtype=torch.float, device=masks.device)
-
     boxes = torch.stack([left_ids, top_ids, right_ids, bot_ids], dim=1)
-    boxes = boxes.to(dtype=torch.float) / scales
+    boxes = boxes.float() / torch.tensor([W, H, W, H], dtype=torch.float, device=device)
     boxes = Boxes(boxes, format='xyxy', normalized='img_with_padding', boxes_per_img=boxes_per_img)
 
     return boxes

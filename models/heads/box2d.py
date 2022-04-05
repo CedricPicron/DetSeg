@@ -20,12 +20,12 @@ class BaseBox2dHead(nn.Module):
         box_encoding (str): String containing the type of box encoding scheme.
         get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
 
-        dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism, possibly containing following keys:
+        dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
-        max_dets (int): Integer with the maximum number of returned 2D object detection predictions.
+        max_dets (int): Optional integer with the maximum number of returned 2D object detection predictions.
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
         loss (nn.Module): Module computing the 2D bounding box loss.
@@ -54,8 +54,7 @@ class BaseBox2dHead(nn.Module):
         self.logits = build_model(logits_cfg)
 
         # Build matcher module if needed
-        if matcher_cfg is not None:
-            self.matcher = build_model(matcher_cfg)
+        self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
         # Build loss module
         self.loss = build_model(loss_cfg)
@@ -73,7 +72,7 @@ class BaseBox2dHead(nn.Module):
         Method computing the 2D object detection predictions.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing following keys:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
@@ -81,7 +80,7 @@ class BaseBox2dHead(nn.Module):
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
 
         Returns:
-            pred_dicts (List): List containing following additional entry:
+            pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
                     - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
@@ -170,6 +169,7 @@ class BaseBox2dHead(nn.Module):
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
+            # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
             pred_dict['boxes'].append(pred_boxes_i)
             pred_dict['scores'].append(pred_scores_i)
@@ -260,7 +260,7 @@ class BaseBox2dHead(nn.Module):
         """
 
         # Perform matching if matcher is available
-        if hasattr(self, 'matcher'):
+        if self.matcher is not None:
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve 2D bounding box logits and matching results

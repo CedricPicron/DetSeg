@@ -37,8 +37,7 @@ class BaseClsHead(nn.Module):
         self.logits = build_model(logits_cfg)
 
         # Build matcher module if needed
-        if matcher_cfg is not None:
-            self.matcher = build_model(matcher_cfg)
+        self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
         # Build loss module
         self.loss = build_model(loss_cfg)
@@ -91,7 +90,7 @@ class BaseClsHead(nn.Module):
         """
 
         # Perform matching if matcher is available
-        if hasattr(self, 'matcher'):
+        if self.matcher is not None:
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve classification logits and matching results
