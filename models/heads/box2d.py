@@ -279,7 +279,7 @@ class BaseBox2dHead(nn.Module):
             qry_counts = matched_qry_ids.unique(return_counts=True)[1]
 
             box_multi_tgt_qry = (qry_counts > 1).sum().item() / num_qrys if num_qrys > 0 else 0.0
-            box_matched_qry = torch.tensor(box_multi_tgt_qry, device=device)
+            box_multi_tgt_qry = torch.tensor(box_multi_tgt_qry, device=device)
 
             key_name = f'box_multi_tgt_qry_{id}' if id is not None else 'box_multi_tgt_qry'
             analysis_dict[key_name] = 100 * box_multi_tgt_qry
