@@ -103,10 +103,22 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
 
     # Get one evaluator per prediction dictionary
     if evaluator is not None:
+        sample_images = next(iter(dataloader))[0]
+        pred_dicts = model(sample_images.to(device))[0]
+
         evaluator.reset()
-        sample_images, _ = next(iter(dataloader))
-        num_pred_dicts = len(model(sample_images.to(device))[0])
-        evaluators = [deepcopy(evaluator) for _ in range(num_pred_dicts)]
+        evaluators = []
+
+        for pred_dict in pred_dicts:
+            evaluator_i = deepcopy(evaluator)
+
+            if 'masks' in pred_dict:
+                evaluator_i.add_metrics({'bbox', 'segm'})
+
+            elif 'boxes' in pred_dict:
+                evaluator_i.add_metrics({'bbox'})
+
+            evaluators.append(evaluator_i)
 
     # Make visualization directory within output directory if needed
     if visualize and output_dir is not None:

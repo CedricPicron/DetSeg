@@ -34,7 +34,6 @@ def get_parser():
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
     parser.add_argument('--train_split', default='2017_train', type=str, help='name of the training split')
     parser.add_argument('--eval_split', default='2017_val', type=str, help='name of the evaluation split')
-    parser.add_argument('--evaluator', default='detection', type=str, help='type of evaluator used during evaluation')
     parser.add_argument('--eval_nms_thr', default=0.5, type=float, help='IoU threshold during evaluation NMS')
 
     # Transforms

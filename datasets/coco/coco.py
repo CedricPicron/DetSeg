@@ -21,6 +21,7 @@ from torch.utils.data import Dataset
 from datasets.transforms import get_train_transforms, get_eval_transforms
 from structures.boxes import Boxes
 from structures.images import Images
+from structures.masks import mask_inv_transform, mask_to_rle
 import utils.distributed as distributed
 
 
@@ -215,7 +216,7 @@ class CocoEvaluator(object):
     Attributes:
         image_ids (List): List of evaluated image ids.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-        metrics (List): List of strings containing the evaluation metrics to be used.
+        metrics (Set): Set of strings containing the evaluation metrics to be used.
         result_dicts (Dict): Dictionary of lists containing prediction results in COCO results format for each metric.
 
         eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
@@ -226,20 +227,20 @@ class CocoEvaluator(object):
             sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric.
     """
 
-    def __init__(self, eval_dataset, metrics=['bbox'], nms_thr=0.5):
+    def __init__(self, eval_dataset, metrics=None, nms_thr=0.5):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             eval_dataset (CocoDataset): The evaluation dataset.
-            metrics (List): List of strings containing the evaluation metrics to be used (default=['bbox']).
+            metrics (Iterable): Iterable with strings containing the evaluation metrics to be used (default=None).
             nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
         """
 
         # Set base attributes
         self.image_ids = []
         self.metadata = eval_dataset.metadata
-        self.metrics = metrics
+        self.metrics = set(metrics) if metrics is not None else set()
         self.result_dicts = {metric: [] for metric in self.metrics}
 
         # Set NMS attributes
@@ -250,6 +251,24 @@ class CocoEvaluator(object):
         if hasattr(eval_dataset, 'coco'):
             self.coco = eval_dataset.coco
             self.sub_evaluators = {metric: COCOeval(self.coco, iouType=metric) for metric in self.metrics}
+
+    def add_metrics(self, metrics):
+        """
+        Adds given evaluation metrics to the CocoEvaluator evaluator.
+
+        Args:
+            metrics (Iterable): Iterable with strings containing the evaluation metrics to be added.
+        """
+
+        # Add evalutation metrics
+        self.metrics.update(metrics)
+
+        # Add sub-evaluators if needed
+        if hasattr(self, 'coco'):
+            self.sub_evaluators.update({metric: COCOeval(self.coco, iouType=metric) for metric in metrics})
+
+        # Reset evaluator
+        self.reset()
 
     def reset(self):
         """
@@ -267,64 +286,105 @@ class CocoEvaluator(object):
         Args:
             images (Images): Images structure containing the batched images.
 
-            pred_dict (Dict): Prediction dictionary containing following keys:
-                - labels (LongTensor): predicted class indices of shape [num_preds_total];
-                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds_total];
-                - scores (FloatTensor): normalized prediction scores of shape [num_preds_total];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds_total].
+            pred_dict (Dict): Prediction dictionary potentially containing following keys:
+                - labels (LongTensor): predicted class indices of shape [num_preds];
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
+                - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                - scores (FloatTensor): normalized prediction scores of shape [num_preds];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
+            ValueError: Error when neither box nor mask predictions are provided when using the 'bbox' metric.
+            ValueError: Error when no masks predictions are provided when using the 'segm' metric.
             ValueError: Error when evaluator contains an unknown evaluation metric.
         """
 
         # Update the image_ids attribute
         self.image_ids.extend(images.image_ids)
 
-        # Transform boxes to original image space and convert them to (left, top, width, height) format
-        boxes, well_defined = pred_dict['boxes'].transform(images, inverse=True)
-        boxes = boxes.to_format('xywh')
+        # Extract predictions from prediction dictionary
+        labels = pred_dict['labels']
+        boxes = pred_dict.get('boxes', None)
+        segms = pred_dict.get('masks', None)
+        scores = pred_dict['scores']
+        batch_ids = pred_dict['batch_ids']
 
-        # Get well-defined predictions and convert them to lists
-        labels = pred_dict['labels'][well_defined].tolist()
-        boxes = boxes.boxes[well_defined].tolist()
-        scores = pred_dict['scores'][well_defined].tolist()
-        batch_ids = pred_dict['batch_ids'][well_defined].tolist()
+        # Transform boxes to original image space and convert them to desired format
+        if boxes is not None:
+            boxes, well_defined = boxes.transform(images, inverse=True)
+            boxes = boxes[well_defined].to_format('xywh')
 
-        # Get image id for every prediction
+            labels = labels[well_defined]
+            segms = segms[well_defined] if segms is not None else None
+            scores = scores[well_defined]
+            batch_ids = batch_ids[well_defined]
+
+        # Transform segmentation masks to original image space and convert them to desired format
+        if segms is not None:
+            segms = mask_inv_transform(segms, images.transforms, batch_ids)
+            segms = mask_to_rle(segms)
+
+        # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
-        image_ids = image_ids[batch_ids].tolist()
+        image_ids = image_ids[batch_ids]
 
-        # Get labels in original non-contiguous id space
-        inv_id_dict = {v: k for k, v in self.metadata.thing_dataset_id_to_contiguous_id.items()}
-        labels = [inv_id_dict[label] for label in labels]
+        # Convert labels to original non-contiguous id space
+        orig_ids = list(self.metadata.thing_dataset_id_to_contiguous_id.keys())
+        orig_ids = labels.new_tensor(orig_ids)
+        labels = orig_ids[labels]
 
-        # Perform evaluation for every evaluation metric
+        # Convert desired tensors to lists
+        image_ids = image_ids.tolist()
+        labels = labels.tolist()
+        boxes = boxes.boxes.tolist() if boxes is not None else None
+        scores = scores.tolist()
+
+        # Get base result dictionary
+        base_result_dict = {}
+        base_result_dict['image_id'] = image_ids
+        base_result_dict['category_id'] = labels
+        base_result_dict['score'] = scores
+
+        # Get result dictionaries for every evaluation metric
         for metric in self.metrics:
 
-            # Get result dictionaries
-            result_dicts = []
+            # Get shallow copy of base result dictionary
+            result_dict = base_result_dict.copy()
 
+            # Get metric-specific result dictionary
             if metric == 'bbox':
-                for i, image_id in enumerate(image_ids):
-                    result_dict = {}
-                    result_dict['image_id'] = image_id
-                    result_dict['category_id'] = labels[i]
-                    result_dict['bbox'] = boxes[i]
-                    result_dict['score'] = scores[i]
-                    result_dicts.append(result_dict)
+                if boxes is not None:
+                    result_dict['bbox'] = boxes
+                elif segms is not None:
+                    result_dict['segmentation'] = segms
+                else:
+                    error_msg = "Box or mask predictions must be provided when using the 'bbox' evaluation metric."
+                    raise ValueError(error_msg)
 
-                for image_id in images.image_ids:
-                    if image_id not in image_ids:
-                        result_dict = {}
-                        result_dict['image_id'] = image_id
-                        result_dict['category_id'] = 0
-                        result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
-                        result_dict['score'] = 0.0
-                        result_dicts.append(result_dict)
+            elif metric == 'segm':
+                if segms is not None:
+                    result_dict['segmentation'] = segms
+                else:
+                    error_msg = "Mask predictions must be provided when using the 'segm' evaluation metric."
+                    raise ValueError(error_msg)
 
             else:
                 error_msg = f"CocoEvaluator object contains an unknown evaluation metric (got '{metric}')."
                 raise ValueError(error_msg)
+
+            # Get list of result dictionaries
+            result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
+
+            # Make sure there is at least one result dictionary per image
+            for image_id in images.image_ids:
+                if image_id not in image_ids:
+                    result_dict = {}
+                    result_dict['image_id'] = image_id
+                    result_dict['category_id'] = 0
+                    result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
+                    result_dict['segmentation'] = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+                    result_dict['score'] = 0.0
+                    result_dicts.append(result_dict)
 
             # Update result_dicts attribute
             self.result_dicts[metric].extend(result_dicts)
@@ -429,9 +489,6 @@ def build_coco(args):
             - eval (CocoDataset): the evaluation dataset (always present).
 
         evaluator (object): Object capable of computing evaluations from predictions and storing them.
-
-     Raises:
-        ValueError: Raised when unknown evaluator type is provided in args.evaluator.
     """
 
     # Get root directory containing datasets
@@ -459,11 +516,6 @@ def build_coco(args):
     datasets['eval'] = CocoDataset(image_dir, eval_transforms, metadata, **file_kwargs)
 
     # Get evaluator
-    if args.evaluator == 'detection':
-        evaluator = CocoEvaluator(datasets['eval'], metrics=['bbox'], nms_thr=args.eval_nms_thr)
-    elif args.evaluator == 'none':
-        evaluator = None
-    else:
-        raise ValueError(f"Unknown evaluator type '{args.evaluator}' was provided.")
+    evaluator = CocoEvaluator(datasets['eval'], nms_thr=args.eval_nms_thr)
 
     return datasets, evaluator
