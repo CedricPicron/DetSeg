@@ -106,17 +106,10 @@ class BaseSegHead(nn.Module):
         cls_logits = storage_dict['cls_logits']
         seg_logits = storage_dict['seg_logits']
 
-        # Get number of features, number of labels and device
-        num_feats, num_labels = cls_logits.size()
-        device = cls_logits.device
-
-        # Get prediction labels and scores
-        num_classes = num_labels - 1
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
-        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
-
         # Get prediction masks
         pred_masks = seg_logits > 0
+        non_empty_masks = pred_masks.flatten(1).sum(dim=1) > 0
+        pred_masks = pred_masks[non_empty_masks]
 
         # Get smallest boxes containing prediction masks if needed
         if self.dup_attrs is not None:
@@ -125,18 +118,28 @@ class BaseSegHead(nn.Module):
             if dup_removal_type == 'nms':
                 pred_boxes = mask_to_box(pred_masks)
 
+        # Get number of features, number of classes and device
+        num_feats = len(pred_masks)
+        num_classes = cls_logits.size(dim=1) - 1
+        device = cls_logits.device
+
+        # Get feature indices
+        feat_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+
+        # Get prediction labels and scores
+        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
+        pred_scores = cls_logits[non_empty_masks, :-1].sigmoid().view(-1)
+
         # Get cumulative number of features per batch entry if missing
         if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
+            orig_num_feats = len(cls_logits)
+            cum_feats_batch = torch.tensor([0, orig_num_feats], device=device)
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
         batch_ids = torch.arange(batch_size, device=device)
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
-        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
-
-        # Get feature indices
-        feat_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+        batch_ids = batch_ids[non_empty_masks, None].expand(-1, num_classes).reshape(-1)
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
