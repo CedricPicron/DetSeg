@@ -113,10 +113,10 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
             evaluator_i = deepcopy(evaluator)
 
             if 'masks' in pred_dict:
-                evaluator_i.add_metrics({'bbox', 'segm'})
+                evaluator_i.add_metrics(['bbox', 'segm'])
 
             elif 'boxes' in pred_dict:
-                evaluator_i.add_metrics({'bbox'})
+                evaluator_i.add_metrics(['bbox'])
 
             evaluators.append(evaluator_i)
 

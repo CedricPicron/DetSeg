@@ -216,7 +216,7 @@ class CocoEvaluator(object):
     Attributes:
         image_ids (List): List of evaluated image ids.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-        metrics (Set): Set of strings containing the evaluation metrics to be used.
+        metrics (List): List with strings containing the evaluation metrics to be used.
         result_dicts (Dict): Dictionary of lists containing prediction results in COCO results format for each metric.
 
         eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
@@ -233,14 +233,14 @@ class CocoEvaluator(object):
 
         Args:
             eval_dataset (CocoDataset): The evaluation dataset.
-            metrics (Iterable): Iterable with strings containing the evaluation metrics to be used (default=None).
+            metrics (List): List with strings containing the evaluation metrics to be used (default=None).
             nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
         """
 
         # Set base attributes
         self.image_ids = []
         self.metadata = eval_dataset.metadata
-        self.metrics = set(metrics) if metrics is not None else set()
+        self.metrics = metrics if metrics is not None else []
         self.result_dicts = {metric: [] for metric in self.metrics}
 
         # Set NMS attributes
@@ -257,11 +257,11 @@ class CocoEvaluator(object):
         Adds given evaluation metrics to the CocoEvaluator evaluator.
 
         Args:
-            metrics (Iterable): Iterable with strings containing the evaluation metrics to be added.
+            metrics (List): List with strings containing the evaluation metrics to be added.
         """
 
         # Add evalutation metrics
-        self.metrics.update(metrics)
+        self.metrics.extend(metrics)
 
         # Add sub-evaluators if needed
         if hasattr(self, 'coco'):
@@ -382,7 +382,7 @@ class CocoEvaluator(object):
                     result_dict['image_id'] = image_id
                     result_dict['category_id'] = 0
                     result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
-                    result_dict['segmentation'] = [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]
+                    result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
                     result_dict['score'] = 0.0
                     result_dicts.append(result_dict)
 
