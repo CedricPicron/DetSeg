@@ -321,7 +321,7 @@ class CocoEvaluator(object):
 
         # Transform segmentation masks to original image space and convert them to desired format
         if segms is not None:
-            segms = mask_inv_transform(segms, images.transforms, batch_ids)
+            segms = mask_inv_transform(segms, images, batch_ids)
             segms = mask_to_rle(segms)
 
         # Get image indices corresponding to predictions

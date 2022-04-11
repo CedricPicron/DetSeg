@@ -8,32 +8,35 @@ from pycocotools import mask as coco_mask
 import torchvision.transforms.functional as F
 
 
-def mask_inv_transform(in_masks, transforms, group_ids):
+def mask_inv_transform(in_masks, images, batch_ids):
     """
-    Applies inverse of given transforms in inverse order to the given masks.
+    Transforms the given masks back to the original image space as encoded by the given Images structure.
 
     Args:
         in_masks (BoolTensor): Input masks of shape [num_masks, in_height, in_width].
-        transforms (List): List of size [num_groups] with transforms corresponding to each group of masks.
-        group_ids (LongTensor): Tensor containing the group indices of each mask of shape [num_groups].
+        images (Images): Images structure [batch_size] containing batched images with their entire transform history.
+        batch_ids (LongTensor): Tensor containing the batch indices of each input mask of shape [num_masks].
 
     Returns:
-        out_masks_list (List): List [num_groups] with output masks of shape [num_masks_group, out_height, out_width].
+        out_masks_list (List): List of size [num_masks] with output masks of shape [out_height, out_width].
 
     Raises:
         ValueError: Error when one of the transforms has an unknown transform type.
     """
 
-    # Get list with output masks per group
+    # Resize input masks to image size after transforms
+    iW, iH = images.size()
+    in_masks = F.resize(in_masks, size=(iH, iW))
+
+    # Get list with output masks
     num_masks = len(in_masks)
     mask_ids = torch.arange(num_masks, device=in_masks.device)
     out_masks_list = [None for _ in range(num_masks)]
 
-    for i, transforms_i in enumerate(transforms):
-        group_mask = group_ids == i
-
-        mask_ids_i = mask_ids[group_mask]
-        out_masks_i = in_masks[group_mask]
+    for i, transforms_i in enumerate(images.transforms):
+        batch_mask = batch_ids == i
+        mask_ids_i = mask_ids[batch_mask]
+        out_masks_i = in_masks[batch_mask]
 
         for transform in reversed(transforms_i):
             transform_type = transform[0]
