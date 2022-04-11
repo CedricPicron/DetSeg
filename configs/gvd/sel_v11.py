@@ -75,7 +75,7 @@ model = dict(
                     mode='static',
                     static_mode='rel',
                     rel_pos=5,
-                    rel_neg=10,
+                    rel_neg=5,
                     get_top_qry_ids=True,
                     top_limit=15,
                 ),
