@@ -204,10 +204,6 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
                         with open(output_dir / f'result_{i}_{metric}_{save_tag}.json', 'w') as result_file:
                             json.dump(evaluator.result_dicts[metric], result_file)
 
-                    if hasattr(evaluator, 'sub_evaluators'):
-                        evaluations = evaluator.sub_evaluators[metric].eval
-                        torch.save(evaluations, output_dir / f'eval_{i}_{metric}_{save_tag}.pth')
-
     return eval_stats
 
 

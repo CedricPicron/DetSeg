@@ -160,7 +160,8 @@ class BaseSegHead(nn.Module):
 
                 if dup_removal_type == 'nms':
                     num_candidates = self.dup_attrs['nms_candidates']
-                    candidate_ids = pred_scores_i.topk(num_candidates)[1]
+                    num_preds_i = len(pred_scores_i)
+                    candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
                     feat_ids_i = feat_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
@@ -404,7 +405,7 @@ class BaseSegHead(nn.Module):
 
         # Get segmentation accuracy if needed
         if analysis_dict is not None:
-            seg_acc = 1 - sigmoid_dice_loss(seg_logits, seg_targets, reduction='mean')
+            seg_acc = 1 - sigmoid_dice_loss(seg_logits > 0, seg_targets, reduction='mean')
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc
 
