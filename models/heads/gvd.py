@@ -28,7 +28,7 @@ class GVD(nn.Module):
         head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
     """
 
-    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers, head_cfgs, head_apply_ids):
+    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers, head_cfgs, head_apply_ids, metadata):
         """
         Initializes the GVD head.
 
@@ -38,6 +38,7 @@ class GVD(nn.Module):
             num_dec_layers (int): Integer containing the number decoder layers.
             head_cfgs (List): List of size [num_heads] with the configuration dictionaries specifying the heads.
             head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -67,7 +68,7 @@ class GVD(nn.Module):
         self.dec_layers = nn.ModuleList([build_model(dec_layer_cfg, sequential=True) for _ in range(num_dec_layers)])
 
         # Set attributes related to the heads
-        self.heads = nn.ModuleList([build_model(head_cfg) for head_cfg in head_cfgs])
+        self.heads = nn.ModuleList([build_model(head_cfg, metadata=metadata) for head_cfg in head_cfgs])
         self.head_apply_ids = head_apply_ids
 
     def group_init(self, storage_dict, **kwargs):
@@ -136,16 +137,9 @@ class GVD(nn.Module):
             return_list (List): List of size [num_returns] possibly containing following items to return:
                 - pred_dicts (List): list of size [num_pred_dicts] with prediction dictionaries (evaluation only);
                 - loss_dict (Dict): dictionary with different weighted loss terms used during training (trainval only);
-                - analysis_dict (Dict): dictionary with different analyses used for logging purposes only.
-
-        Raises:
-            ValueError: Error when visualizations are requested.
+                - analysis_dict (Dict): dictionary with different analyses used for logging purposes only;
+                - images_dict (Dict): dictionary with annotated images of predictions/targets (when visualize is True).
         """
-
-        # Check inputs
-        if visualize:
-            error_msg = "The GVD head currently does not provide visualizations."
-            raise ValueError(error_msg)
 
         # Initialize storage, loss, analysis and prediction dictionaries
         storage_dict = {'feat_maps': feat_maps, 'images': images}
@@ -155,9 +149,13 @@ class GVD(nn.Module):
         # Initialize empty list for prediction dictionaries
         pred_dicts = [] if not self.training else None
 
+        # Initialize empty dictionary for images with visualizations
+        images_dict = {} if visualize else None
+
         # Collect above dictionaries and list into a single dictionary
         local_kwargs = {'storage_dict': storage_dict, 'tgt_dict': tgt_dict, 'loss_dict': loss_dict}
         local_kwargs = {**local_kwargs, 'analysis_dict': analysis_dict, 'pred_dicts': pred_dicts}
+        local_kwargs = {**local_kwargs, 'images_dict': images_dict}
 
         # Perform group initialization
         group_feats, cum_feats_batch = self.group_init(**local_kwargs, **kwargs)
@@ -190,5 +188,6 @@ class GVD(nn.Module):
         return_list = [analysis_dict]
         return_list.insert(0, loss_dict) if tgt_dict is not None else None
         return_list.insert(0, pred_dicts) if not self.training else None
+        return_list.append(images_dict) if visualize else None
 
         return return_list

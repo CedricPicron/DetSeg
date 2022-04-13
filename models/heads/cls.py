@@ -20,7 +20,7 @@ class BaseClsHead(nn.Module):
         loss (nn.Module): Module computing the classification loss.
     """
 
-    def __init__(self, logits_cfg, loss_cfg, matcher_cfg=None):
+    def __init__(self, logits_cfg, loss_cfg, matcher_cfg=None, **kwargs):
         """
         Initializes the BaseClsHead module.
 
@@ -28,6 +28,7 @@ class BaseClsHead(nn.Module):
             logits_cfg (Dict): Configuration dictionary specifying the logits module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
         # Initialization of default nn.Module

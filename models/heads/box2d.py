@@ -3,6 +3,8 @@ Collection of 2D bounding box heads.
 """
 
 from detectron2.layers import batched_nms
+from detectron2.structures.instances import Instances
+from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 
@@ -26,13 +28,14 @@ class BaseBox2dHead(nn.Module):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_dets (int): Optional integer with the maximum number of returned 2D object detection predictions.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
         loss (nn.Module): Module computing the 2D bounding box loss.
     """
 
-    def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, dup_attrs=None, max_dets=None, matcher_cfg=None,
-                 report_match_stats=True):
+    def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, metadata, dup_attrs=None, max_dets=None,
+                 matcher_cfg=None, report_match_stats=True, **kwargs):
         """
         Initializes the BaseBox2dHead module.
 
@@ -41,10 +44,12 @@ class BaseBox2dHead(nn.Module):
             box_encoding (str): String containing the type of box encoding scheme.
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
+            kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
         # Initialization of default nn.Module
@@ -64,6 +69,7 @@ class BaseBox2dHead(nn.Module):
         self.get_dets = get_dets
         self.dup_attrs = dup_attrs
         self.max_dets = max_dets
+        self.metadata = metadata
         self.report_match_stats = report_match_stats
 
     @torch.no_grad()
@@ -78,6 +84,7 @@ class BaseBox2dHead(nn.Module):
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -184,7 +191,116 @@ class BaseBox2dHead(nn.Module):
 
         return pred_dicts
 
-    def forward_pred(self, in_feats, storage_dict, **kwargs):
+    @torch.no_grad()
+    def draw_dets(self, storage_dict, images_dict, pred_dicts, tgt_dict=None, vis_score_thr=0.4, id=None, **kwargs):
+        """
+        Draws predicted and target 2D object detections on the corresponding images.
+
+        Boxes must have a score of at least the score threshold to be drawn. Target boxes get a default 100% score.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - images (Images): images structure containing the batched images of size [batch_size].
+
+            images_dict (Dict): Dictionary with annotated images of predictions/targets.
+
+            pred_dicts (List): List with prediction dictionaries containing as last entry:
+                pred_dict (Dict): Prediction dictionary containing following keys:
+                    - labels (LongTensor): predicted class indices of shape [num_preds];
+                    - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
+                    - scores (FloatTensor): normalized prediction scores of shape [num_preds];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
+
+            tgt_dict (Dict): Optional target dictionary containing at least following keys when given:
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - boxes (Boxes): target 2D bounding boxes of size [num_targets];
+                - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
+
+            vis_score_thr (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
+            id (int): Integer containing the head id (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            images_dict (Dict): Dictionary containing additional images annotated with 2D object detections.
+        """
+
+        # Retrieve images from storage dictionary
+        images = storage_dict['images']
+
+        # Initialize list of draw dictionaries and list of dictionary names
+        draw_dicts = []
+        dict_names = []
+
+        # Get prediction draw dictionary and dictionary name
+        pred_dict = pred_dicts[-1]
+
+        pred_boxes = pred_dict['boxes'].to_img_scale(images).to_format('xyxy')
+        well_defined = pred_boxes.well_defined()
+
+        pred_scores = pred_dict['scores'][well_defined]
+        sufficient_score = pred_scores >= vis_score_thr
+
+        pred_labels = pred_dict['labels'][well_defined][sufficient_score]
+        pred_boxes = pred_boxes.boxes[well_defined][sufficient_score]
+        pred_scores = pred_scores[sufficient_score]
+        pred_batch_ids = pred_dict['batch_ids'][well_defined][sufficient_score]
+
+        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+        pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+
+        draw_dict_keys = ['labels', 'boxes', 'scores', 'sizes']
+        draw_dict_values = [pred_labels, pred_boxes, pred_scores, pred_sizes]
+
+        draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+        draw_dicts.append(draw_dict)
+
+        dict_name = f"box2d_pred_{id}" if id is not None else "box2d_pred"
+        dict_names.append(dict_name)
+
+        # Get target draw dictionary and dictionary name if needed
+        if tgt_dict is not None and not any('box2d_tgt' in key for key in images_dict.keys()):
+            tgt_labels = tgt_dict['labels']
+            tgt_boxes = tgt_dict['boxes'].to_img_scale(images).to_format('xyxy').boxes
+            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
+            tgt_sizes = tgt_dict['sizes']
+
+            draw_dict_values = [tgt_labels, tgt_boxes, tgt_scores, tgt_sizes]
+            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+
+            draw_dicts.append(draw_dict)
+            dict_names.append('box2d_tgt')
+
+        # Get number of images and image sizes without padding in (width, height) format
+        num_images = len(images)
+        img_sizes = images.size(mode='without_padding')
+
+        # Get and convert tensor with images
+        images = images.images.clone().permute(0, 2, 3, 1)
+        images = (images * 255).to(torch.uint8).cpu().numpy()
+
+        # Draw 2D object detections on images and add them to images dictionary
+        for dict_name, draw_dict in zip(dict_names, draw_dicts):
+            sizes = draw_dict['sizes']
+
+            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
+                visualizer = Visualizer(images[image_id], metadata=self.metadata)
+
+                img_size = img_sizes[image_id]
+                img_size = (img_size[1], img_size[0])
+
+                img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
+                img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
+                img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+
+                instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+                visualizer.draw_instance_predictions(instances)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+
+        return images_dict
+
+    def forward_pred(self, in_feats, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseBox2dHead module.
 
@@ -194,12 +310,15 @@ class BaseBox2dHead(nn.Module):
             storage_dict (Dict): Storage dictionary possibly containing following key:
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats].
 
+            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
+
+            images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
 
         Raises:
             ValueError: Error when an invalid type of box encoding scheme is provided.
@@ -224,7 +343,11 @@ class BaseBox2dHead(nn.Module):
         if self.get_dets and not self.training:
             self.compute_dets(storage_dict=storage_dict, **kwargs)
 
-        return storage_dict
+        # Draw predicted and target 2D object detections if needed
+        if images_dict is not None:
+            self.draw_dets(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+
+        return storage_dict, images_dict
 
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """

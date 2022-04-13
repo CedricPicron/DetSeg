@@ -1369,6 +1369,6 @@ class SBD(nn.Module):
                 visualizer.draw_instance_predictions(instances)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'ret_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+                images_dict[f'sbd_{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
 
         return images_dict

@@ -387,6 +387,7 @@ elif profiling_args.model == 'gct':
     backward_stmt = "model(**inputs)"
 
 elif profiling_args.model == 'gvd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.heads = ['gvd']
     main_args.gvd_cfg_path = './configs/gvd/sel_v11.py'

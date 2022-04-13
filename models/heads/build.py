@@ -161,7 +161,7 @@ def build_heads(args):
             gvd_cfg = Config.fromfile(args.gvd_cfg_path)
             args.requires_masks = gvd_cfg.model.pop('requires_masks', True)
 
-            gvd_head = build_model(gvd_cfg.model)
+            gvd_head = build_model(gvd_cfg.model, metadata=args.metadata)
             heads[head_type] = gvd_head
 
         elif head_type == 'mbd':

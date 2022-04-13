@@ -41,7 +41,7 @@ class BaseSegHead(nn.Module):
     """
 
     def __init__(self, qry_cfg, key_cfg, get_seg_preds, sample_attrs, loss_cfg, dup_attrs=None, max_dets=None,
-                 matcher_cfg=None):
+                 matcher_cfg=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
@@ -54,6 +54,7 @@ class BaseSegHead(nn.Module):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
         # Initialization of default nn.Module

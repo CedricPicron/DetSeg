@@ -9,19 +9,19 @@ from mmdet.models.builder import MODELS as MMDET_MODELS
 from torch import nn
 
 
-def build_model_from_cfg(cfg, registry, default_args=None, sequential=False):
+def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
     """
     Build model from one or multiple configuration dictionaries.
 
-    It extends the default 'build_from_cfg' from 'mmcv' by:
+    It extends the default 'build_from_cfg' from MMCV by:
         1) allowing a list of configuration dictionaries specifying various sub-modules to be concatenated;
         2) allowing a 'num_layers' key specifying multiple consecutive instances of the same sub-module.
 
     Args:
         cfg (Dict, List[Dict]): One or multiple configuration dictionaries specifying the model to be built.
         registry (Registry): A registry containing various model types.
-        default_args (Dict): Default arguments to build the model (default=None).
         sequential (bool): Boolean indicating whether the model should be an instance of Sequential (default=False).
+        kwargs (Dict): Dictionary of keyword arguments passed to the underlying 'build_from_cfg' function from MMCV.
 
     Returns:
         model (nn.Module): Model built from the given configuration dictionary.
@@ -37,7 +37,7 @@ def build_model_from_cfg(cfg, registry, default_args=None, sequential=False):
         init_cfg = cfg_i.pop('init_cfg', None)
 
         for _ in range(cfg_i.pop('num_layers', 1)):
-            module = build_from_cfg(cfg_i, registry, default_args)
+            module = build_from_cfg(cfg_i, registry, kwargs)
             initialize(module, init_cfg) if init_cfg is not None else None
             modules.append(module)
 
@@ -61,7 +61,7 @@ NN_MODELS._scope = 'nn'
 MODELS._add_children(NN_MODELS)
 
 
-def build_model(cfg, sequential=False):
+def build_model(cfg, sequential=False, **kwargs):
     """
     Function building a model from the given configuration dictionary.
 
@@ -70,12 +70,13 @@ def build_model(cfg, sequential=False):
     Args:
         cfg (Dict, List[Dict]): One or multiple configuration dictionaries specifying the model to be built.
         sequential (bool): Boolean indicating whether the model should be an instance of Sequential (default=False).
+        kwargs (Dict): Dictionary of keyword arguments passed to the build function of the MODELS registry.
 
     Returns:
         model (nn.Module): Model built from the given configuration dictionary.
     """
 
     # Build model from given configuration
-    model = MODELS.build(cfg, sequential=sequential)
+    model = MODELS.build(cfg, sequential=sequential, **kwargs)
 
     return model
