@@ -4,9 +4,12 @@ Collection of segmentation heads.
 
 from detectron2.layers import batched_nms
 from detectron2.projects.point_rend.point_features import get_uncertain_point_coords_with_randomness
+from detectron2.structures.instances import Instances
+from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
+import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
 from models.functional.loss import sigmoid_dice_loss
@@ -21,14 +24,15 @@ class BaseSegHead(nn.Module):
     Attributes:
         qry (nn.Module): Module computing the query features.
         key (nn.Module): Module computing the key feature map.
-        get_seg_preds (bool): Boolean indicating whether to get segmentation predictions.
+        get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
-        max_dets (int): Optional integer with the maximum number of returned segmentation predictions.
+        max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
 
         sample_attrs (Dict): Dictionary specifying the sample procedure, possibly containing following keys:
@@ -40,19 +44,20 @@ class BaseSegHead(nn.Module):
         loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, get_seg_preds, sample_attrs, loss_cfg, dup_attrs=None, max_dets=None,
-                 matcher_cfg=None, **kwargs):
+    def __init__(self, qry_cfg, key_cfg, get_segs, metadata, sample_attrs, loss_cfg, dup_attrs=None,
+                 max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
         Args:
             qry_cfg (Dict): Configuration dictionary specifying the query module.
             key_cfg (Dict): Configuration dictionary specifying the key module.
-            get_seg_preds (bool): Boolean indicating whether to get segmentation predictions.
+            get_segs (bool): Boolean indicating whether to get segmentation predictions.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             sample_attrs (Dict): Attribute dictionary specifying the sample procedure during loss computation.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
-            max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
+            max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
@@ -73,13 +78,14 @@ class BaseSegHead(nn.Module):
         self.loss = build_model(loss_cfg)
 
         # Set remaining attributes
-        self.get_seg_preds = get_seg_preds
+        self.get_segs = get_segs
         self.dup_attrs = dup_attrs
-        self.max_dets = max_dets
+        self.max_segs = max_segs
+        self.metadata = metadata
         self.sample_attrs = sample_attrs
 
     @torch.no_grad()
-    def compute_seg_preds(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
         """
         Method computing the segmentation predictions.
 
@@ -181,9 +187,9 @@ class BaseSegHead(nn.Module):
                     raise ValueError(error_msg)
 
             # Only keep top predictions if needed
-            if self.max_dets is not None:
-                if len(pred_scores_i) > self.max_dets:
-                    top_pred_ids = pred_scores_i.topk(self.max_dets)[1]
+            if self.max_segs is not None:
+                if len(pred_scores_i) > self.max_segs:
+                    top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
                     feat_ids_i = feat_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
@@ -206,7 +212,120 @@ class BaseSegHead(nn.Module):
 
         return pred_dicts
 
-    def forward_pred(self, in_feats, storage_dict, cum_feats_batch=None, **kwargs):
+    @torch.no_grad()
+    def draw_segs(self, storage_dict, images_dict, pred_dicts, tgt_dict=None, vis_score_thr=0.4, id=None, **kwargs):
+        """
+        Draws predicted and target segmentations on the corresponding images.
+
+        Segmentations must have a score of at least the score threshold to be drawn. Target segmentations get a default
+        100% score.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - images (Images): images structure containing the batched images of size [batch_size].
+
+            images_dict (Dict): Dictionary with annotated images of predictions/targets.
+
+            pred_dicts (List): List with prediction dictionaries containing as last entry:
+                pred_dict (Dict): Prediction dictionary containing following keys:
+                    - labels (LongTensor): predicted class indices of shape [num_preds];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - scores (FloatTensor): normalized prediction scores of shape [num_preds];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
+
+            tgt_dict (Dict): Optional target dictionary containing at least following keys when given:
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
+                - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
+
+            vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
+            id (int): Integer containing the head id (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            images_dict (Dict): Dictionary containing additional images annotated with segmentations.
+        """
+
+        # Retrieve images from storage dictionary
+        images = storage_dict['images']
+
+        # Initialize list of draw dictionaries and list of dictionary names
+        draw_dicts = []
+        dict_names = []
+
+        # Get prediction draw dictionary and dictionary name
+        pred_dict = pred_dicts[-1]
+
+        pred_scores = pred_dict['scores']
+        sufficient_score = pred_scores >= vis_score_thr
+
+        pred_labels = pred_dict['labels'][sufficient_score]
+        pred_masks = pred_dict['masks'][sufficient_score]
+        pred_scores = pred_scores[sufficient_score]
+        pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+
+        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
+        pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+
+        draw_dict_keys = ['labels', 'masks', 'scores', 'sizes']
+        draw_dict_values = [pred_labels, pred_masks, pred_scores, pred_sizes]
+
+        draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+        draw_dicts.append(draw_dict)
+
+        dict_name = f"seg_pred_{id}" if id is not None else "seg_pred"
+        dict_names.append(dict_name)
+
+        # Get target draw dictionary and dictionary name if needed
+        if tgt_dict is not None and not any('seg_tgt' in key for key in images_dict.keys()):
+            tgt_labels = tgt_dict['labels']
+            tgt_masks = tgt_dict['masks']
+            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
+            tgt_sizes = tgt_dict['sizes']
+
+            draw_dict_values = [tgt_labels, tgt_masks, tgt_scores, tgt_sizes]
+            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+
+            draw_dicts.append(draw_dict)
+            dict_names.append('seg_tgt')
+
+        # Get number of images and image sizes without padding in (width, height) format
+        num_images = len(images)
+        img_sizes = images.size(mode='without_padding')
+
+        # Draw 2D object detections on images and add them to images dictionary
+        for dict_name, draw_dict in zip(dict_names, draw_dicts):
+            sizes = draw_dict['sizes']
+
+            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
+                img_size = img_sizes[image_id]
+                img_size = (img_size[1], img_size[0])
+
+                image = images.images[image_id].clone()
+                image = T.crop(image, 0, 0, *img_size)
+                image = image.permute(1, 2, 0) * 255
+                image = image.to(torch.uint8).cpu().numpy()
+
+                metadata = self.metadata
+                visualizer = Visualizer(image, metadata=metadata)
+
+                if i1 > i0:
+                    img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
+                    img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+
+                    img_masks = draw_dict['masks'][i0:i1]
+                    img_masks = T.resize(img_masks, img_size)
+                    img_masks = img_masks.cpu().numpy()
+
+                    instances = Instances(img_size, pred_classes=img_labels, pred_masks=img_masks, scores=img_scores)
+                    visualizer.draw_instance_predictions(instances)
+
+                annotated_image = visualizer.output.get_image()
+                images_dict[f'{dict_name}_{image_id}'] = annotated_image
+
+        return images_dict
+
+    def forward_pred(self, in_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseSegHead module.
 
@@ -217,11 +336,14 @@ class BaseSegHead(nn.Module):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
                 - seg_logits (FloatTensor): map with segmentation logits of shape [num_feats, fH, fW].
+
+            images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
         """
 
         # Get number of features and device
@@ -257,10 +379,14 @@ class BaseSegHead(nn.Module):
         storage_dict['seg_logits'] = seg_logits
 
         # Get segmentation predictions if needed
-        if self.get_seg_preds and not self.training:
-            self.compute_seg_preds(storage_dict=storage_dict, **kwargs)
+        if self.get_segs and not self.training:
+            self.compute_segs(storage_dict=storage_dict, **kwargs)
 
-        return storage_dict
+        # Draw predicted and target segmentations if needed
+        if images_dict is not None:
+            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+
+        return storage_dict, images_dict
 
     @staticmethod
     def get_uncertainties(logits):
@@ -315,7 +441,7 @@ class BaseSegHead(nn.Module):
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).

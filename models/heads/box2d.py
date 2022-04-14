@@ -7,6 +7,7 @@ from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
+import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
 from structures.boxes import apply_box_deltas, Boxes, box_iou, get_box_deltas
@@ -34,7 +35,7 @@ class BaseBox2dHead(nn.Module):
         loss (nn.Module): Module computing the 2D bounding box loss.
     """
 
-    def __init__(self, logits_cfg, box_encoding, get_dets, loss_cfg, metadata, dup_attrs=None, max_dets=None,
+    def __init__(self, logits_cfg, box_encoding, get_dets, metadata, loss_cfg, dup_attrs=None, max_dets=None,
                  matcher_cfg=None, report_match_stats=True, **kwargs):
         """
         Initializes the BaseBox2dHead module.
@@ -43,10 +44,10 @@ class BaseBox2dHead(nn.Module):
             logits_cfg (Dict): Configuration dictionary specifying the logits module.
             box_encoding (str): String containing the type of box encoding scheme.
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
-            loss_cfg (Dict): Configuration dictionary specifying the loss module.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            loss_cfg (Dict): Configuration dictionary specifying the loss module.
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
-            max_dets (int): Integer with maximum number of returned 2D object detection predictions (default=None).
+            max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
             kwargs (Dict): Dictionary of unused keyword arguments.
@@ -274,29 +275,32 @@ class BaseBox2dHead(nn.Module):
         num_images = len(images)
         img_sizes = images.size(mode='without_padding')
 
-        # Get and convert tensor with images
-        images = images.images.clone().permute(0, 2, 3, 1)
-        images = (images * 255).to(torch.uint8).cpu().numpy()
-
         # Draw 2D object detections on images and add them to images dictionary
         for dict_name, draw_dict in zip(dict_names, draw_dicts):
             sizes = draw_dict['sizes']
 
             for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                visualizer = Visualizer(images[image_id], metadata=self.metadata)
-
                 img_size = img_sizes[image_id]
                 img_size = (img_size[1], img_size[0])
 
-                img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
-                img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
-                img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+                image = images.images[image_id].clone()
+                image = T.crop(image, 0, 0, *img_size)
+                image = image.permute(1, 2, 0) * 255
+                image = image.to(torch.uint8).cpu().numpy()
 
-                instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
-                visualizer.draw_instance_predictions(instances)
+                metadata = self.metadata
+                visualizer = Visualizer(image, metadata=metadata)
+
+                if i1 > i0:
+                    img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
+                    img_boxes = draw_dict['boxes'][i0:i1].cpu().numpy()
+                    img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+
+                    instances = Instances(img_size, pred_classes=img_labels, pred_boxes=img_boxes, scores=img_scores)
+                    visualizer.draw_instance_predictions(instances)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'{dict_name}_{image_id}'] = annotated_image[:img_size[0], :img_size[1], :]
+                images_dict[f'{dict_name}_{image_id}'] = annotated_image
 
         return images_dict
 

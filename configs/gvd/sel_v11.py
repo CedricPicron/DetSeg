@@ -258,13 +258,13 @@ model = dict(
                     skip=True,
                 ),
             ],
-            get_seg_preds=True,
+            get_segs=True,
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
                 nms_thr=0.5,
             ),
-            max_dets=100,
+            max_segs=100,
             matcher_cfg=None,
             sample_attrs=dict(
                 type='point_rend',
