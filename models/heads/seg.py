@@ -12,7 +12,6 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
-from models.functional.loss import sigmoid_dice_loss
 from structures.boxes import mask_to_box
 
 
@@ -532,7 +531,12 @@ class BaseSegHead(nn.Module):
 
         # Get segmentation accuracy if needed
         if analysis_dict is not None:
-            seg_acc = 1 - sigmoid_dice_loss(seg_logits > 0, seg_targets, reduction='mean')
+            seg_preds = seg_logits > 0
+
+            seg_acc = 2 * (seg_preds * seg_targets).sum(dim=1) + 1
+            seg_acc = seg_acc / (seg_preds.sum(dim=1) + seg_targets.sum(dim=1) + 1)
+            seg_acc = seg_acc.mean()
+
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc
 
