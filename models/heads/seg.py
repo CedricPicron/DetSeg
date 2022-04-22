@@ -292,6 +292,10 @@ class BaseSegHead(nn.Module):
         num_images = len(images)
         img_sizes = images.size(mode='without_padding')
 
+        # Get image sizes with padding in (height, width) format
+        img_sizes_pad = images.size(mode='with_padding')
+        img_sizes_pad = (img_sizes_pad[1], img_sizes_pad[0])
+
         # Draw 2D object detections on images and add them to images dictionary
         for dict_name, draw_dict in zip(dict_names, draw_dicts):
             sizes = draw_dict['sizes']
@@ -313,7 +317,8 @@ class BaseSegHead(nn.Module):
                     img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
 
                     img_masks = draw_dict['masks'][i0:i1]
-                    img_masks = T.resize(img_masks, img_size)
+                    img_masks = T.resize(img_masks, img_sizes_pad)
+                    img_masks = T.crop(img_masks, 0, 0, *img_size)
                     img_masks = img_masks.cpu().numpy()
 
                     instances = Instances(img_size, pred_classes=img_labels, pred_masks=img_masks, scores=img_scores)
@@ -379,7 +384,7 @@ class BaseSegHead(nn.Module):
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
-            self.compute_segs(storage_dict=storage_dict, **kwargs)
+            self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
 
         # Draw predicted and target segmentations if needed
         if images_dict is not None:
