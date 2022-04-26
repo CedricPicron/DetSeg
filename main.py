@@ -118,6 +118,8 @@ def get_parser():
     parser.add_argument('--dc_prior_factor', default=2.0, type=float, help='factor scaling box-type sample priors')
     parser.add_argument('--dc_scale_encs', action='store_true', help='whether to use scale encodings')
     parser.add_argument('--dc_scale_invariant', action='store_true', help='whether core should be scale invariant')
+    parser.add_argument('--dc_no_ffn', action='store_true', help='whether core should not contain FFN layers')
+    parser.add_argument('--dc_ffn_hidden_size', default=1024, type=int, help='hidden size of core FFN layers')
 
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')

@@ -1,13 +1,17 @@
 """
 Deformable core.
 """
+from collections import OrderedDict
+from copy import deepcopy
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
 from models.build import MODELS
+from models.modules.container import Sequential
 from models.modules.attention import DeformableAttn
+from models.modules.mlp import TwoStepMLP
 from structures.boxes import get_anchors
 
 
@@ -18,7 +22,7 @@ class DeformableCore(nn.Module):
 
     Attributes:
         in_projs (nn.ModuleList): List with modules used during computation of initial feature pyramid from input maps.
-        layers (nn.ModuleList): List [num_layers] of DeformableAttn layers updating their input feature pyramid.
+        layers (nn.ModuleList): List [num_layers] of DeformableCore layers updating their input feature pyramid.
         scale_encs (nn.Parameter): Optional parameter containing the scale encodings of shape [num_maps, feat_size].
 
         map_ids (List): List [num_maps] containing the indices (i.e. downsampling exponents) of the feature maps.
@@ -31,7 +35,7 @@ class DeformableCore(nn.Module):
     """
 
     def __init__(self, in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, num_groups=8, prior_type='location',
-                 prior_factor=2.0, scale_encs=False, scale_invariant=False):
+                 prior_factor=2.0, scale_encs=False, scale_invariant=False, with_ffn=True, ffn_hidden_size=1024):
         """
         Initializes the DeformableCore module.
 
@@ -63,6 +67,8 @@ class DeformableCore(nn.Module):
             prior_factor (float): Factor scaling the sample priors of type 'box' (default=2.0).
             scale_encs (bool): Boolean indicating whether to use scale encodings (default=False).
             scale_invariant (bool): Boolean indicating whether core should be scale invariant (default=False).
+            with_ffn (bool): Boolean indicating whether core should contain FFN layers (default=True).
+            ffn_hidden_size (int): Integer containing the size of the hidden FFN features (default=1024).
 
         Raises:
             ValueError: Error when the 'in_ids' length and the 'in_sizes' length do not match.
@@ -101,10 +107,17 @@ class DeformableCore(nn.Module):
 
                 self.in_projs.append(in_proj)
 
-        # Initialization of DeformableAttn layers
+        # Initialization of DeformableCore layers
         num_maps = len(core_ids)
         da_dict['num_levels'] = num_maps
-        self.layers = nn.ModuleList([DeformableAttn(feat_size, feat_size, **da_dict) for _ in range(num_layers)])
+        layer_dict = OrderedDict([('attn', DeformableAttn(feat_size, feat_size, **da_dict))])
+
+        if with_ffn:
+            ffn_kwargs = {'norm1': 'layer', 'act_fn2': 'relu', 'skip': True}
+            layer_dict['ffn'] = TwoStepMLP(feat_size, ffn_hidden_size, feat_size, **ffn_kwargs)
+
+        layer = Sequential(layer_dict)
+        self.layers = nn.ModuleList([deepcopy(layer) for _ in range(num_layers)])
 
         # Initialization of scale encodings if needed
         if scale_encs:
@@ -182,7 +195,7 @@ class DeformableCore(nn.Module):
             error_msg = "An Images structure containing the batched images must be provided."
             raise ValueError(error_msg)
 
-        # Prepare for deformable attention layers
+        # Prepare for DeformableCore layers
         feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
 
         if self.prior_type == 'box':
@@ -217,7 +230,7 @@ class DeformableCore(nn.Module):
         if hasattr(self, 'scale_encs'):
             da_kwargs['add_encs'] = self.scale_encs.repeat_interleave(feats_per_map, dim=0)
 
-        # Apply deformable attention layers
+        # Apply DeformableCore layers
         for layer in self.layers:
             da_kwargs['sample_feats'] = feats
             feats = layer(feats, **da_kwargs)

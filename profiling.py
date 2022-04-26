@@ -280,12 +280,14 @@ elif profiling_args.model == 'dc':
     main_args.core_type = 'dc'
     main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.dc_num_layers = 6
-    main_args.dc_da_version = 7
+    main_args.dc_da_version = 0
     main_args.dc_da_rad_pts = 4
     main_args.dc_da_lvl_pts = 1
     main_args.dc_prior_type = 'location'
     main_args.dc_scale_encs = False
     main_args.dc_scale_invariant = False
+    main_args.dc_no_ffn = False
+    main_args.dc_ffn_hidden_size = 1024
     model = build_core(main_args).to('cuda')
 
     feat_map3 = torch.randn(2, 512, 128, 128).to('cuda')
@@ -607,6 +609,7 @@ elif profiling_args.model == 'sbd':
     main_args.dod_anchor_num_sizes = 3
     main_args.dod_anchor_asp_ratios = [0.5, 1.0, 2.0]
     main_args.dod_sel_mode = 'rel'
+    main_args.dod_sel_rel_thr = 300
     main_args.dod_tgt_decision = 'rel'
     main_args.sbd_state_size = 256
     main_args.sbd_state_type = 'rel_static'
