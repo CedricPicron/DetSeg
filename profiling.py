@@ -19,8 +19,8 @@ from structures.images import Images
 
 
 # Lists of model and sort choices
-model_choices = ['bch_dod', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'dfd', 'dod']
-model_choices = [*model_choices, 'fpn', 'gc', 'gct', 'gvd', 'mbd', 'mmdet_arch', 'mmdet_backbone', 'mmdet_core']
+model_choices = ['bch_dod', 'bch_gvd', 'bch_sbd', 'bifpn', 'bin', 'brd', 'bvn_bin', 'bvn_ret', 'bvn_sem', 'dc', 'dfd']
+model_choices = [*model_choices, 'dod', 'fpn', 'gc', 'gct', 'gvd', 'mbd', 'mmdet_arch', 'mmdet_backbone', 'mmdet_core']
 model_choices = [*model_choices, 'resnet', 'ret', 'sbd', 'sem']
 sort_choices = ['cpu_time', 'cuda_time', 'cuda_memory_usage', 'self_cuda_memory_usage']
 
@@ -50,6 +50,35 @@ if profiling_args.model == 'bch_dod':
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+
+    optimizer = optimizer = torch.optim.AdamW(model.parameters())
+    inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
+    globals_dict = {'model': model, 'inputs': inputs}
+    forward_stmt = "model(**inputs)"
+    backward_stmt = "model(**inputs)"
+
+elif profiling_args.model == 'bch_gvd':
+    main_args.metadata = MetadataCatalog.get('coco_2017_val')
+    main_args.num_classes = 80
+    main_args.arch_type = 'bch'
+    main_args.backbone_type = 'resnet'
+    main_args.resnet_out_ids = [2, 3, 4, 5]
+    main_args.core_type = 'gc'
+    main_args.core_ids = [2, 3, 4, 5, 6, 7]
+    main_args.gc_yaml = './configs/gc/tpn_27_3b2_2s_gn.yaml'
+    main_args.heads = ['gvd']
+    main_args.gvd_cfg_path = './configs/gvd/sel_v23.py'
+    model = build_arch(main_args).to('cuda')
+
+    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+
+    num_targets_total = 20
+    labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
+    boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
+    boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes, 'masks': masks}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
     inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}
