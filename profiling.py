@@ -507,7 +507,7 @@ elif profiling_args.model == 'mbd':
 elif profiling_args.model == 'mmdet_arch':
     main_args.num_classes = 80
     main_args.arch_type = 'mmdet'
-    main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/deformable_detr_v1.py'
+    main_args.mmdet_arch_cfg_path = './configs/mmdet/archs/mask_rcnn_v0.py'
     main_args.backbone_type = 'resnet'
     main_args.core_type = 'gc'
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
@@ -519,8 +519,9 @@ elif profiling_args.model == 'mmdet_arch':
     labels = torch.randint(main_args.num_classes, (num_targets_total,), device='cuda')
     boxes = torch.abs(torch.randn(num_targets_total, 4, device='cuda'))
     boxes = Boxes(boxes, 'cxcywh', 'false', [num_targets_total//2] * 2)
+    masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
     sizes = torch.tensor([0, num_targets_total//2, num_targets_total]).to('cuda')
-    tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes}
+    tgt_dict = {'labels': labels, 'boxes': boxes, 'masks': masks, 'sizes': sizes}
 
     optimizer = optimizer = torch.optim.AdamW(model.parameters())
     inputs = {'images': images, 'tgt_dict': tgt_dict, 'optimizer': optimizer}

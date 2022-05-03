@@ -3,9 +3,12 @@ Module building cores from MMDetection.
 """
 
 from mmcv import Config
+from mmdet.core.mask.structures import BitmapMasks
 from mmdet.models import build_detector as build_arch
+import numpy as np
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
 from models.build import MODELS
@@ -72,10 +75,11 @@ class MMDetArch(nn.Module):
         Args:
             images (Images): Images structure containing the batched images.
 
-            tgt_dict (Dict): Optional target dictionary used during trainval containing at least following keys:
+            tgt_dict (Dict): Optional target dictionary used during trainval (possibly) containing following keys:
                 - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries.
+                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
+                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
             optimizer (torch.optim.Optimizer): Optimizer updating the model parameters during training (default=None).
             max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
@@ -108,7 +112,7 @@ class MMDetArch(nn.Module):
 
         for i in range(batch_size):
             img_metas[i]['img_shape'] = img_shapes[i]
-            img_metas[i]['scale_factor'] = [*scale_factors[i], *scale_factors[i]]
+            img_metas[i]['scale_factor'] = np.array([*scale_factors[i], *scale_factors[i]])
             img_metas[i]['flip'] = hflipped[i]
             img_metas[i]['pad_shape'] = (padded_height, padded_width, 3)
             img_metas[i]['ori_shape'] = orig_img_shapes[i]
@@ -126,6 +130,14 @@ class MMDetArch(nn.Module):
             arch_kwargs['gt_bboxes'] = tgt_boxes
             arch_kwargs['gt_labels'] = tgt_labels
 
+            if self.requires_masks:
+                tgt_masks = tgt_dict['masks'].cpu().numpy()
+                height, width = tgt_masks.shape[-2:]
+
+                tgt_masks = [tgt_masks[i0:i1] for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:])]
+                tgt_masks = [BitmapMasks(tgt_masks_i, height, width) for tgt_masks_i in tgt_masks]
+                arch_kwargs['gt_masks'] = tgt_masks
+
             out_dict = self.arch(images, img_metas, return_loss=True, **arch_kwargs)
             out_dict.update({k: sum(v) for k, v in out_dict.items() if isinstance(v, list)})
 
@@ -135,25 +147,50 @@ class MMDetArch(nn.Module):
         # Get prediction dictionaries if desired
         if not self.training:
             preds = self.arch([images], [img_metas], return_loss=False)
-            preds = [[torch.as_tensor(cls_preds) for cls_preds in preds_i] for preds_i in preds]
 
-            num_classes = len(preds[0])
             pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
             pred_dict = {pred_key: [] for pred_key in pred_keys}
 
+            if self.requires_masks:
+                num_classes = len(preds[0][0])
+                pred_dict['masks'] = []
+            else:
+                num_classes = len(preds[0])
+
             for i, preds_i in enumerate(preds):
-                cls_freqs = torch.tensor([len(cls_preds) for cls_preds in preds_i])
+                box_preds = preds_i[0] if self.requires_masks else preds_i
+
+                cls_freqs = torch.tensor([len(cls_box_preds) for cls_box_preds in box_preds])
                 labels = torch.arange(num_classes).repeat_interleave(cls_freqs, dim=0)
                 batch_ids = torch.full_like(labels, i)
 
-                cat_preds = torch.cat(preds_i, dim=0)
-                boxes = Boxes(cat_preds[:, :4], format='xyxy')
-                scores = cat_preds[:, 4]
+                box_preds = np.concatenate(box_preds, axis=0)
+                box_preds = torch.from_numpy(box_preds)
+
+                boxes = Boxes(box_preds[:, :4], format='xyxy')
+                scores = box_preds[:, 4]
 
                 pred_dict['labels'].append(labels)
                 pred_dict['boxes'].append(boxes)
                 pred_dict['scores'].append(scores)
                 pred_dict['batch_ids'].append(batch_ids)
+
+                if self.requires_masks:
+                    padded_width, padded_height = images.size(mode='with_padding')
+
+                    if len(labels) > 0:
+                        seg_preds = [np.stack(cls_seg_preds, axis=0) for cls_seg_preds in preds_i[1] if cls_seg_preds]
+                        seg_preds = np.concatenate(seg_preds, axis=0)
+                        seg_preds = torch.from_numpy(seg_preds)
+
+                        height, width = seg_preds.size()[-2:]
+                        padding = (0, padded_width - width, 0, padded_height - height)
+                        seg_preds = F.pad(seg_preds, padding)
+
+                    else:
+                        seg_preds = torch.empty(0, padded_height, padded_width, dtype=torch.bool)
+
+                    pred_dict['masks'].append(seg_preds)
 
             pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
             pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])

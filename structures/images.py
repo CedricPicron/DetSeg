@@ -429,8 +429,8 @@ class Images(object):
 
                 elif transform[0] == 'resize':
                     resize_ratio = transform[1]
-                    img_sizes[i][0] = img_sizes[i][0] / resize_ratio[0]
-                    img_sizes[i][1] = img_sizes[i][1] / resize_ratio[1]
+                    img_sizes[i][0] = int(img_sizes[i][0] / resize_ratio[0])
+                    img_sizes[i][1] = int(img_sizes[i][1] / resize_ratio[1])
 
         img_sizes = [tuple(img_size) for img_size in img_sizes]
 
