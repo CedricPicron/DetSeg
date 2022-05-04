@@ -337,7 +337,8 @@ class BaseSegHead(nn.Module):
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
 
             storage_dict (Dict): Storage dictionary containing at least following key:
-                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure containing the batched images of size [batch_size].
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
@@ -363,7 +364,9 @@ class BaseSegHead(nn.Module):
 
         # Get key feature map
         in_feat_map = storage_dict['feat_maps'][0]
-        key_feat_map = self.key(in_feat_map)
+        base_map_size = storage_dict['images'].size(mode='with_padding')
+        base_map_size = (base_map_size[1], base_map_size[0])
+        key_feat_map = self.key(in_feat_map, base_map_size=base_map_size)
 
         # Get segmentation logits
         batch_size = key_feat_map.size(dim=0)

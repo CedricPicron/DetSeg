@@ -67,7 +67,7 @@ elif profiling_args.model == 'bch_gvd':
     main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v24.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v26.py'
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
@@ -421,7 +421,7 @@ elif profiling_args.model == 'gvd':
     main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v24.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v26.py'
     model = build_heads(main_args)['gvd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')
@@ -439,7 +439,7 @@ elif profiling_args.model == 'gvd':
     masks = torch.rand(num_targets_total, 800, 800, device='cuda') > 0.5
     tgt_dict = {'labels': labels, 'boxes': boxes, 'sizes': sizes, 'masks': masks}
 
-    images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
+    images = Images(torch.randn(2, 3, 1024, 1024)).to('cuda')
 
     inputs = {'feat_maps': feat_maps, 'tgt_dict': tgt_dict, 'images': images}
     globals_dict = {'model': model, 'inputs': inputs}

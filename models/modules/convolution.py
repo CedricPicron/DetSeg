@@ -7,6 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.build import MODELS
+from models.functional.convolution import conv_transpose2d
 
 
 @MODELS.register_module()
@@ -108,6 +109,35 @@ class BottleneckConv(nn.Module):
             map_output = out_feat_maps[0]
 
         return map_output
+
+
+@MODELS.register_module()
+class ConvTranspose2d(nn.ConvTranspose2d):
+    """
+    Class implementing the ConvTranspose2d module.
+
+    It extends the ConvTranspose2d module from torch.nn by automatically computing the output padding if a base map
+    size is given.
+    """
+
+    def forward(self, input, base_map_size=None):
+        """
+        Forward method of the ConvTranspose2d module.
+
+        Args:
+            input (FloatTensor): Tensor with input feature map of shape [batch_size, in_channels, iH, iW].
+            base_map_size (Tuple): Tuple containing the base map size in (height, width) format (default=None).
+
+        Returns:
+            output (FloatTensor): Tensor with output feature map of shape [batch_size, out_channels, oH, oW].
+        """
+
+        # Perform 2D transposed convolution
+        kwargs = {'bias': self.bias, 'stride': self.stride, 'padding': self.padding}
+        kwargs = {**kwargs, 'output_padding': self.output_padding, 'groups': self.groups, 'dilation': self.dilation}
+        output = conv_transpose2d(input, self.weight, base_map_size=base_map_size, **kwargs)
+
+        return output
 
 
 @MODELS.register_module()
