@@ -150,15 +150,7 @@ class AnchorSelector(nn.Module):
             error_msg = f"Invalid selection mode (got '{sel_mode}')."
             raise ValueError(error_msg)
 
-        # Get selected features
-        feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-        feats = feats.flatten(0, 1)
-
-        num_cell_anchors = logit_maps[0].size(dim=1)
-        feat_ids = torch.div(sel_ids, num_cell_anchors, rounding_mode='floor')
-        sel_feats = feats[feat_ids]
-
-        return sel_logits, sel_ids, sel_feats
+        return sel_logits, sel_ids
 
     def get_selection_loss(self, sel_logits, storage_dict, tgt_dict, loss_dict, analysis_dict=None, **kwargs):
         """
@@ -260,6 +252,7 @@ class AnchorSelector(nn.Module):
                 - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
                 - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
                 - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
+                - feat_ids (LongTensor): indices of selected features of shape [num_selecs];
                 - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
                 - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs];
                 - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_selecs, feat_size].
@@ -273,7 +266,7 @@ class AnchorSelector(nn.Module):
         storage_dict['anchors'] = anchors
 
         # Perform selection
-        sel_logits, sel_ids, sel_feats = self.perform_selection(feat_maps)
+        sel_logits, sel_ids = self.perform_selection(feat_maps)
         storage_dict['sel_ids'] = sel_ids
 
         # Get cumulative number of selected features per batch entry
@@ -284,10 +277,18 @@ class AnchorSelector(nn.Module):
         cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
         storage_dict['cum_feats_batch'] = cum_feats_batch
 
-        # Perform post-processing on selected features
+        # Get indices of selected features
         num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
-        cell_anchor_ids = sel_ids % num_cell_anchors
+        feat_ids = torch.div(sel_ids, num_cell_anchors, rounding_mode='floor')
+        storage_dict['feat_ids'] = feat_ids
 
+        # Get selected features
+        feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
+        feats = feats.flatten(0, 1)
+        sel_feats = feats[feat_ids]
+
+        # Perform post-processing on selected features
+        cell_anchor_ids = sel_ids % num_cell_anchors
         sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
         storage_dict['sel_feats'] = sel_feats
 
