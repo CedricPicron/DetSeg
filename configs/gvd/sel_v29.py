@@ -92,6 +92,23 @@ model = dict(
     ),
     dec_layer_cfg=[
         dict(
+            type='BoxCrossAttn',
+            attn_cfg=dict(
+                type='DeformableAttn',
+                in_size=256,
+                sample_size=256,
+                out_size=256,
+                norm='layer',
+                act_fn='',
+                skip=True,
+                version=1,
+                num_heads=8,
+                num_levels=5,
+                num_points=1,
+                val_size=256,
+            ),
+        ),
+        dict(
             type='SelfAttn1d',
             in_size=256,
             out_size=256,
@@ -240,7 +257,21 @@ model = dict(
                     norm='group',
                     skip=True,
                 ),
+                dict(
+                    type='GetApplyInsert',
+                    module_cfg=dict(
+                        type='ConvTranspose2d',
+                        in_channels=256,
+                        out_channels=256,
+                        kernel_size=3,
+                        stride=2,
+                        padding=1,
+                    ),
+                    get_id=0,
+                    insert_id=0,
+                ),
             ],
+            map_offset=1,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
@@ -249,9 +280,6 @@ model = dict(
             ),
             max_segs=100,
             matcher_cfg=None,
-            sample_attrs=dict(
-                type='dense',
-            ),
             loss_cfg=dict(
                 type='ModuleSum',
                 sub_module_cfgs=[

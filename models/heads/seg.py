@@ -43,7 +43,7 @@ class BaseSegHead(nn.Module):
         loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, get_segs, metadata, sample_attrs, loss_cfg, dup_attrs=None,
+    def __init__(self, qry_cfg, key_cfg, metadata, sample_attrs, loss_cfg, get_segs=True, dup_attrs=None,
                  max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the BaseSegHead module.
@@ -51,10 +51,10 @@ class BaseSegHead(nn.Module):
         Args:
             qry_cfg (Dict): Configuration dictionary specifying the query module.
             key_cfg (Dict): Configuration dictionary specifying the key module.
-            get_segs (bool): Boolean indicating whether to get segmentation predictions.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             sample_attrs (Dict): Attribute dictionary specifying the sample procedure during loss computation.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
@@ -582,6 +582,7 @@ class TopDownSegHead(nn.Module):
     Attributes:
         qry (nn.Module): Module computing the query features.
         key (nn.Module): Module computing the key feature map.
+        map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -592,17 +593,10 @@ class TopDownSegHead(nn.Module):
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
-
-        sample_attrs (Dict): Dictionary specifying the sample procedure, possibly containing following keys:
-            - type (str): string containing the type of sample procedure (mandatory);
-            - num_points (int): number of points to sample during PointRend sampling;
-            - oversample_ratio (float): value of oversample ratio used during PointRend sampling;
-            - importance_sample_ratio (float): ratio of importance sampling during PointRend sampling.
-
         loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, get_segs, metadata, sample_attrs, loss_cfg, dup_attrs=None,
+    def __init__(self, qry_cfg, key_cfg, map_offset, metadata, loss_cfg, get_segs=True, dup_attrs=None,
                  max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
@@ -610,10 +604,10 @@ class TopDownSegHead(nn.Module):
         Args:
             qry_cfg (Dict): Configuration dictionary specifying the query module.
             key_cfg (Dict): Configuration dictionary specifying the key module.
-            get_segs (bool): Boolean indicating whether to get segmentation predictions.
+            map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-            sample_attrs (Dict): Attribute dictionary specifying the sample procedure during loss computation.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
@@ -636,11 +630,11 @@ class TopDownSegHead(nn.Module):
         self.loss = build_model(loss_cfg)
 
         # Set remaining attributes
+        self.map_offset = map_offset
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
         self.metadata = metadata
-        self.sample_attrs = sample_attrs
 
     @torch.no_grad()
     def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -906,8 +900,11 @@ class TopDownSegHead(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
-            storage_dict (Dict): Storage dictionary containing following additional key:
-                - seg_logits (FloatTensor): segmentation logits of shape [num_qry_key_pairs].
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
+                - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
+                - key_wh (FloatTensor): normalized key sizes of query-key pairs of shape [num_qry_key_pairs, 2];
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
         """
@@ -929,7 +926,9 @@ class TopDownSegHead(nn.Module):
 
         base_map_size = images.size(mode='with_padding')
         base_map_size = (base_map_size[1], base_map_size[0])
+
         key_feat_maps = self.key(in_feat_maps, base_map_size=base_map_size)
+        num_add_maps = len(key_feat_maps) - len(in_feat_maps)
 
         # Get cumulative number of features per map
         cum_feats_map = [feat_map.flatten(2).size(dim=2) for feat_map in in_feat_maps]
@@ -938,18 +937,23 @@ class TopDownSegHead(nn.Module):
         # Get query map indices
         qry_feat_ids = storage_dict['feat_ids'] % cum_feats_map[-1]
         qry_map_ids = (qry_feat_ids[:, None] - cum_feats_map[None, :]) >= 0
-        qry_map_ids = qry_map_ids.sum(dim=1)
+        qry_map_ids = qry_map_ids.sum(dim=1) - self.map_offset + num_add_maps
+        qry_map_ids = torch.clamp(qry_map_ids, min=0)
 
         # Get query boxes
         qry_boxes = storage_dict['pred_boxes']
         qry_boxes = qry_boxes.normalize(images).to_format('xyxy')
 
-        # Get query and corresponding key features
-        batch_size = len(in_feat_maps[0])
-        num_maps = len(in_feat_maps)
+        # Get query-key pairs
+        batch_size = len(key_feat_maps[0])
+        num_maps = len(key_feat_maps)
 
         qry_feats_list = []
         key_feats_list = []
+
+        qry_ids_list = []
+        key_xy_list = []
+        key_wh_list = []
 
         for i in range(batch_size):
             i0 = cum_feats_batch[i].item()
@@ -978,16 +982,37 @@ class TopDownSegHead(nn.Module):
                     qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
 
                     qry_feats_i = qry_feats_i[qry_ids]
+                    qry_feats_list.append(qry_feats_i)
+
                     key_feats_i = key_feat_map.flatten(1)
                     key_feats_i = key_feats_i[:, key_ids].t()
-
-                    qry_feats_list.append(qry_feats_i)
                     key_feats_list.append(key_feats_i)
+
+                    qry_ids_i = qry_ids + i0
+                    qry_ids_list.append(qry_ids_i)
+
+                    key_xy_i = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                    key_xy_i = torch.stack(key_xy_i, dim=0).flatten(1)
+                    key_xy_i = key_xy_i[:, key_ids].t()
+                    key_xy_list.append(key_xy_i)
+
+                    num_keys = len(key_ids)
+                    key_wh_i = torch.tensor([kW, kH], device=device)
+                    key_wh_i = key_wh_i[None, :].expand(num_keys, -1)
+                    key_wh_list.append(key_wh_i)
 
         qry_feats = torch.cat(qry_feats_list, dim=0)
         key_feats = torch.cat(key_feats_list, dim=0)
 
-        # Get segmentation logits
+        qry_ids = torch.cat(qry_ids_list, dim=0)
+        key_xy = torch.cat(key_xy_list, dim=0)
+        key_wh = torch.cat(key_wh_list, dim=0)
+
+        storage_dict['qry_ids'] = qry_ids
+        storage_dict['key_xy'] = key_xy
+        storage_dict['key_wh'] = key_wh
+
+        # Get segmentation logits of query-key pairs
         seg_logits = (qry_feats * key_feats).sum(dim=1)
         storage_dict['seg_logits'] = seg_logits
 
@@ -1001,55 +1026,15 @@ class TopDownSegHead(nn.Module):
 
         return storage_dict, images_dict
 
-    @staticmethod
-    def get_uncertainties(logits):
-        """
-        Function computing uncertainties from the given input logits.
-
-        Args:
-            logits (FloatTensor): Tensor containing the input logits of shape [*].
-
-        Returns:
-            uncertainties (FloatTensor): Tensor containing the output uncertainties of shape [*].
-        """
-
-        # Get uncertainties
-        uncertainties = -logits.abs()
-
-        return uncertainties
-
-    @staticmethod
-    def point_sample(in_maps, sample_pts, **kwargs):
-        """
-        Function sampling the given input maps at the given sample points.
-
-        Args:
-            in_maps (FloatTensor): Input maps to sample from of shape [num_maps, H, W].
-            sample_pts (FloatTensor): Normalized sample points within [0, 1] of shape [num_maps, num_samples, 2].
-            kwargs (Dict): Dictionary of keyword arguments passed to underlying 'grid_sample' function.
-
-        Returns:
-            out_samples (FloatTensor): Output samples of shape [num_maps, num_samples].
-        """
-
-        # Get output samples
-        in_maps = in_maps.unsqueeze(dim=1)
-
-        sample_pts = 2*sample_pts - 1
-        sample_pts = sample_pts.unsqueeze(dim=2)
-
-        out_samples = F.grid_sample(in_maps, sample_pts, **kwargs)
-        out_samples = out_samples[:, 0, :, 0]
-
-        return out_samples
-
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
         Forward loss method of the TopDownSegHead module.
 
         Args:
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
-                - seg_logits (FloatTensor): map with segmentation logits of shape [num_feats, fH, fW];
+                - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
+                - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -1076,8 +1061,11 @@ class TopDownSegHead(nn.Module):
         if self.matcher is not None:
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        # Retrieve segmentation logits and matching results
+        # Retrieve various items of interest from storage dictionary
+        qry_ids = storage_dict['qry_ids']
+        key_xy = storage_dict['key_xy']
         seg_logits = storage_dict['seg_logits']
+
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
@@ -1102,41 +1090,12 @@ class TopDownSegHead(nn.Module):
 
             return loss_dict, analysis_dict
 
-        # Get matched segmentation logits with corresponding targets
-        seg_logits = seg_logits[matched_qry_ids]
-        seg_targets = tgt_dict['masks'][matched_tgt_ids].float()
-
-        # Get sample points
-        with torch.no_grad():
-            sample_type = self.sample_attrs['type']
-
-            if sample_type == 'dense':
-                fH, fW = seg_logits.size()[1:]
-
-                sample_pts_x = torch.linspace(0.5/fW, 1-0.5/fW, steps=fW, device=device)
-                sample_pts_y = torch.linspace(0.5/fH, 1-0.5/fH, steps=fH, device=device)
-
-                sample_pts = torch.meshgrid(sample_pts_x, sample_pts_y, indexing='xy')
-                sample_pts = torch.stack(sample_pts, dim=2).flatten(0, 1)
-
-                num_matches = len(matched_qry_ids)
-                sample_pts = sample_pts[None, :, :].expand(num_matches, -1, -1)
-
-            elif sample_type == 'point_rend':
-                point_rend_keys = ('num_points', 'oversample_ratio', 'importance_sample_ratio')
-                point_rend_kwargs = {k: v for k, v in self.sample_attrs.items() if k in point_rend_keys}
-
-                point_rend_kwargs['coarse_logits'] = seg_logits.unsqueeze(dim=1)
-                point_rend_kwargs['uncertainty_func'] = lambda logits: self.get_uncertainties(logits)
-                sample_pts = get_uncertain_point_coords_with_randomness(**point_rend_kwargs)
-
-            else:
-                error_msg = f"Invalid type of sample procedure (got '{sample_type}')."
-                raise ValueError(error_msg)
-
-        # Get sampled segmenatation logits and corresponding targets
-        seg_logits = self.point_sample(seg_logits, sample_pts, align_corners=False)
-        seg_targets = self.point_sample(seg_targets, sample_pts, align_corners=False)
+        # Get matched segmentation logits and corresponding targets
+        counts = None
+        qry_ids = None
+        key_xy = None
+        seg_logits = None
+        seg_targets = None
 
         # Get segmentation loss
         seg_loss = self.loss(seg_logits, seg_targets)

@@ -35,7 +35,7 @@ class BaseBox2dHead(nn.Module):
         loss (nn.Module): Module computing the 2D bounding box loss.
     """
 
-    def __init__(self, logits_cfg, box_encoding, get_dets, metadata, loss_cfg, dup_attrs=None, max_dets=None,
+    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, get_dets=True, dup_attrs=None, max_dets=None,
                  matcher_cfg=None, report_match_stats=True, **kwargs):
         """
         Initializes the BaseBox2dHead module.
@@ -43,9 +43,9 @@ class BaseBox2dHead(nn.Module):
         Args:
             logits_cfg (Dict): Configuration dictionary specifying the logits module.
             box_encoding (str): String containing the type of box encoding scheme.
-            get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
