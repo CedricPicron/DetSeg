@@ -941,7 +941,7 @@ class TopDownSegHead(nn.Module):
         qry_map_ids = torch.clamp(qry_map_ids, min=0)
 
         # Get query boxes
-        qry_boxes = storage_dict['pred_boxes']
+        qry_boxes = storage_dict['pred_boxes'].clone()
         qry_boxes = qry_boxes.normalize(images).to_format('xyxy')
 
         # Get query-key pairs
@@ -958,9 +958,9 @@ class TopDownSegHead(nn.Module):
         for i in range(batch_size):
             i0 = cum_feats_batch[i].item()
             i1 = cum_feats_batch[i+1].item()
+            qry_map_ids_i = qry_map_ids[i0:i1]
 
             for map_id in range(num_maps):
-                qry_map_ids_i = qry_map_ids[i0:i1]
                 qry_ids = torch.nonzero(qry_map_ids_i == map_id)[:, 0]
 
                 if len(qry_ids) > 0:
@@ -979,16 +979,16 @@ class TopDownSegHead(nn.Module):
                     bot_mask = pts_y[None, :, None] < qry_boxes_i[:, 3, None, None] + 0.5/kH
 
                     key_mask = left_mask & top_mask & right_mask & bot_mask
-                    qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
+                    local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
 
-                    qry_feats_i = qry_feats_i[qry_ids]
+                    qry_feats_i = qry_feats_i[local_qry_ids]
                     qry_feats_list.append(qry_feats_i)
 
                     key_feats_i = key_feat_map.flatten(1)
                     key_feats_i = key_feats_i[:, key_ids].t()
                     key_feats_list.append(key_feats_i)
 
-                    qry_ids_i = qry_ids + i0
+                    qry_ids_i = qry_ids[local_qry_ids] + i0
                     qry_ids_list.append(qry_ids_i)
 
                     key_xy_i = torch.meshgrid(pts_x, pts_y, indexing='xy')
@@ -1054,7 +1054,7 @@ class TopDownSegHead(nn.Module):
                 - seg_acc (FloatTensor): segmentation accuracy of shape [].
 
         Raises:
-            ValueError: Error when an invalid type of sample procedure is provided.
+            ValueError: Error when a single query is matched with multiple targets.
         """
 
         # Perform matching if matcher is available
@@ -1091,11 +1091,36 @@ class TopDownSegHead(nn.Module):
             return loss_dict, analysis_dict
 
         # Get matched segmentation logits and corresponding targets
-        counts = None
-        qry_ids = None
-        key_xy = None
-        seg_logits = None
-        seg_targets = None
+        counts = matched_qry_ids.unique(sorted=False, return_counts=True)[1]
+
+        if torch.any(counts > 1):
+            error_msg = "The TopDownSegHead does not support a single query to be matched with multiple targets."
+            raise ValueError(error_msg)
+
+        max_qry_id = max(matched_qry_ids.max().item(), qry_ids.max().item())
+        matched_qry_mask = torch.zeros(max_qry_id+1, dtype=torch.bool, device=device)
+        matched_qry_mask[matched_qry_ids] = True
+
+        matched_qry_mask = matched_qry_mask[qry_ids]
+        seg_logits = seg_logits[matched_qry_mask]
+
+        num_matches = len(matched_qry_ids)
+        match_ids = torch.zeros(max_qry_id+1, dtype=torch.int64, device=device)
+        match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
+
+        qry_ids = qry_ids[matched_qry_mask]
+        match_ids = match_ids[qry_ids]
+        tgt_ids = matched_tgt_ids[match_ids]
+
+        tgt_masks = tgt_dict['masks']
+        iH, iW = tgt_masks.size()[-2:]
+
+        key_xy = key_xy[matched_qry_mask]
+        x_ids = (key_xy[:, 0] * iW).to(torch.int64)
+        y_ids = (key_xy[:, 1] * iH).to(torch.int64)
+
+        seg_targets = tgt_masks[tgt_ids, y_ids, x_ids]
+        seg_targets = seg_targets.float()
 
         # Get segmentation loss
         seg_loss = self.loss(seg_logits, seg_targets)
@@ -1105,10 +1130,8 @@ class TopDownSegHead(nn.Module):
         # Get segmentation accuracy if needed
         if analysis_dict is not None:
             seg_preds = seg_logits > 0
-
-            seg_acc = 2 * (seg_preds * seg_targets).sum(dim=1) + 1
-            seg_acc = seg_acc / (seg_preds.sum(dim=1) + seg_targets.sum(dim=1) + 1)
-            seg_acc = seg_acc.mean()
+            seg_targets = seg_targets.bool()
+            seg_acc = (seg_preds == seg_targets).sum() / len(seg_preds)
 
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc

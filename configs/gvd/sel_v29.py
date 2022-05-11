@@ -281,19 +281,10 @@ model = dict(
             max_segs=100,
             matcher_cfg=None,
             loss_cfg=dict(
-                type='ModuleSum',
-                sub_module_cfgs=[
-                    dict(
-                        type='SigmoidGroupBCELoss',
-                        reduction='sum',
-                        weight=5.0,
-                    ),
-                    dict(
-                        type='SigmoidDiceLoss',
-                        reduction='sum',
-                        weight=5.0,
-                    ),
-                ],
+                type='mmdet.CrossEntropyLoss',
+                use_sigmoid=True,
+                reduction='mean',
+                loss_weight=1.0,
             ),
         ),
     ],
