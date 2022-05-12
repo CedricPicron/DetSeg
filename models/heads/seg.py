@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
-from structures.boxes import mask_to_box
+from structures.boxes import Boxes, mask_to_box
 
 
 @MODELS.register_module()
@@ -583,6 +583,8 @@ class TopDownSegHead(nn.Module):
         qry (nn.Module): Module computing the query features.
         key (nn.Module): Module computing the key feature map.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
+        pred_downscale (int): Integer determining how much prediction masks are downscaled w.r.t. input images.
+        pred_bias (float): Bias used as initial value of the prediction maps.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -596,8 +598,8 @@ class TopDownSegHead(nn.Module):
         loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, map_offset, metadata, loss_cfg, get_segs=True, dup_attrs=None,
-                 max_segs=None, matcher_cfg=None, **kwargs):
+    def __init__(self, qry_cfg, key_cfg, map_offset, pred_downscale, pred_bias, metadata, loss_cfg, get_segs=True,
+                 dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -605,6 +607,8 @@ class TopDownSegHead(nn.Module):
             qry_cfg (Dict): Configuration dictionary specifying the query module.
             key_cfg (Dict): Configuration dictionary specifying the key module.
             map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
+            pred_downscale (int): Integer determining how much prediction masks are downscaled w.r.t. input images.
+            pred_bias (float): Bias used as initial value of the prediction maps.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
@@ -631,6 +635,8 @@ class TopDownSegHead(nn.Module):
 
         # Set remaining attributes
         self.map_offset = map_offset
+        self.pred_downscale = pred_downscale
+        self.pred_bias = pred_bias
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
@@ -643,8 +649,12 @@ class TopDownSegHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
-                - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - seg_logits (FloatTensor): map with segmentation logits of shape [num_feats, fH, fW].
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
+                - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
+                - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
+                - key_wh (FloatTensor): normalized key sizes of query-key pairs of shape [num_qry_key_pairs, 2];
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -661,12 +671,59 @@ class TopDownSegHead(nn.Module):
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
         """
 
-        # Retrieve classification and segmentation logits
+        # Retrieve various items from storage dictionary
+        images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
+        qry_ids = storage_dict['qry_ids']
+        key_xy = storage_dict['key_xy']
+        key_wh = storage_dict['key_wh']
         seg_logits = storage_dict['seg_logits']
 
+        # Get device and number of queries
+        device = cls_logits.device
+        num_qrys = len(cls_logits)
+
+        # Get prediction maps
+        iW, iH = images.size(mode='with_padding')
+        fW, fH = (iW // self.pred_downscale, iH // self.pred_downscale)
+        pred_maps = torch.full(size=[num_qrys, fH, fW], fill_value=self.pred_bias, device=device)
+
+        key_boxes = torch.cat([key_xy, key_wh], dim=1)
+        key_boxes = Boxes(key_boxes, format='cxcywh', normalized='img_with_padding')
+        key_boxes = key_boxes.to_format('xyxy').boxes
+
+        left_ids = (key_boxes[:, 0] * fW).to(torch.int64)
+        top_ids = (key_boxes[:, 1] * fH).to(torch.int64)
+        right_ids = (key_boxes[:, 2] * fW + 1).to(torch.int64).clamp(max=fW)
+        bot_ids = (key_boxes[:, 3] * fH + 1).to(torch.int64).clamp(max=fH)
+
+        repeats_w = right_ids - left_ids
+        repeats_h = bot_ids - top_ids
+        repeats = repeats_w * repeats_h
+
+        x_ids = left_ids.repeat_interleave(repeats_h, dim=0)
+        y_ids = top_ids.repeat_interleave(repeats_h, dim=0)
+
+        cum_repeats_h = torch.cat([repeats_h.new_zeros([1]), repeats_h[:-1]]).cumsum(dim=0)
+        cum_repeats_h = cum_repeats_h.repeat_interleave(repeats_h, dim=0)
+        delta_y_ids = torch.arange(len(y_ids), device=device) - cum_repeats_h
+        y_ids = y_ids + delta_y_ids
+
+        repeats_w = repeats_w.repeat_interleave(repeats_h, dim=0)
+        x_ids = x_ids.repeat_interleave(repeats_w, dim=0)
+        y_ids = y_ids.repeat_interleave(repeats_w, dim=0)
+
+        cum_repeats_w = torch.cat([repeats_w.new_zeros([1]), repeats_w[:-1]]).cumsum(dim=0)
+        cum_repeats_w = cum_repeats_w.repeat_interleave(repeats_w, dim=0)
+        delta_x_ids = torch.arange(len(x_ids), device=device) - cum_repeats_w
+        x_ids = x_ids + delta_x_ids
+
+        qry_ids = qry_ids.repeat_interleave(repeats, dim=0)
+        seg_logits = seg_logits.repeat_interleave(repeats, dim=0)
+        pred_maps[qry_ids, y_ids, x_ids] += seg_logits
+
         # Get prediction masks
-        pred_masks = seg_logits > 0
+        pred_masks = pred_maps > 0
         non_empty_masks = pred_masks.flatten(1).sum(dim=1) > 0
         pred_masks = pred_masks[non_empty_masks]
 
@@ -677,10 +734,9 @@ class TopDownSegHead(nn.Module):
             if dup_removal_type == 'nms':
                 pred_boxes = mask_to_box(pred_masks)
 
-        # Get number of features, number of classes and device
+        # Get number of features and number of classes
         num_feats = len(pred_masks)
         num_classes = cls_logits.size(dim=1) - 1
-        device = cls_logits.device
 
         # Get feature indices
         feat_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
@@ -997,7 +1053,7 @@ class TopDownSegHead(nn.Module):
                     key_xy_list.append(key_xy_i)
 
                     num_keys = len(key_ids)
-                    key_wh_i = torch.tensor([kW, kH], device=device)
+                    key_wh_i = torch.tensor([1/kW, 1/kH], device=device)
                     key_wh_i = key_wh_i[None, :].expand(num_keys, -1)
                     key_wh_list.append(key_wh_i)
 

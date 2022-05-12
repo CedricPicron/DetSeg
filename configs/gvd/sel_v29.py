@@ -272,6 +272,8 @@ model = dict(
                 ),
             ],
             map_offset=1,
+            pred_downscale=4,
+            pred_bias=-0.1,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
@@ -284,7 +286,7 @@ model = dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='mean',
-                loss_weight=1.0,
+                loss_weight=50.0,
             ),
         ),
     ],
