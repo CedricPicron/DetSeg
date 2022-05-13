@@ -1132,7 +1132,7 @@ class TopDownSegHead(nn.Module):
         if len(matched_qry_ids) == 0:
 
             # Get segmentation loss
-            seg_loss = 0.0 * seg_logits.sum()
+            seg_loss = 0.0 * seg_logits.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
             key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
             loss_dict[key_name] = seg_loss
 
@@ -1179,7 +1179,12 @@ class TopDownSegHead(nn.Module):
         seg_targets = seg_targets.float()
 
         # Get segmentation loss
-        seg_loss = self.loss(seg_logits, seg_targets)
+        inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
+        loss_weights = 1 / counts[inv_ids]
+
+        seg_loss = self.loss(seg_logits, seg_targets, weight=loss_weights)
+        seg_loss = seg_loss + sum(0.0 * p.flatten()[0] for p in self.parameters())
+
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
 
