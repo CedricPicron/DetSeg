@@ -1040,8 +1040,8 @@ class TopDownSegHead(nn.Module):
                     qry_feats_i = qry_feats_i[local_qry_ids]
                     qry_feats_list.append(qry_feats_i)
 
-                    key_feats_i = key_feat_map.flatten(1)
-                    key_feats_i = key_feats_i[:, key_ids].t()
+                    key_feats_i = key_feat_map.flatten(1).t().contiguous()
+                    key_feats_i = key_feats_i[key_ids, :]
                     key_feats_list.append(key_feats_i)
 
                     qry_ids_i = qry_ids[local_qry_ids] + i0
