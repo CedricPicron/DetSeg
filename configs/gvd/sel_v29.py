@@ -285,7 +285,14 @@ model = dict(
             ),
             max_segs=100,
             matcher_cfg=None,
-            loss_cfg=dict(
+            refine_loss_cfg=dict(
+                type='SigmoidFocalLoss',
+                alpha=0.25,
+                gamma=2.0,
+                reduction='sum',
+                weight=1.0,
+            ),
+            seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
