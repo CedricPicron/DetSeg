@@ -272,7 +272,7 @@ model = dict(
                 ),
             ],
             map_offset=1,
-            refine_iters=2,
+            refine_iters=4,
             num_refines=1000,
             refine_grid_size=2,
             pred_downscale=4,
