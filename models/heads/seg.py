@@ -1090,7 +1090,11 @@ class TopDownSegHead(nn.Module):
 
         qry_feats = torch.cat(qry_feats_list, dim=0)
         key_feats = torch.cat(key_feats_list, dim=0)
-        seg_logits = (qry_feats * key_feats).sum(dim=1)
+
+        half_size = qry_feats.size(dim=1) // 2
+        seg_qry_feats = qry_feats[:, :half_size]
+        seg_key_feats = key_feats[:, :half_size]
+        seg_logits = (seg_qry_feats * seg_key_feats).sum(dim=1)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
@@ -1127,7 +1131,10 @@ class TopDownSegHead(nn.Module):
         map_offsets = torch.tensor(map_offsets, device=device).cumsum(dim=0)
 
         for i in range(self.refine_iters):
-            refine_logits = 1.0 - seg_logits.abs()
+            refine_qry_feats = qry_feats_i[:, -half_size:]
+            refine_key_feats = key_feats_i[:, -half_size:]
+
+            refine_logits = (refine_qry_feats * refine_key_feats).sum(dim=1)
             refine_ids = torch.topk(refine_logits, self.num_refines, dim=0, sorted=False)[1]
 
             refine_logits = refine_logits[refine_ids].repeat_interleave(grid_area, dim=0)
@@ -1181,7 +1188,10 @@ class TopDownSegHead(nn.Module):
             select_batch_ids = batch_ids[select_mask]
             key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
 
-            seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
+            seg_qry_feats = qry_feats_i[:, :half_size]
+            seg_key_feats = key_feats_i[:, :half_size]
+
+            seg_logits = (seg_qry_feats * seg_key_feats).sum(dim=1)
             seg_logits_list.append(seg_logits)
 
         refine_logits = torch.cat(refine_logits_list, dim=0)
