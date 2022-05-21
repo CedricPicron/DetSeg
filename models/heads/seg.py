@@ -1137,7 +1137,7 @@ class TopDownSegHead(nn.Module):
             refine_logits = (refine_qry_feats * refine_key_feats).sum(dim=1)
             refine_ids = torch.topk(refine_logits, self.num_refines, dim=0, sorted=False)[1]
 
-            refine_logits = refine_logits[refine_ids].repeat_interleave(grid_area, dim=0)
+            refine_logits = refine_logits[refine_ids]
             refine_logits_list.append(refine_logits)
 
             qry_ids = qry_ids[refine_ids].repeat_interleave(grid_area, dim=0)
@@ -1272,8 +1272,9 @@ class TopDownSegHead(nn.Module):
 
             # Get refinement loss
             refine_targets = torch.zeros_like(refine_logits)
-            refine_loss = self.refine_loss(refine_logits, refine_targets)
+            loss_weights = torch.full_like(refine_logits, fill_value=1/len(refine_logits))
 
+            refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
             key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
             loss_dict[key_name] = refine_loss
 
@@ -1342,23 +1343,35 @@ class TopDownSegHead(nn.Module):
         seg_targets = seg_targets.float()
 
         # Get refinement loss
-        refine_targets = torch.zeros_like(refine_logits, dtype=torch.float)
-
         num_refine_pairs = len(refine_logits)
-        matched_qry_mask = matched_qry_mask[-num_refine_pairs:]
+        grid_area = self.refine_grid_size ** 2
+        num_grid_refine_pairs = num_refine_pairs * grid_area
+
+        matched_qry_mask = matched_qry_mask[-num_grid_refine_pairs:]
+        matched_qry_mask = matched_qry_mask.view(num_refine_pairs, grid_area)[:, 0]
+
         num_matched_refine_pairs = matched_qry_mask.sum().item()
+        num_unmatched_refine_pairs = num_refine_pairs - num_matched_refine_pairs
+
+        refine_targets = torch.zeros_like(refine_logits, dtype=torch.float)
+        loss_weights = torch.full_like(refine_logits, fill_value=1/num_unmatched_refine_pairs)
 
         if num_matched_refine_pairs > 0:
-            grid_area = self.refine_grid_size ** 2
+            num_matched_grid_refine_pairs = num_matched_refine_pairs * grid_area
+            matched_refine_targets = seg_targets[-num_matched_grid_refine_pairs:]
 
-            matched_refine_targets = seg_targets[-num_matched_refine_pairs:]
-            matched_refine_targets = matched_refine_targets.view(-1, grid_area).sum(dim=1)
+            matched_refine_targets = matched_refine_targets.view(num_matched_refine_pairs, grid_area).sum(dim=1)
             matched_refine_targets = (matched_refine_targets > 0) & (matched_refine_targets < grid_area)
-
-            matched_refine_targets = matched_refine_targets.repeat_interleave(grid_area, dim=0)
             refine_targets[matched_qry_mask] = matched_refine_targets.float()
 
-        refine_loss = self.refine_loss(refine_logits, refine_targets)
+            refine_qry_ids = qry_ids[-num_matched_grid_refine_pairs:]
+            refine_qry_ids = refine_qry_ids.view(num_matched_refine_pairs, grid_area)[:, 0]
+
+            inv_ids, counts = torch.unique(refine_qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
+            matched_loss_weights = 1 / counts[inv_ids]
+            loss_weights[matched_qry_mask] = matched_loss_weights
+
+        refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
         key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
         loss_dict[key_name] = refine_loss
 
@@ -1386,7 +1399,7 @@ class TopDownSegHead(nn.Module):
             # Get ratio of matched refine pairs with positive targets
             if num_matched_refine_pairs > 0:
                 refine_pos = matched_refine_targets.sum() / len(matched_refine_targets)
-                self.refine_pos_mem.update(refine_pos)
+                self.refine_pos_mem.update(refine_pos.item())
 
             else:
                 refine_pos_avg = self.refine_pos_mem.avg

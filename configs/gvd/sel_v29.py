@@ -286,11 +286,10 @@ model = dict(
             max_segs=100,
             matcher_cfg=None,
             refine_loss_cfg=dict(
-                type='SigmoidFocalLoss',
-                alpha=0.25,
-                gamma=2.0,
+                type='mmdet.CrossEntropyLoss',
+                use_sigmoid=True,
                 reduction='sum',
-                weight=1.0,
+                loss_weight=1.0,
             ),
             seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
