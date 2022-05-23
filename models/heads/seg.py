@@ -1088,12 +1088,12 @@ class TopDownSegHead(nn.Module):
                     map_ids_i = torch.full(size=[num_keys], fill_value=map_id, device=device)
                     map_ids_list.append(map_ids_i)
 
-        qry_feats = torch.cat(qry_feats_list, dim=0)
-        key_feats = torch.cat(key_feats_list, dim=0)
+        qry_feats_i = torch.cat(qry_feats_list, dim=0)
+        key_feats_i = torch.cat(key_feats_list, dim=0)
 
-        half_size = qry_feats.size(dim=1) // 2
-        seg_qry_feats = qry_feats[:, :half_size]
-        seg_key_feats = key_feats[:, :half_size]
+        half_size = qry_feats_i.size(dim=1) // 2
+        seg_qry_feats = qry_feats_i[:, :half_size]
+        seg_key_feats = key_feats_i[:, :half_size]
         seg_logits = (seg_qry_feats * seg_key_feats).sum(dim=1)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
@@ -1116,9 +1116,6 @@ class TopDownSegHead(nn.Module):
         key_xy_list = [key_xy]
         key_wh_list = [key_wh]
         seg_logits_list = [seg_logits]
-
-        qry_feats_i = qry_feats
-        key_feats_i = key_feats
 
         key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
         key_feats = torch.cat(key_feats, dim=1)
