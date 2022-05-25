@@ -1121,11 +1121,11 @@ class TopDownSegHead(nn.Module):
         key_feats = torch.cat(key_feats, dim=1)
 
         map_sizes = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
-        map_sizes = [torch.as_tensor(map_size, device=device).t() for map_size in map_sizes]
+        map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_sizes]
         map_sizes = torch.stack(map_sizes, dim=0)
 
-        map_offsets = [0] + [key_feat_map.flatten(2).size(dim=2) for key_feat_map in key_feat_maps[:-1]]
-        map_offsets = torch.tensor(map_offsets, device=device).cumsum(dim=0)
+        map_offsets = [map_sizes.new_zeros([1]), map_sizes[:-1].prod(dim=1)]
+        map_offsets = torch.cat(map_offsets).cumsum(dim=0)
 
         for i in range(self.refine_iters):
             refine_qry_feats = qry_feats_i[:, -half_size:]
