@@ -285,13 +285,13 @@ model = dict(
             ),
             max_segs=100,
             matcher_cfg=None,
-            refine_loss_cfg=dict(
+            seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
                 loss_weight=1.0,
             ),
-            seg_loss_cfg=dict(
+            refine_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
