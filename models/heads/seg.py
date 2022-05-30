@@ -1272,12 +1272,10 @@ class TopDownSegHead(nn.Module):
             loss_dict[key_name] = seg_loss
 
             # Get refinement loss
-            refine_targets = torch.zeros_like(refine_logits, dtype=torch.int64)
+            refine_targets = torch.zeros_like(refine_logits)
             loss_weights = torch.full_like(refine_logits, fill_value=1/len(refine_logits))
 
-            refine_logits = torch.stack([-refine_logits, refine_logits], dim=1)
             refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
-
             key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
             loss_dict[key_name] = refine_loss
 
@@ -1292,7 +1290,7 @@ class TopDownSegHead(nn.Module):
                 analysis_dict[key_name] = 100 * seg_acc
 
                 # Get refinement accuracy
-                refine_preds = refine_logits[:, 1] > 0
+                refine_preds = refine_logits > 0
                 refine_targets = refine_targets.bool()
                 refine_acc = (refine_preds == refine_targets).sum() / len(refine_preds)
 
@@ -1362,18 +1360,16 @@ class TopDownSegHead(nn.Module):
         x_ids = (key_xy[:, :, 0] * iW).to(torch.int64)
         y_ids = (key_xy[:, :, 1] * iH).to(torch.int64)
 
-        refine_targets = torch.zeros_like(refine_logits, dtype=torch.int64)
+        refine_targets = torch.zeros_like(refine_logits, dtype=torch.float)
         matched_refine_targets = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
         matched_refine_targets = (matched_refine_targets > 0) & (matched_refine_targets < grid_area)
-        refine_targets[matched_qry_mask] = matched_refine_targets.long()
+        refine_targets[matched_qry_mask] = matched_refine_targets.float()
 
         num_unmatched_pairs = (matched_qry_mask == 0).sum().item()
         loss_weights = torch.full_like(refine_logits, fill_value=1/num_unmatched_pairs)
         loss_weights[matched_qry_mask] = matched_loss_weights
 
-        refine_logits = torch.stack([-refine_logits, refine_logits], dim=1)
         refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
-
         key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
         loss_dict[key_name] = refine_loss
 
@@ -1389,7 +1385,7 @@ class TopDownSegHead(nn.Module):
             analysis_dict[key_name] = 100 * seg_acc
 
             # Get refinement accuracy
-            refine_preds = refine_logits[:, 1] > 0
+            refine_preds = refine_logits > 0
             refine_targets = refine_targets.bool()
             refine_acc = (refine_preds == refine_targets).sum() / len(refine_preds)
 

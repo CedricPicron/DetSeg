@@ -292,7 +292,7 @@ model = dict(
                 loss_weight=1.0,
             ),
             refine_loss_cfg=dict(
-                type='mmdet.FocalLoss',
+                type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
                 loss_weight=1.0,
