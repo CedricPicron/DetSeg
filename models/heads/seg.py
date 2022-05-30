@@ -336,7 +336,7 @@ class BaseSegHead(nn.Module):
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
 
-            storage_dict (Dict): Storage dictionary containing at least following key:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size].
 
@@ -960,7 +960,7 @@ class TopDownSegHead(nn.Module):
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
 
-            storage_dict (Dict): Storage dictionary containing at least following key:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - feat_ids (LongTensor): indices of selected features resulting in input features of shape [num_feats];

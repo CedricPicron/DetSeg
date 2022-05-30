@@ -5,6 +5,10 @@ from copy import deepcopy
 
 from mmcv.cnn import initialize
 from mmcv.utils import build_from_cfg, Registry
+from mmdet.core.anchor.builder import PRIOR_GENERATORS
+from mmdet.core.bbox.builder import BBOX_ASSIGNERS, BBOX_SAMPLERS, BBOX_CODERS
+from mmdet.core.bbox.iou_calculators.builder import IOU_CALCULATORS
+from mmdet.core.bbox.match_costs.builder import MATCH_COST
 from mmdet.models.builder import MODELS as MMDET_MODELS
 from torch import nn
 
@@ -52,6 +56,12 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
 MODELS = Registry('models', build_func=build_model_from_cfg)
 
 # Add modules from MMDetection
+[MMDET_MODELS.register_module(module) for module in PRIOR_GENERATORS.module_dict.values()]
+[MMDET_MODELS.register_module(module) for module in BBOX_ASSIGNERS.module_dict.values()]
+[MMDET_MODELS.register_module(module) for module in BBOX_SAMPLERS.module_dict.values()]
+[MMDET_MODELS.register_module(module) for module in BBOX_CODERS.module_dict.values()]
+[MMDET_MODELS.register_module(module) for module in IOU_CALCULATORS.module_dict.values()]
+[MMDET_MODELS.register_module(module) for module in MATCH_COST.module_dict.values()]
 MODELS._add_children(MMDET_MODELS)
 
 # Add modules from torch.nn
