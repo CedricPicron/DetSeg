@@ -219,6 +219,25 @@ model = dict(
         ),
         dict(
             type='StandardRoIHead',
+            mask_qry_cfg=[
+                dict(
+                    type='OneStepMLP',
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=False,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=1,
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+            ],
             mask_roi_extractor=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
@@ -227,11 +246,10 @@ model = dict(
                 finest_scale=112,
             ),
             mask_head=dict(
-                type='mmdet.FCNMaskHead',
+                type='QueryFCNMaskHead',
                 num_convs=4,
                 in_channels=256,
                 conv_out_channels=256,
-                num_classes=80,
                 loss_mask=dict(
                     type='mmdet.CrossEntropyLoss',
                     use_sigmoid=True,

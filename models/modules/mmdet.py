@@ -1,11 +1,12 @@
 """
-Collection of additional MMDetection modules.
+Collection of modules based on existing MMDetection modules.
 """
 
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
-from mmcv.runner.base_module import BaseModule
-from mmdet.models.builder import DETECTORS
+from mmcv.runner import BaseModule
+from mmdet.models.builder import DETECTORS, HEADS
 from mmdet.models.detectors import DETR, SingleStageDetector
+from mmdet.models.roi_heads.mask_heads import FCNMaskHead
 from mmdet.models.utils.builder import TRANSFORMER
 from mmdet.models.utils.transformer import DeformableDetrTransformer, Transformer
 
@@ -186,3 +187,56 @@ class DeformableDetrTransformerPlus(DeformableDetrTransformer):
         # Initialize the transformer layers
         self.init_layers()
         self.level_embeds.requires_grad_(False)
+
+
+@HEADS.register_module()
+@MODELS.register_module()
+class QueryFCNMaskHead(FCNMaskHead):
+    """
+    Class implementing the QueryFCNMaskHead module.
+
+    The QueryFCNMaskHead module contains the same attributes as the FCNMaskHead module from MMDetection, except that
+    the 'conv_logits' attribute was removed. These logits will instead be obtained using query-key dot products, where
+    the queries are provided from an external source.
+    """
+
+    def __init__(self, **kwargs):
+        """
+        Initializes the QueryFCNMaskHead module.
+
+        Args:
+            kwargs (Dict): Keyword arguments passed to the parent __init__ method.
+        """
+
+        # Initialize module using parent __init__ method
+        super().__init__(**kwargs)
+
+        # Remove 'conv_logits' attribute
+        del self.conv_logits
+
+    def forward(self, qry_feats, key_feats):
+        """
+        Forward method of the QueryFCNMaskHead.
+
+        Args:
+            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
+            key_feats (FloatTensor): Map with key features of shape [num_qrys, key_feat_size, kH, kW].
+
+        Returns:
+            mask_logits (FloatTensor): Map with mask logits of shape [num_qrys, 1, mH, mW].
+        """
+
+        # Process key features
+        for conv in self.convs:
+            key_feats = conv(key_feats)
+
+        if self.upsample is not None:
+            key_feats = self.upsample(key_feats)
+
+            if self.upsample_method == 'deconv':
+                key_feats = self.relu(key_feats)
+
+        # Get mask logits
+        mask_logits = (qry_feats[:, :, None, None] * key_feats).sum(dim=1, keepdim=True)
+
+        return mask_logits
