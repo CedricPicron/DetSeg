@@ -185,8 +185,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 mask_logits_i = mask_logits_i[range(num_masks), pred_labels_i]
                 mask_logits_i = mask_logits_i[:, None]
 
-            mask_logits_i = _do_paste_mask(mask_logits_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_logits_i > 0
+            mask_scores_i = mask_logits_i.sigmoid()
+            mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            pred_masks_i = mask_scores_i > 0.5
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
