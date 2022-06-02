@@ -90,6 +90,7 @@ class BaseSegHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
+                - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
                 - seg_logits (FloatTensor): map with segmentation logits of shape [num_feats, fH, fW].
 
@@ -100,7 +101,7 @@ class BaseSegHead(nn.Module):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -108,11 +109,15 @@ class BaseSegHead(nn.Module):
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
         """
 
-        # Retrieve classification and segmentation logits
+        # Retrieve desired items from storage dictionary
+        images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
         seg_logits = storage_dict['seg_logits']
 
-        # Get prediction masks
+        # Get image width and height with padding
+        iW, iH = images.size()
+
+        # Get prediction masks at feature resolution
         pred_masks = seg_logits > 0
         non_empty_masks = pred_masks.flatten(1).sum(dim=1) > 0
         pred_masks = pred_masks[non_empty_masks]
@@ -194,8 +199,10 @@ class BaseSegHead(nn.Module):
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
-            # Get prediction masks
-            pred_masks_i = pred_masks[feat_ids_i]
+            # Get prediction masks at image resolution
+            seg_logits_i = seg_logits[non_empty_masks][feat_ids_i][:, None]
+            seg_logits_i = F.interpolate(seg_logits_i, size=(iH, iW), mode='bilinear', align_corners=False)
+            pred_masks_i = seg_logits_i[:, 0] > 0
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
@@ -586,7 +593,7 @@ class TopDownSegHead(nn.Module):
         refine_iters (int): Integer containing the number of refinement iterations.
         num_refines (int): Integer containing the number of refinements per refinement iteration.
         refine_grid_size (int): Integer containing the size of the refinement grid.
-        pred_downscale (int): Integer determining how much prediction masks are downscaled w.r.t. input images.
+        pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
         pred_bias (float): Bias used as initial value of the prediction maps.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
@@ -615,7 +622,7 @@ class TopDownSegHead(nn.Module):
             refine_iters (int): Integer containing the number of refinement iterations.
             num_refines (int): Integer containing the number of refinements per refinement iteration.
             refine_grid_size (int): Integer containing the size of the refinement grid.
-            pred_downscale (int): Integer determining how much prediction masks are downscaled w.r.t. input images.
+            pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
             pred_bias (float): Bias used as initial value of the prediction maps.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
@@ -737,7 +744,7 @@ class TopDownSegHead(nn.Module):
         seg_logits = seg_logits.repeat_interleave(repeats, dim=0)
         pred_maps[qry_ids, y_ids, x_ids] += seg_logits
 
-        # Get prediction masks
+        # Get prediction masks at feature resolution
         pred_masks = pred_maps > 0
         non_empty_masks = pred_masks.flatten(1).sum(dim=1) > 0
         pred_masks = pred_masks[non_empty_masks]
@@ -818,8 +825,10 @@ class TopDownSegHead(nn.Module):
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
-            # Get prediction masks
-            pred_masks_i = pred_masks[feat_ids_i]
+            # Get prediction masks at image resolution
+            pred_maps_i = pred_maps[non_empty_masks][feat_ids_i][:, None]
+            pred_maps_i = F.interpolate(pred_maps_i, size=(iH, iW), mode='bilinear', align_corners=False)
+            pred_masks_i = pred_maps_i[:, 0] > 0
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)

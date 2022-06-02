@@ -289,7 +289,7 @@ class CocoEvaluator(object):
             pred_dict (Dict): Prediction dictionary potentially containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
-                - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                - masks (BoolTensor): predicted segmentation masks of shape [num_preds, mH, mW];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 

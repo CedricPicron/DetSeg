@@ -86,7 +86,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
