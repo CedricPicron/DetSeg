@@ -273,7 +273,6 @@ model = dict(
             ],
             map_offset=1,
             refine_iters=1,
-            num_refines=4000,
             refine_grid_size=2,
             pred_downscale=4,
             pred_bias=-0.1,
@@ -286,12 +285,6 @@ model = dict(
             max_segs=100,
             matcher_cfg=None,
             seg_loss_cfg=dict(
-                type='mmdet.CrossEntropyLoss',
-                use_sigmoid=True,
-                reduction='sum',
-                loss_weight=1.0,
-            ),
-            refine_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',

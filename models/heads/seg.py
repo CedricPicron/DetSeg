@@ -591,7 +591,6 @@ class TopDownSegHead(nn.Module):
         key (nn.Module): Module computing the key feature map.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         refine_iters (int): Integer containing the number of refinement iterations.
-        num_refines (int): Integer containing the number of refinements per refinement iteration.
         refine_grid_size (int): Integer containing the size of the refinement grid.
         pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
         pred_bias (float): Bias used as initial value of the prediction maps.
@@ -606,12 +605,10 @@ class TopDownSegHead(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         seg_loss (nn.Module): Module computing the segmentation loss.
-        refine_loss (nn.Module): Module computing the refinement loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, num_refines, refine_grid_size, pred_downscale,
-                 pred_bias, metadata, seg_loss_cfg, refine_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None,
-                 matcher_cfg=None, **kwargs):
+    def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, pred_downscale, pred_bias,
+                 metadata, seg_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -620,13 +617,11 @@ class TopDownSegHead(nn.Module):
             key_cfg (Dict): Configuration dictionary specifying the key module.
             map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
             refine_iters (int): Integer containing the number of refinement iterations.
-            num_refines (int): Integer containing the number of refinements per refinement iteration.
             refine_grid_size (int): Integer containing the size of the refinement grid.
             pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
             pred_bias (float): Bias used as initial value of the prediction maps.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
-            refine_loss_cfg (Dict): Configuration dictionary specifying the refinement loss module.
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
@@ -649,13 +644,9 @@ class TopDownSegHead(nn.Module):
         # Build segmentation loss module
         self.seg_loss = build_model(seg_loss_cfg)
 
-        # Build refinement loss module
-        self.refine_loss = build_model(refine_loss_cfg)
-
         # Set remaining attributes
         self.map_offset = map_offset
         self.refine_iters = refine_iters
-        self.num_refines = num_refines
         self.refine_grid_size = refine_grid_size
         self.pred_downscale = pred_downscale
         self.pred_bias = pred_bias
@@ -962,7 +953,7 @@ class TopDownSegHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, in_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
+    def forward_pred(self, in_feats, storage_dict, tgt_dict, cum_feats_batch=None, images_dict=None, **kwargs):
         """
         Forward prediction method of the TopDownSegHead module.
 
@@ -973,7 +964,12 @@ class TopDownSegHead(nn.Module):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - feat_ids (LongTensor): indices of selected features resulting in input features of shape [num_feats];
-                - pred_boxes (Boxes): predicted 2D bounding boxes obtained from input features of size [num_feats].
+                - pred_boxes (Boxes): predicted 2D bounding boxes obtained from input features of size [num_feats];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
@@ -984,8 +980,7 @@ class TopDownSegHead(nn.Module):
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
                 - key_wh (FloatTensor): normalized key sizes of query-key pairs of shape [num_qry_key_pairs, 2];
-                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
-                - refine_logits (FloatTensor): refinement logits of query-key pairs of shape [num_qry_key_pairs].
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
         """
@@ -1093,6 +1088,7 @@ class TopDownSegHead(nn.Module):
 
         qry_feats_i = torch.cat(qry_feats_list, dim=0)
         key_feats_i = torch.cat(key_feats_list, dim=0)
+        seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
@@ -1101,114 +1097,124 @@ class TopDownSegHead(nn.Module):
         batch_ids = torch.cat(batch_ids_list, dim=0)
         map_ids = torch.cat(map_ids_list, dim=0)
 
-        half_size = qry_feats_i.size(dim=1) // 2
-        seg_qry_feats = qry_feats_i[:, :half_size]
-        seg_key_feats = key_feats_i[:, :half_size]
-        seg_logits = (seg_qry_feats * seg_key_feats).sum(dim=1)
-
-        refine_qry_feats = qry_feats_i[:, -half_size:]
-        refine_key_feats = key_feats_i[:, -half_size:]
-        refine_logits = (refine_qry_feats * refine_key_feats).sum(dim=1)
-
-        # Get refined query-key pairs with segmentation and refinement logits
-        grid_size = self.refine_grid_size
-        grid_area = grid_size ** 2
-
-        grid_offsets = torch.arange(grid_size, device=device) - (grid_size-1) / 2
-        grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
-        grid_offsets = torch.stack(grid_offsets, dim=2).flatten(0, 1)
-
-        key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
-        key_feats = torch.cat(key_feats, dim=1)
-
-        map_sizes = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
-        map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_sizes]
-        map_sizes = torch.stack(map_sizes, dim=0)
-
-        map_offsets = [map_sizes.new_zeros([1]), map_sizes[:-1].prod(dim=1)]
-        map_offsets = torch.cat(map_offsets).cumsum(dim=0)
-
         qry_ids_list = [qry_ids]
         key_xy_list = [key_xy]
         key_wh_list = [key_wh]
-
         seg_logits_list = [seg_logits]
-        refine_logits_list = [refine_logits]
 
-        for i in range(self.refine_iters):
-            refine_ids = torch.topk(refine_logits, self.num_refines, dim=0, sorted=False)[1]
+        # Get refined query-key pairs with segmentation and refinement logits
+        matched_qry_ids = storage_dict['matched_qry_ids']
+        matched_tgt_ids = storage_dict['matched_tgt_ids']
+        tgt_masks = tgt_dict['masks']
 
-            qry_ids = qry_ids[refine_ids].repeat_interleave(grid_area, dim=0)
-            qry_ids_list.append(qry_ids)
+        if len(matched_qry_ids) > 0:
+            iW, iH = images.size()
 
-            key_wh = key_wh[refine_ids] / grid_size
-            key_wh = key_wh.repeat_interleave(grid_area, dim=0)
-            key_wh_list.append(key_wh)
+            grid_size = self.refine_grid_size
+            grid_area = grid_size ** 2
 
-            delta_key_xy = grid_offsets[None, :, :] * key_wh.view(-1, grid_area, 2)
-            delta_key_xy = delta_key_xy.flatten(0, 1)
+            grid_offsets = torch.arange(grid_size, device=device) - (grid_size-1) / 2
+            grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
+            grid_offsets = torch.stack(grid_offsets, dim=2).flatten(0, 1)
 
-            key_xy = key_xy[refine_ids].repeat_interleave(grid_area, dim=0)
-            key_xy = key_xy + delta_key_xy
-            key_xy_list.append(key_xy)
+            key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
+            key_feats = torch.cat(key_feats, dim=1)
 
-            qry_feats_i = qry_feats[qry_ids]
-            key_feats_i = torch.zeros_like(qry_feats_i)
+            map_sizes = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
+            map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_sizes]
+            map_sizes = torch.stack(map_sizes, dim=0)
 
-            batch_ids = batch_ids[refine_ids]
-            batch_ids = batch_ids.repeat_interleave(grid_area, dim=0)
+            map_offsets = [map_sizes.new_zeros([1]), map_sizes[:-1].prod(dim=1)]
+            map_offsets = torch.cat(map_offsets).cumsum(dim=0)
 
-            map_ids = map_ids[refine_ids] - 1
-            map_ids = map_ids.repeat_interleave(grid_area, dim=0)
+            max_qry_id = max(matched_qry_ids.max().item(), qry_ids.max().item())
+            matched_qry_mask = torch.zeros(max_qry_id+1, dtype=torch.bool, device=device)
+            matched_qry_mask[matched_qry_ids] = True
+            match_mask = matched_qry_mask[qry_ids]
 
-            sample_mask = map_ids < 0
-            sample_batch_ids = batch_ids[sample_mask]
-            sample_xy = 2*key_xy[None, sample_mask, None, :] - 1
+            qry_ids = qry_ids[match_mask]
+            key_xy = key_xy[match_mask]
+            key_wh = key_wh[match_mask]
+            batch_ids = batch_ids[match_mask]
+            map_ids = map_ids[match_mask]
 
-            for j in range(batch_size):
-                sample_map_j = key_feat_maps[0][j:j+1]
-                sample_xy_j = sample_xy[:, sample_batch_ids == j, :, :]
+            num_matches = len(matched_qry_ids)
+            match_ids = torch.zeros(max_qry_id+1, dtype=torch.int64, device=device)
+            match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
+            tgt_ids = matched_tgt_ids[match_ids[qry_ids]]
 
-                sample_key_feats_j = F.grid_sample(sample_map_j, sample_xy_j, align_corners=False)
-                sample_key_feats_j = sample_key_feats_j[0, :, :, 0].t()
+            for i in range(self.refine_iters):
+                key_wh = key_wh / grid_size
+                key_wh = key_wh[:, None, :].expand(-1, grid_area, -1)
+                delta_key_xy = grid_offsets[None, :, :] * key_wh
 
-                sample_mask_j = sample_mask & (batch_ids == j)
-                key_feats_i[sample_mask_j] = sample_key_feats_j
+                key_xy = key_xy[:, None, :].expand(-1, grid_area, -1)
+                key_xy = key_xy + delta_key_xy
 
-            select_mask = ~sample_mask
-            select_map_ids = map_ids[select_mask]
-            select_map_sizes = map_sizes[select_map_ids]
+                tgt_ids = tgt_ids[:, None].expand(-1, grid_area)
+                x_ids = (key_xy[:, :, 0] * iW).to(torch.int64)
+                y_ids = (key_xy[:, :, 1] * iH).to(torch.int64)
 
-            feat_ids = torch.floor(key_xy[select_mask] * select_map_sizes).int()
-            feat_ids[:, 1] = feat_ids[:, 1] * select_map_sizes[:, 0]
-            feat_ids = map_offsets[select_map_ids] + feat_ids.sum(dim=1)
+                refine_mask = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
+                refine_mask = (refine_mask > 0) & (refine_mask < grid_area)
 
-            select_batch_ids = batch_ids[select_mask]
-            key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
+                qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
+                qry_ids_list.append(qry_ids)
 
-            seg_qry_feats = qry_feats_i[:, :half_size]
-            seg_key_feats = key_feats_i[:, :half_size]
+                key_wh = key_wh[refine_mask].view(-1, 2)
+                key_wh_list.append(key_wh)
 
-            seg_logits = (seg_qry_feats * seg_key_feats).sum(dim=1)
-            seg_logits_list.append(seg_logits)
+                key_xy = key_xy[refine_mask].view(-1, 2)
+                key_xy_list.append(key_xy)
 
-            refine_qry_feats = qry_feats_i[:, -half_size:]
-            refine_key_feats = key_feats_i[:, -half_size:]
+                tgt_ids = tgt_ids[refine_mask].view(-1)
 
-            refine_logits = (refine_qry_feats * refine_key_feats).sum(dim=1)
-            refine_logits_list.append(refine_logits)
+                qry_feats_i = qry_feats[qry_ids]
+                key_feats_i = torch.zeros_like(qry_feats_i)
+
+                batch_ids = batch_ids[refine_mask]
+                batch_ids = batch_ids.repeat_interleave(grid_area, dim=0)
+
+                map_ids = map_ids[refine_mask] - 1
+                map_ids = map_ids.repeat_interleave(grid_area, dim=0)
+
+                sample_mask = map_ids < 0
+                sample_batch_ids = batch_ids[sample_mask]
+                sample_xy = 2*key_xy[None, sample_mask, None, :] - 1
+
+                for j in range(batch_size):
+                    sample_map_j = key_feat_maps[0][j:j+1]
+                    sample_xy_j = sample_xy[:, sample_batch_ids == j, :, :]
+
+                    sample_key_feats_j = F.grid_sample(sample_map_j, sample_xy_j, align_corners=False)
+                    sample_key_feats_j = sample_key_feats_j[0, :, :, 0].t()
+
+                    sample_mask_j = sample_mask & (batch_ids == j)
+                    key_feats_i[sample_mask_j] = sample_key_feats_j
+
+                select_mask = ~sample_mask
+                select_map_ids = map_ids[select_mask]
+                select_map_sizes = map_sizes[select_map_ids]
+
+                feat_ids = torch.floor(key_xy[select_mask] * select_map_sizes).int()
+                feat_ids[:, 1] = feat_ids[:, 1] * select_map_sizes[:, 0]
+                feat_ids = map_offsets[select_map_ids] + feat_ids.sum(dim=1)
+
+                select_batch_ids = batch_ids[select_mask]
+                key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
+
+                seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
+                seg_logits_list.append(seg_logits)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
         key_wh = torch.cat(key_wh_list, dim=0)
         seg_logits = torch.cat(seg_logits_list, dim=0)
-        refine_logits = torch.cat(refine_logits_list, dim=0)
 
         storage_dict['qry_ids'] = qry_ids
         storage_dict['key_xy'] = key_xy
         storage_dict['key_wh'] = key_wh
         storage_dict['seg_logits'] = seg_logits
-        storage_dict['refine_logits'] = refine_logits
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
@@ -1228,9 +1234,7 @@ class TopDownSegHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
-                - key_wh (FloatTensor): normalized key sizes of query-key pairs of shape [num_qry_key_pairs, 2];
                 - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
-                - refine_logits (FloatTensor): refinement logits of query-key pairs of shape [num_qry_key_pairs];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -1244,12 +1248,10 @@ class TopDownSegHead(nn.Module):
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional keys:
-                - seg_loss (FloatTensor): segmentation loss of shape [];
-                - refine_loss (FloatTensor): refinement loss of shape [].
+                - seg_loss (FloatTensor): segmentation loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional keys (if not None):
-                - seg_acc (FloatTensor): segmentation accuracy of shape [];
-                - refine_acc (FloatTensor): refinement accuracy of shape [].
+                - seg_acc (FloatTensor): segmentation accuracy of shape [].
 
         Raises:
             ValueError: Error when a single query is matched with multiple targets.
@@ -1262,9 +1264,7 @@ class TopDownSegHead(nn.Module):
         # Retrieve various items of interest from storage dictionary
         qry_ids = storage_dict['qry_ids']
         key_xy = storage_dict['key_xy']
-        key_wh = storage_dict['key_wh']
         seg_logits = storage_dict['seg_logits']
-        refine_logits = storage_dict['refine_logits']
 
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
@@ -1280,14 +1280,6 @@ class TopDownSegHead(nn.Module):
             key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
             loss_dict[key_name] = seg_loss
 
-            # Get refinement loss
-            refine_targets = torch.zeros_like(refine_logits)
-            loss_weights = torch.full_like(refine_logits, fill_value=1/len(refine_logits))
-
-            refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
-            key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
-            loss_dict[key_name] = refine_loss
-
             # Perform analyses if needed
             if analysis_dict is not None:
 
@@ -1297,14 +1289,6 @@ class TopDownSegHead(nn.Module):
 
                 key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
                 analysis_dict[key_name] = 100 * seg_acc
-
-                # Get refinement accuracy
-                refine_preds = refine_logits > 0
-                refine_targets = refine_targets.bool()
-                refine_acc = (refine_preds == refine_targets).sum() / len(refine_preds)
-
-                key_name = f'refine_acc_{id}' if id is not None else 'refine_acc'
-                analysis_dict[key_name] = 100 * refine_acc
 
             return loss_dict, analysis_dict
 
@@ -1350,38 +1334,6 @@ class TopDownSegHead(nn.Module):
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
 
-        # Get refinement loss
-        grid_size = self.refine_grid_size
-        grid_area = grid_size ** 2
-
-        grid_offsets = torch.arange(grid_size, device=device) - (grid_size-1) / 2
-        grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
-        grid_offsets = torch.stack(grid_offsets, dim=2).flatten(0, 1)
-
-        key_wh = key_wh[matched_qry_mask] / grid_size
-        key_wh = key_wh[:, None, :].expand(-1, grid_area, -1)
-        delta_key_xy = grid_offsets[None, :, :] * key_wh
-
-        key_xy = key_xy[:, None, :].expand(-1, grid_area, -1)
-        key_xy = key_xy + delta_key_xy
-
-        tgt_ids = tgt_ids[:, None].expand(-1, grid_area)
-        x_ids = (key_xy[:, :, 0] * iW).to(torch.int64)
-        y_ids = (key_xy[:, :, 1] * iH).to(torch.int64)
-
-        refine_targets = torch.zeros_like(refine_logits, dtype=torch.float)
-        matched_refine_targets = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
-        matched_refine_targets = (matched_refine_targets > 0) & (matched_refine_targets < grid_area)
-        refine_targets[matched_qry_mask] = matched_refine_targets.float()
-
-        num_unmatched_pairs = (matched_qry_mask == 0).sum().item()
-        loss_weights = torch.full_like(refine_logits, fill_value=1/num_unmatched_pairs)
-        loss_weights[matched_qry_mask] = matched_loss_weights
-
-        refine_loss = self.refine_loss(refine_logits, refine_targets, weight=loss_weights)
-        key_name = f'refine_loss_{id}' if id is not None else 'refine_loss'
-        loss_dict[key_name] = refine_loss
-
         # Perform analyses if needed
         if analysis_dict is not None:
 
@@ -1392,14 +1344,6 @@ class TopDownSegHead(nn.Module):
 
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc
-
-            # Get refinement accuracy
-            refine_preds = refine_logits > 0
-            refine_targets = refine_targets.bool()
-            refine_acc = (refine_preds == refine_targets).sum() / len(refine_preds)
-
-            key_name = f'refine_acc_{id}' if id is not None else 'refine_acc'
-            analysis_dict[key_name] = 100 * refine_acc
 
         return loss_dict, analysis_dict
 
