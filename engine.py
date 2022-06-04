@@ -103,8 +103,10 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
 
     # Get one evaluator per prediction dictionary
     if evaluator is not None:
-        sample_images = next(iter(dataloader))[0]
-        pred_dicts = model(sample_images.to(device))[0]
+        sample_images, tgt_dict = next(iter(dataloader))
+        sample_images = sample_images.to(device)
+        tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
+        pred_dicts = model(sample_images, tgt_dict)[0]
 
         evaluator.reset()
         evaluators = []
