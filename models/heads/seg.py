@@ -1164,18 +1164,18 @@ class TopDownSegHead(nn.Module):
                 refine_mask = (refine_mask > 0) & (refine_mask < grid_area)
 
                 qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
-                qry_ids_list = [qry_ids]
+                qry_ids_list.append(qry_ids)
 
                 key_wh = key_wh[refine_mask] / grid_size
                 key_wh = key_wh.repeat_interleave(grid_area, dim=0)
-                key_wh_list = [key_wh]
+                key_wh_list.append(key_wh)
 
                 delta_key_xy = grid_offsets[None, :, :] * key_wh.view(-1, grid_area, 2)
                 delta_key_xy = delta_key_xy.flatten(0, 1)
 
                 key_xy = key_xy[refine_mask].repeat_interleave(grid_area, dim=0)
                 key_xy = key_xy + delta_key_xy
-                key_xy_list = [key_xy]
+                key_xy_list.append(key_xy)
 
                 tgt_ids = tgt_ids[refine_mask].flatten()
 
@@ -1214,7 +1214,7 @@ class TopDownSegHead(nn.Module):
                 key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
 
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
-                seg_logits_list = [torch.ones_like(seg_logits)]
+                seg_logits_list.append(seg_logits)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
