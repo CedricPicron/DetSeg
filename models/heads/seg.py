@@ -592,6 +592,7 @@ class TopDownSegHead(nn.Module):
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
+        tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
         pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
         pred_bias (float): Bias used as initial value of the prediction maps.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
@@ -607,8 +608,9 @@ class TopDownSegHead(nn.Module):
         seg_loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, pred_downscale, pred_bias,
-                 metadata, seg_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+    def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, tgt_sample_mul, pred_downscale,
+                 pred_bias, metadata, seg_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
+                 **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -618,6 +620,7 @@ class TopDownSegHead(nn.Module):
             map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_grid_size (int): Integer containing the size of the refinement grid.
+            tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
             pred_downscale (int): Integer determining how much prediction maps are downscaled w.r.t. input images.
             pred_bias (float): Bias used as initial value of the prediction maps.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -648,6 +651,7 @@ class TopDownSegHead(nn.Module):
         self.map_offset = map_offset
         self.refine_iters = refine_iters
         self.refine_grid_size = refine_grid_size
+        self.tgt_sample_mul = tgt_sample_mul
         self.pred_downscale = pred_downscale
         self.pred_bias = pred_bias
         self.get_segs = get_segs
@@ -1110,6 +1114,10 @@ class TopDownSegHead(nn.Module):
         if len(matched_qry_ids) > 0:
             iW, iH = images.size()
 
+            tgt_sample_offsets = torch.arange(2, device=device) - 0.5
+            tgt_sample_offsets = torch.meshgrid(tgt_sample_offsets, tgt_sample_offsets, indexing='xy')
+            tgt_sample_offsets = torch.stack(tgt_sample_offsets, dim=2).flatten(0, 1)
+
             grid_size = self.refine_grid_size
             grid_area = grid_size ** 2
 
@@ -1144,30 +1152,32 @@ class TopDownSegHead(nn.Module):
             tgt_ids = matched_tgt_ids[match_ids[qry_ids]]
 
             for i in range(self.refine_iters):
-                key_wh = key_wh / grid_size
-                key_wh = key_wh[:, None, :].expand(-1, grid_area, -1)
-                delta_key_xy = grid_offsets[None, :, :] * key_wh
+                tgt_ids = tgt_ids[:, None].expand(-1, 4)
 
-                key_xy = key_xy[:, None, :].expand(-1, grid_area, -1)
-                key_xy = key_xy + delta_key_xy
+                delta_tgt_sample_xy = self.tgt_sample_mul * tgt_sample_offsets[None, :, :] * key_wh[:, None, :]
+                tgt_sample_xy = key_xy[:, None, :] + delta_tgt_sample_xy
 
-                tgt_ids = tgt_ids[:, None].expand(-1, grid_area)
-                x_ids = (key_xy[:, :, 0] * iW).to(torch.int64)
-                y_ids = (key_xy[:, :, 1] * iH).to(torch.int64)
+                x_ids = (tgt_sample_xy[:, :, 0] * iW).to(torch.int64).clamp(min=0, max=iW-1)
+                y_ids = (tgt_sample_xy[:, :, 1] * iH).to(torch.int64).clamp(min=0, max=iH-1)
 
                 refine_mask = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
                 refine_mask = (refine_mask > 0) & (refine_mask < grid_area)
 
                 qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
-                qry_ids_list.append(qry_ids)
+                qry_ids_list = [qry_ids]
 
-                key_wh = key_wh[refine_mask].view(-1, 2)
-                key_wh_list.append(key_wh)
+                key_wh = key_wh[refine_mask] / grid_size
+                key_wh = key_wh.repeat_interleave(grid_area, dim=0)
+                key_wh_list = [key_wh]
 
-                key_xy = key_xy[refine_mask].view(-1, 2)
-                key_xy_list.append(key_xy)
+                delta_key_xy = grid_offsets[None, :, :] * key_wh.view(-1, grid_area, 2)
+                delta_key_xy = delta_key_xy.flatten(0, 1)
 
-                tgt_ids = tgt_ids[refine_mask].view(-1)
+                key_xy = key_xy[refine_mask].repeat_interleave(grid_area, dim=0)
+                key_xy = key_xy + delta_key_xy
+                key_xy_list = [key_xy]
+
+                tgt_ids = tgt_ids[refine_mask].flatten()
 
                 qry_feats_i = qry_feats[qry_ids]
                 key_feats_i = torch.zeros_like(qry_feats_i)
@@ -1204,7 +1214,7 @@ class TopDownSegHead(nn.Module):
                 key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
 
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
-                seg_logits_list.append(seg_logits)
+                seg_logits_list = [torch.ones_like(seg_logits)]
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
@@ -1222,7 +1232,7 @@ class TopDownSegHead(nn.Module):
 
         # Draw predicted and target segmentations if needed
         if images_dict is not None:
-            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, tgt_dict=tgt_dict, **kwargs)
 
         return storage_dict, images_dict
 
