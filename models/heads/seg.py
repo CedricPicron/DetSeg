@@ -776,21 +776,21 @@ class TopDownSegHead(nn.Module):
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Get prediction masks at image resolution
-            mask = (map_ids >= 0) & (seg_batch_ids == i)
+            seg_batch_mask = seg_batch_ids == i
 
-            qry_ids_i = qry_ids[mask]
-            key_xy_i = key_xy[mask]
-            map_ids_i = map_ids[mask]
-            seg_logits_i = seg_logits[mask]
+            qry_ids_i = qry_ids[seg_batch_mask]
+            key_xy_i = key_xy[seg_batch_mask]
+            map_ids_i = map_ids[seg_batch_mask]
+            seg_logits_i = seg_logits[seg_batch_mask]
 
             num_preds_i = len(feat_ids_i)
-            mask = feat_ids_i[:, None] == qry_ids_i[None, :]
+            feat_qry_mask = feat_ids_i[:, None] == qry_ids_i[None, :]
 
-            key_xy_i = key_xy_i[None, :, :].expand(num_preds_i, -1, -1)[mask]
-            map_ids_i = map_ids_i[None, :].expand(num_preds_i, -1)[mask]
-            seg_logits_i = seg_logits_i[None, :].expand(num_preds_i, -1)[mask]
+            key_xy_i = key_xy_i[None, :, :].expand(num_preds_i, -1, -1)[feat_qry_mask]
+            map_ids_i = map_ids_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
+            seg_logits_i = seg_logits_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
 
-            numel_per_pred = mask.sum(dim=1)
+            numel_per_pred = feat_qry_mask.sum(dim=1)
             pred_ids_i = torch.arange(num_preds_i, device=device).repeat_interleave(numel_per_pred, dim=0)
 
             numel_per_map = num_preds_i * map_shapes_prod
@@ -977,7 +977,6 @@ class TopDownSegHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
-                - key_wh (FloatTensor): normalized key sizes of query-key pairs of shape [num_qry_key_pairs, 2];
                 - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
@@ -1099,7 +1098,6 @@ class TopDownSegHead(nn.Module):
 
         qry_ids_list = [qry_ids]
         key_xy_list = [key_xy]
-        key_wh_list = [key_wh]
 
         batch_ids_list = [batch_ids]
         map_ids_list = [map_ids]
@@ -1153,23 +1151,22 @@ class TopDownSegHead(nn.Module):
             tgt_ids = matched_tgt_ids[match_ids[qry_ids]]
 
             for i in range(self.refine_iters):
-                tgt_ids = tgt_ids[:, None].expand(-1, 4)
-
                 delta_tgt_sample_xy = self.tgt_sample_mul * tgt_sample_offsets[None, :, :] * key_wh[:, None, :]
                 tgt_sample_xy = key_xy[:, None, :] + delta_tgt_sample_xy
 
                 x_ids = (tgt_sample_xy[:, :, 0] * iW).to(torch.int64).clamp(min=0, max=iW-1)
                 y_ids = (tgt_sample_xy[:, :, 1] * iH).to(torch.int64).clamp(min=0, max=iH-1)
 
+                tgt_ids = tgt_ids[:, None].expand(-1, 4)
                 refine_mask = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
-                refine_mask = (refine_mask > 0) & (refine_mask < grid_area)
+                refine_mask = (refine_mask > 0) & (refine_mask < grid_area) & (map_ids > 0)
 
+                tgt_ids = tgt_ids[refine_mask].flatten()
                 qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
                 qry_ids_list.append(qry_ids)
 
                 key_wh = key_wh[refine_mask] / grid_size
                 key_wh = key_wh.repeat_interleave(grid_area, dim=0)
-                key_wh_list.append(key_wh)
 
                 delta_key_xy = grid_offsets[None, :, :] * key_wh.view(-1, grid_area, 2)
                 delta_key_xy = delta_key_xy.flatten(0, 1)
@@ -1177,11 +1174,6 @@ class TopDownSegHead(nn.Module):
                 key_xy = key_xy[refine_mask].repeat_interleave(grid_area, dim=0)
                 key_xy = key_xy + delta_key_xy
                 key_xy_list.append(key_xy)
-
-                tgt_ids = tgt_ids[refine_mask].flatten()
-
-                qry_feats_i = qry_feats[qry_ids]
-                key_feats_i = torch.zeros_like(qry_feats_i)
 
                 batch_ids = batch_ids[refine_mask]
                 batch_ids = batch_ids.repeat_interleave(grid_area, dim=0)
@@ -1191,44 +1183,25 @@ class TopDownSegHead(nn.Module):
                 map_ids = map_ids.repeat_interleave(grid_area, dim=0)
                 map_ids_list.append(map_ids)
 
-                sample_mask = map_ids < 0
-                sample_batch_ids = batch_ids[sample_mask]
-                sample_xy = 2*key_xy[None, sample_mask, None, :] - 1
+                map_sizes_i = map_sizes[map_ids]
+                feat_ids = torch.floor(key_xy * map_sizes_i).int()
+                feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
+                feat_ids = map_offsets[map_ids] + feat_ids.sum(dim=1)
 
-                for j in range(batch_size):
-                    sample_map_j = key_feat_maps[0][j:j+1]
-                    sample_xy_j = sample_xy[:, sample_batch_ids == j, :, :]
-
-                    sample_key_feats_j = F.grid_sample(sample_map_j, sample_xy_j, align_corners=False)
-                    sample_key_feats_j = sample_key_feats_j[0, :, :, 0].t()
-
-                    sample_mask_j = sample_mask & (batch_ids == j)
-                    key_feats_i[sample_mask_j] = sample_key_feats_j
-
-                select_mask = ~sample_mask
-                select_map_ids = map_ids[select_mask]
-                select_map_sizes = map_sizes[select_map_ids]
-
-                feat_ids = torch.floor(key_xy[select_mask] * select_map_sizes).int()
-                feat_ids[:, 1] = feat_ids[:, 1] * select_map_sizes[:, 0]
-                feat_ids = map_offsets[select_map_ids] + feat_ids.sum(dim=1)
-
-                select_batch_ids = batch_ids[select_mask]
-                key_feats_i[select_mask] = key_feats[select_batch_ids, feat_ids, :]
+                qry_feats_i = qry_feats[qry_ids]
+                key_feats_i = key_feats[batch_ids, feat_ids, :]
 
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
                 seg_logits_list.append(seg_logits)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
-        key_wh = torch.cat(key_wh_list, dim=0)
         batch_ids = torch.cat(batch_ids_list, dim=0)
         map_ids = torch.cat(map_ids_list, dim=0)
         seg_logits = torch.cat(seg_logits_list, dim=0)
 
         storage_dict['qry_ids'] = qry_ids
         storage_dict['key_xy'] = key_xy
-        storage_dict['key_wh'] = key_wh
         storage_dict['batch_ids'] = batch_ids
         storage_dict['map_ids'] = map_ids
         storage_dict['map_shapes'] = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
