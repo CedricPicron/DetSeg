@@ -272,8 +272,8 @@ model = dict(
                 ),
             ],
             map_offset=1,
-            refine_iters=1,
-            refine_grid_size=3,
+            refine_iters=2,
+            refine_grid_size=2,
             tgt_sample_mul=1.5,
             get_segs=True,
             dup_attrs=dict(
@@ -284,6 +284,7 @@ model = dict(
             max_segs=100,
             mask_thr=0.5,
             matcher_cfg=None,
+            refined_weight=0.1,
             seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,

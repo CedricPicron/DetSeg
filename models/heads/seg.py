@@ -9,6 +9,7 @@ from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch_scatter import scatter_sum
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -604,11 +605,13 @@ class TopDownSegHead(nn.Module):
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
+        refined_weight (float): Factor weighting the losses of query-key pairs which were later refined.
         seg_loss (nn.Module): Module computing the segmentation loss.
     """
 
     def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, tgt_sample_mul, mask_thr,
-                 metadata,  seg_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+                 metadata,  refined_weight, seg_loss_cfg, get_segs=True, dup_attrs=None, max_segs=None,
+                 matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -621,6 +624,7 @@ class TopDownSegHead(nn.Module):
             tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            refined_weight (float): Factor weighting the losses of query-key pairs which were later refined.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
@@ -654,6 +658,7 @@ class TopDownSegHead(nn.Module):
         self.max_segs = max_segs
         self.mask_thr = mask_thr
         self.metadata = metadata
+        self.refined_weight = refined_weight
 
     @torch.no_grad()
     def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -980,7 +985,8 @@ class TopDownSegHead(nn.Module):
                 - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
-                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
+                - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
         """
@@ -1104,6 +1110,7 @@ class TopDownSegHead(nn.Module):
 
         seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
         seg_logits_list = [seg_logits]
+        refined_mask_list = []
 
         # Get refined query-key pairs with segmentation and refinement logits
         matched_qry_ids = storage_dict['matched_qry_ids']
@@ -1194,11 +1201,24 @@ class TopDownSegHead(nn.Module):
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
                 seg_logits_list.append(seg_logits)
 
+                if i == 0:
+                    refine_ids = torch.nonzero(match_mask, as_tuple=True)[0]
+                    refine_ids = refine_ids[torch.nonzero(refine_mask, as_tuple=True)[0]]
+
+                    refine_mask = torch.zeros_like(seg_logits_list[0], dtype=torch.bool)
+                    refine_mask[refine_ids] = 1.0
+
+                refined_mask_list.append(refine_mask)
+
+        refine_mask = torch.zeros_like(seg_logits, dtype=torch.bool)
+        refined_mask_list.append(refine_mask)
+
         qry_ids = torch.cat(qry_ids_list, dim=0)
         key_xy = torch.cat(key_xy_list, dim=0)
         batch_ids = torch.cat(batch_ids_list, dim=0)
         map_ids = torch.cat(map_ids_list, dim=0)
         seg_logits = torch.cat(seg_logits_list, dim=0)
+        refined_mask = torch.cat(refined_mask_list, dim=0)
 
         storage_dict['qry_ids'] = qry_ids
         storage_dict['key_xy'] = key_xy
@@ -1206,6 +1226,7 @@ class TopDownSegHead(nn.Module):
         storage_dict['map_ids'] = map_ids
         storage_dict['map_shapes'] = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
         storage_dict['seg_logits'] = seg_logits
+        storage_dict['refined_mask'] = refined_mask
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
@@ -1226,6 +1247,7 @@ class TopDownSegHead(nn.Module):
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
                 - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
+                - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].;
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -1256,6 +1278,7 @@ class TopDownSegHead(nn.Module):
         qry_ids = storage_dict['qry_ids']
         key_xy = storage_dict['key_xy']
         seg_logits = storage_dict['seg_logits']
+        refined_mask = storage_dict['refined_mask']
 
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
@@ -1316,10 +1339,13 @@ class TopDownSegHead(nn.Module):
         seg_targets = seg_targets.float()
 
         # Get segmentation loss
-        inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
-        matched_loss_weights = 1 / counts[inv_ids]
+        refined_mask = refined_mask[matched_qry_mask]
+        loss_weights = torch.where(refined_mask, self.refined_weight, 1.0)
 
-        seg_loss = self.seg_loss(seg_logits, seg_targets, weight=matched_loss_weights)
+        inv_ids = torch.unique(qry_ids, sorted=False, return_inverse=True)[1]
+        loss_weights = loss_weights / scatter_sum(loss_weights, inv_ids)[inv_ids]
+
+        seg_loss = self.seg_loss(seg_logits, seg_targets, weight=loss_weights)
         seg_loss = seg_loss + sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'

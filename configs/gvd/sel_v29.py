@@ -284,6 +284,7 @@ model = dict(
             max_segs=100,
             mask_thr=0.5,
             matcher_cfg=None,
+            refined_weight=0.5,
             seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
