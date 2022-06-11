@@ -275,8 +275,6 @@ model = dict(
             refine_iters=1,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
-            pred_downscale=4,
-            pred_bias=-0.1,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
@@ -284,6 +282,7 @@ model = dict(
                 nms_thr=0.5,
             ),
             max_segs=100,
+            mask_thr=0.5,
             matcher_cfg=None,
             seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
