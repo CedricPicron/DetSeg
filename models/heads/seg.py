@@ -605,7 +605,7 @@ class TopDownSegHead(nn.Module):
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
-        refined_weight (float): Factor weighting the losses of query-key pairs which were later refined.
+        refined_weight (float): Factor weighting the predictions and losses of refined query-key pairs.
         seg_loss (nn.Module): Module computing the segmentation loss.
     """
 
@@ -624,7 +624,7 @@ class TopDownSegHead(nn.Module):
             tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-            refined_weight (float): Factor weighting the losses of query-key pairs which were later refined.
+            refined_weight (float): Factor weighting the predictions and losses of refined query-key pairs.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
@@ -675,7 +675,8 @@ class TopDownSegHead(nn.Module):
                 - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
-                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs].
+                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
+                - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -702,6 +703,7 @@ class TopDownSegHead(nn.Module):
         map_ids = storage_dict['map_ids']
         map_shapes = storage_dict['map_shapes']
         seg_logits = storage_dict['seg_logits']
+        refined_mask = storage_dict['refined_mask']
 
         # Get number of features, number of classes and device
         num_feats = cls_logits.size(dim=0)
@@ -787,6 +789,7 @@ class TopDownSegHead(nn.Module):
             key_xy_i = key_xy[seg_batch_mask]
             map_ids_i = map_ids[seg_batch_mask]
             seg_logits_i = seg_logits[seg_batch_mask]
+            refined_mask_i = refined_mask[seg_batch_mask]
 
             num_preds_i = len(feat_ids_i)
             feat_qry_mask = feat_ids_i[:, None] == qry_ids_i[None, :]
@@ -794,6 +797,10 @@ class TopDownSegHead(nn.Module):
             key_xy_i = key_xy_i[None, :, :].expand(num_preds_i, -1, -1)[feat_qry_mask]
             map_ids_i = map_ids_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
             seg_logits_i = seg_logits_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
+            refined_mask_i = refined_mask_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
+
+            refined_weights = torch.where(refined_mask_i, self.refined_weight, 1.0)
+            seg_logits_i = refined_weights * seg_logits_i
 
             numel_per_pred = feat_qry_mask.sum(dim=1)
             pred_ids_i = torch.arange(num_preds_i, device=device).repeat_interleave(numel_per_pred, dim=0)
