@@ -249,7 +249,7 @@ model = dict(
                 ),
                 dict(
                     type='BottleneckConv',
-                    num_layers=1,
+                    num_layers=4,
                     in_channels=256,
                     bottle_channels=64,
                     out_channels=256,
@@ -272,7 +272,7 @@ model = dict(
                 ),
             ],
             map_offset=1,
-            refine_iters=2,
+            refine_iters=1,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
             get_segs=True,
@@ -284,7 +284,7 @@ model = dict(
             max_segs=100,
             mask_thr=0.5,
             matcher_cfg=None,
-            refined_weight=0.01,
+            refined_weight=0.1,
             seg_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
