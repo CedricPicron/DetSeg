@@ -4,6 +4,9 @@ Function building registered models.
 from copy import deepcopy
 
 from mmcv.cnn import initialize
+from mmcv.cnn.bricks import ACTIVATION_LAYERS, CONV_LAYERS, NORM_LAYERS, PADDING_LAYERS, PLUGIN_LAYERS, UPSAMPLE_LAYERS
+from mmcv.cnn.builder import MODELS as MMCV_MODELS
+from mmcv.cnn.utils import INITIALIZERS
 from mmcv.utils import build_from_cfg, Registry
 from mmdet.core.anchor.builder import PRIOR_GENERATORS
 from mmdet.core.bbox.builder import BBOX_ASSIGNERS, BBOX_SAMPLERS, BBOX_CODERS
@@ -55,13 +58,23 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
 # Create registry
 MODELS = Registry('models', build_func=build_model_from_cfg)
 
+# Add modules from MMCV
+[MMCV_MODELS.register_module(name, module=module) for name, module in ACTIVATION_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in CONV_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in NORM_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in PADDING_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in PLUGIN_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module, force=True) for name, module in UPSAMPLE_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in INITIALIZERS.module_dict.items()]
+MODELS._add_children(MMCV_MODELS)
+
 # Add modules from MMDetection
-[MMDET_MODELS.register_module(module) for module in PRIOR_GENERATORS.module_dict.values()]
-[MMDET_MODELS.register_module(module) for module in BBOX_ASSIGNERS.module_dict.values()]
-[MMDET_MODELS.register_module(module) for module in BBOX_SAMPLERS.module_dict.values()]
-[MMDET_MODELS.register_module(module) for module in BBOX_CODERS.module_dict.values()]
-[MMDET_MODELS.register_module(module) for module in IOU_CALCULATORS.module_dict.values()]
-[MMDET_MODELS.register_module(module) for module in MATCH_COST.module_dict.values()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in PRIOR_GENERATORS.module_dict.items()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_ASSIGNERS.module_dict.items()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_SAMPLERS.module_dict.items()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_CODERS.module_dict.items()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in IOU_CALCULATORS.module_dict.items()]
+[MMDET_MODELS.register_module(name, module=module) for name, module in MATCH_COST.module_dict.items()]
 MODELS._add_children(MMDET_MODELS)
 
 # Add modules from torch.nn

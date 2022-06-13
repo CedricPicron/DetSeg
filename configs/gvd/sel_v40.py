@@ -243,7 +243,7 @@ model = dict(
                 module_cfg=[
                     dict(
                         type='mmcv.ConvModule',
-                        num_layers=4,
+                        num_layers=1,
                         in_channels=256,
                         out_channels=256,
                         kernel_size=3,
@@ -264,7 +264,7 @@ model = dict(
                 ],
             ),
             map_offset=0,
-            refine_iters=1,
+            refine_iters=2,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
             get_segs=True,
