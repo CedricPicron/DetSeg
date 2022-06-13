@@ -117,6 +117,7 @@ class OneStepMLP(nn.Module):
             self.act_fn = nn.ReLU(inplace=False) if not norm and skip else nn.ReLU(inplace=True)
         else:
             error_msg = f"The OneStepMLP module does not support the '{act_fn}' activation function."
+            raise ValueError(error_msg)
 
         # Get and check output feature size
         if skip and out_size == -1:
