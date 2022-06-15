@@ -222,6 +222,7 @@ model = dict(
             qry_cfg=[
                 dict(
                     type='OneStepMLP',
+                    num_layers=1,
                     in_size=256,
                     out_size=256,
                     norm='layer',
@@ -229,13 +230,8 @@ model = dict(
                     skip=False,
                 ),
                 dict(
-                    type='OneStepMLP',
-                    num_layers=1,
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=True,
+                    type='nn.ReLU',
+                    inplace=True,
                 ),
             ],
             key_cfg=dict(
@@ -264,7 +260,7 @@ model = dict(
                 ],
             ),
             map_offset=0,
-            refine_iters=3,
+            refine_iters=2,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
             get_segs=True,

@@ -178,14 +178,13 @@ model = dict(
             type='BaseBox2dHead',
             logits_cfg=[
                 dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
+                    type='OneStepMLP',
+                    num_layers=1,
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=False,
                 ),
                 dict(
                     type='nn.Linear',

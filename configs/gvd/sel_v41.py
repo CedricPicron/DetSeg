@@ -222,20 +222,12 @@ model = dict(
             qry_cfg=[
                 dict(
                     type='OneStepMLP',
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=False,
-                ),
-                dict(
-                    type='OneStepMLP',
                     num_layers=1,
                     in_size=256,
                     out_size=256,
                     norm='layer',
                     act_fn='relu',
-                    skip=True,
+                    skip=False,
                 ),
             ],
             key_cfg=dict(
@@ -281,7 +273,7 @@ model = dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
-                loss_weight=0.75,
+                loss_weight=1.0,
             ),
         ),
     ],
