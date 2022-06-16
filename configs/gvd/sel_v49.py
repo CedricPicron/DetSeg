@@ -238,28 +238,18 @@ model = dict(
                     skip=True,
                 ),
             ],
-            key_cfg=[
-                dict(
-                    type='ProjConv',
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=1,
-                    norm='group',
-                    skip=False,
-                ),
-                dict(
-                    type='BottleneckConv',
-                    num_layers=1,
-                    in_channels=256,
-                    bottle_channels=64,
-                    out_channels=256,
-                    kernel_size=3,
-                    norm='group',
-                    skip=True,
-                ),
-                dict(
-                    type='GetApplyInsert',
-                    module_cfg=dict(
+            key_cfg=dict(
+                type='ApplyAll',
+                module_cfg=[
+                    dict(
+                        type='mmcv.ConvModule',
+                        num_layers=4,
+                        in_channels=256,
+                        out_channels=256,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                    dict(
                         type='ConvTranspose2d',
                         in_channels=256,
                         out_channels=256,
@@ -267,16 +257,15 @@ model = dict(
                         stride=2,
                         padding=1,
                     ),
-                    get_id=0,
-                    insert_id=0,
-                ),
-            ],
-            map_offset=1,
+                    dict(
+                        type='nn.ReLU',
+                        inplace=True,
+                    ),
+                ],
+            ),
+            map_offset=0,
             refine_iters=1,
-            num_refines=4000,
             refine_grid_size=2,
-            pred_downscale=4,
-            pred_bias=-0.1,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
@@ -284,14 +273,10 @@ model = dict(
                 nms_thr=0.5,
             ),
             max_segs=100,
+            mask_thr=0.5,
             matcher_cfg=None,
+            refined_weight=0.01,
             seg_loss_cfg=dict(
-                type='mmdet.CrossEntropyLoss',
-                use_sigmoid=True,
-                reduction='sum',
-                loss_weight=1.0,
-            ),
-            refine_loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
                 reduction='sum',
