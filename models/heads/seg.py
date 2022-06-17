@@ -1036,6 +1036,7 @@ class TopDownSegHead(nn.Module):
         top_ids_list = []
         right_ids_list = []
         bot_ids_list = []
+        ids_offset = 0
 
         qry_ids_list = []
         key_xy_list = []
@@ -1067,70 +1068,77 @@ class TopDownSegHead(nn.Module):
                     top_mask = pts_y[None, :, None] > qry_boxes_i[:, 1, None, None] - 0.5/kH
                     right_mask = pts_x[None, None, :] < qry_boxes_i[:, 2, None, None] + 0.5/kW
                     bot_mask = pts_y[None, :, None] < qry_boxes_i[:, 3, None, None] + 0.5/kH
+
                     key_mask = left_mask & top_mask & right_mask & bot_mask
+                    local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
 
-                    if key_mask.sum().item() > 0:
-                        local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
+                    qry_feats_i = qry_feats_i[local_qry_ids]
+                    qry_feats_list.append(qry_feats_i)
 
-                        qry_feats_i = qry_feats_i[local_qry_ids]
-                        qry_feats_list.append(qry_feats_i)
+                    key_feats_i = key_feat_map.flatten(1).t().contiguous()
+                    key_feats_i = key_feats_i[key_ids, :]
+                    key_feats_list.append(key_feats_i)
 
-                        key_feats_i = key_feat_map.flatten(1).t().contiguous()
-                        key_feats_i = key_feats_i[key_ids, :]
-                        key_feats_list.append(key_feats_i)
+                    roi_ws = (left_mask[:, 0, :] & right_mask[:, 0, :]).sum(dim=1)
+                    roi_hs = (top_mask[:, :, 0] & bot_mask[:, :, 0]).sum(dim=1)
+                    roi_sizes = roi_hs * roi_ws
 
-                        roi_ws = (left_mask[:, 0, :] & right_mask[:, 0, :]).sum(dim=1)
-                        roi_hs = (top_mask[:, :, 0] & bot_mask[:, :, 0]).sum(dim=1)
-                        roi_sizes = roi_hs * roi_ws
-                        num_feats_i = roi_sizes.sum().item()
+                    roi_mask = roi_sizes > 0
+                    roi_ws = roi_ws[roi_mask]
+                    roi_hs = roi_hs[roi_mask]
+                    roi_sizes = roi_sizes[roi_mask]
 
-                        left_ids_i = torch.arange(-1, num_feats_i-1, device=device)
-                        right_ids_i = torch.arange(1, num_feats_i+1, device=device)
+                    num_feats_i = roi_sizes.sum().item()
+                    left_ids_i = ids_offset + torch.arange(-1, num_feats_i-1, device=device)
+                    right_ids_i = ids_offset + torch.arange(1, num_feats_i+1, device=device)
 
-                        bnd_ids_x = roi_ws.repeat_interleave(roi_hs, dim=0).cumsum(dim=0)
-                        left_bnd_ids = bnd_ids_x[:-1]
-                        right_bnd_ids = bnd_ids_x - 1
+                    bnd_ids_x = roi_ws.repeat_interleave(roi_hs, dim=0).cumsum(dim=0)
+                    bnd_ids_x = torch.cat([bnd_ids_x.new_zeros([1]), bnd_ids_x], dim=0)
 
-                        top_bot_ids_i = torch.arange(num_feats_i, device=device)
-                        top_ids_i = top_bot_ids_i - roi_ws.repeat_interleave(roi_sizes, dim=0)
-                        bot_ids_i = top_bot_ids_i + roi_ws.repeat_interleave(roi_sizes, dim=0)
+                    left_bnd_ids = bnd_ids_x[:-1]
+                    right_bnd_ids = bnd_ids_x[1:] - 1
 
-                        bnd_ids_y = torch.arange(roi_ws.sum().item(), device=device)
-                        delta_bnd_ids_y = torch.cat([roi_ws.new_zeros([1]), roi_sizes-roi_ws], dim=0)
-                        delta_bnd_ids_y = delta_bnd_ids_y.cumsum(dim=0)[:-1].repeat_interleave(roi_ws, dim=0)
-                        bnd_ids_y = bnd_ids_y + delta_bnd_ids_y
+                    top_bot_ids_i = ids_offset + torch.arange(num_feats_i, device=device)
+                    top_ids_i = top_bot_ids_i - roi_ws.repeat_interleave(roi_sizes, dim=0)
+                    bot_ids_i = top_bot_ids_i + roi_ws.repeat_interleave(roi_sizes, dim=0)
 
-                        top_bnd_ids = bnd_ids_y
-                        bot_bnd_ids = bnd_ids_y + ((roi_hs-1) * roi_ws).repeat_interleave(roi_ws, dim=0)
+                    bnd_ids_y = torch.arange(roi_ws.sum().item(), device=device)
+                    delta_bnd_ids_y = torch.cat([roi_ws.new_zeros([1]), roi_sizes-roi_ws], dim=0)
+                    delta_bnd_ids_y = delta_bnd_ids_y.cumsum(dim=0)[:-1].repeat_interleave(roi_ws, dim=0)
+                    bnd_ids_y = bnd_ids_y + delta_bnd_ids_y
 
-                        left_ids_i[left_bnd_ids] = -1
-                        top_ids_i[top_bnd_ids] = -1
-                        right_ids_i[right_bnd_ids] = -1
-                        bot_ids_i[bot_bnd_ids] = -1
+                    top_bnd_ids = bnd_ids_y
+                    bot_bnd_ids = bnd_ids_y + ((roi_hs-1) * roi_ws).repeat_interleave(roi_ws, dim=0)
 
-                        left_ids_list.append(left_ids_i)
-                        top_ids_list.append(top_ids_i)
-                        right_ids_list.append(right_ids_i)
-                        bot_ids_list.append(bot_ids_i)
+                    left_ids_i[left_bnd_ids] = -1
+                    top_ids_i[top_bnd_ids] = -1
+                    right_ids_i[right_bnd_ids] = -1
+                    bot_ids_i[bot_bnd_ids] = -1
 
-                        qry_ids_i = qry_ids[local_qry_ids] + i0
-                        qry_ids_list.append(qry_ids_i)
+                    left_ids_list.append(left_ids_i)
+                    top_ids_list.append(top_ids_i)
+                    right_ids_list.append(right_ids_i)
+                    bot_ids_list.append(bot_ids_i)
+                    ids_offset += num_feats_i
 
-                        key_xy_i = torch.meshgrid(pts_x, pts_y, indexing='xy')
-                        key_xy_i = torch.stack(key_xy_i, dim=0).flatten(1)
-                        key_xy_i = key_xy_i[:, key_ids].t()
-                        key_xy_list.append(key_xy_i)
+                    qry_ids_i = qry_ids[local_qry_ids] + i0
+                    qry_ids_list.append(qry_ids_i)
 
-                        num_keys = len(key_ids)
-                        key_wh_i = torch.tensor([1/kW, 1/kH], device=device)
-                        key_wh_i = key_wh_i[None, :].expand(num_keys, -1)
-                        key_wh_list.append(key_wh_i)
+                    key_xy_i = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                    key_xy_i = torch.stack(key_xy_i, dim=0).flatten(1)
+                    key_xy_i = key_xy_i[:, key_ids].t()
+                    key_xy_list.append(key_xy_i)
 
-                        batch_ids_i = torch.full(size=[num_keys], fill_value=i, device=device)
-                        batch_ids_list.append(batch_ids_i)
+                    num_keys = len(key_ids)
+                    key_wh_i = torch.tensor([1/kW, 1/kH], device=device)
+                    key_wh_i = key_wh_i[None, :].expand(num_keys, -1)
+                    key_wh_list.append(key_wh_i)
 
-                        map_ids_i = torch.full(size=[num_keys], fill_value=map_id, device=device)
-                        map_ids_list.append(map_ids_i)
+                    batch_ids_i = torch.full(size=[num_keys], fill_value=i, device=device)
+                    batch_ids_list.append(batch_ids_i)
+
+                    map_ids_i = torch.full(size=[num_keys], fill_value=map_id, device=device)
+                    map_ids_list.append(map_ids_i)
 
         qry_feats_i = torch.cat(qry_feats_list, dim=0)
         key_feats_i = torch.cat(key_feats_list, dim=0)
@@ -1185,12 +1193,14 @@ class TopDownSegHead(nn.Module):
             bot_refine_mask = seg_mask[:-2] ^ seg_mask[bot_ids]
 
             refine_mask = left_refine_mask | top_refine_mask | right_refine_mask | bot_refine_mask
+            refine_mask = refine_mask & (map_ids > 0)
             refined_mask_list.append(refine_mask)
 
             if i < self.refine_iters-1:
                 num_refines = refine_mask.sum().item()
                 old_to_new_ids = torch.full_like(refine_mask, fill_value=-1, dtype=torch.int64)
                 old_to_new_ids[refine_mask] = grid_area * torch.arange(num_refines, device=device)
+                old_to_new_ids = torch.cat([old_to_new_ids, old_to_new_ids.new_full(size=[1], fill_value=-1)], dim=0)
 
                 old_left_ids = left_ids[refine_mask]
                 old_top_ids = top_ids[refine_mask]
@@ -1204,7 +1214,7 @@ class TopDownSegHead(nn.Module):
 
                 refined_mask = new_left_ids >= 0
                 refined_ids = refined_mask.nonzero(as_tuple=True)[0][:, None]
-                non_refined_ids = ~refined_mask.nonzero(as_tuple=True)[0][:, None]
+                non_refined_ids = (~refined_mask).nonzero(as_tuple=True)[0][:, None]
                 bnd_ids = grid_size * grid_size_arange[None, :]
                 non_bnd_ids = (grid_size_arange[None, 1:] + grid_size * grid_size_arange[:, None]).view(1, -1)
 
@@ -1215,7 +1225,7 @@ class TopDownSegHead(nn.Module):
 
                 refined_mask = new_right_ids >= 0
                 refined_ids = refined_mask.nonzero(as_tuple=True)[0][:, None]
-                non_refined_ids = ~refined_mask.nonzero(as_tuple=True)[0][:, None]
+                non_refined_ids = (~refined_mask).nonzero(as_tuple=True)[0][:, None]
                 bnd_ids = bnd_ids + grid_size - 1
                 non_bnd_ids = non_bnd_ids - 1
 
@@ -1226,7 +1236,7 @@ class TopDownSegHead(nn.Module):
 
                 refined_mask = new_top_ids >= 0
                 refined_ids = refined_mask.nonzero(as_tuple=True)[0][:, None]
-                non_refined_ids = ~refined_mask.nonzero(as_tuple=True)[0][:, None]
+                non_refined_ids = (~refined_mask).nonzero(as_tuple=True)[0][:, None]
                 bnd_ids = grid_size_arange[None, :]
                 non_bnd_ids = torch.arange(grid_size, grid_area, device=device)[None, :]
 
@@ -1237,7 +1247,7 @@ class TopDownSegHead(nn.Module):
 
                 refined_mask = new_bot_ids >= 0
                 refined_ids = refined_mask.nonzero(as_tuple=True)[0][:, None]
-                non_refined_ids = ~refined_mask.nonzero(as_tuple=True)[0][:, None]
+                non_refined_ids = (~refined_mask).nonzero(as_tuple=True)[0][:, None]
                 bnd_ids = bnd_ids + grid_area - grid_size
                 non_bnd_ids = non_bnd_ids - grid_size
 
