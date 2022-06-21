@@ -264,21 +264,26 @@ model = dict(
                 ],
             ),
             map_offset=0,
+            qk_feat_iters=1,
+            key_qry_cfg=dict(
+                type='ModuleSelector',
+                module_cfg=[
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=256,
+                        bias=True,
+                    ),
+                    dict(
+                        type='nn.ReLU',
+                        inplace=True
+                    ),
+                ],
+                num_modules=3,
+            ),
             refine_iters=2,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
-            refine_key_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True
-                ),
-            ],
             get_segs=True,
             dup_attrs=dict(
                 type='nms',

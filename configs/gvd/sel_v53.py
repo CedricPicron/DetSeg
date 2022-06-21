@@ -264,29 +264,38 @@ model = dict(
                 ],
             ),
             map_offset=0,
+            qk_feat_iters=1,
+            qry_key_cfg=dict(
+                type='ModuleSelector',
+                module_cfg=dict(
+                    type='OneStepMLP',
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=False,
+                ),
+                num_modules=3,
+            ),
+            key_qry_cfg=dict(
+                type='ModuleSelector',
+                module_cfg=[
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=256,
+                        bias=True,
+                    ),
+                    dict(
+                        type='nn.ReLU',
+                        inplace=True
+                    ),
+                ],
+                num_modules=3,
+            ),
             refine_iters=2,
             refine_grid_size=2,
             tgt_sample_mul=1.5,
-            refine_qry_cfg=dict(
-                type='OneStepMLP',
-                in_size=256,
-                out_size=256,
-                norm='layer',
-                act_fn='relu',
-                skip=False,
-            ),
-            refine_key_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True
-                ),
-            ],
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
