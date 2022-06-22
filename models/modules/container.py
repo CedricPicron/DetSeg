@@ -49,13 +49,14 @@ class ModuleSelector(nn.Module):
         # Set attribute containing the output feature size
         self.out_feat_size = out_feat_size
 
-    def forward(self, in_feats, module_id=None, module_ids=None):
+    def forward(self, in_feats, module_id=None, module_ids=None, **kwargs):
         """
         Forward method of the ModuleSelector module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size]
             module_ids (LongTensor): Module indices corresponding to each input feature of shape [num_feats].
+            kwargs (Dict): Dictionary of keyword arguments passed to the selected module or modules.
 
         Returns:
             out_feats (FloatTensor): Output features of shape [num_feats, out_feat_size].
@@ -77,7 +78,7 @@ class ModuleSelector(nn.Module):
 
         # Get output features
         if module_id is not None:
-            out_feats = self.module_list[module_id](in_feats)
+            out_feats = self.module_list[module_id](in_feats, **kwargs)
 
         elif self.out_feat_size is not None:
             num_feats = in_feats.size(dim=0)
@@ -86,7 +87,7 @@ class ModuleSelector(nn.Module):
             for module_id in range(len(self.module_list)):
                 apply_mask = module_ids == module_id
                 module = self.module_list[module_id]
-                out_feats[apply_mask] = module(in_feats[apply_mask])
+                out_feats[apply_mask] = module(in_feats[apply_mask], **kwargs)
 
         else:
             error_msg = "The output feature size must be set during initialization when using 'module_ids'. "
