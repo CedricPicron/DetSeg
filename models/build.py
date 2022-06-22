@@ -40,6 +40,12 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
 
     # Build sub-modules
     for cfg_i in cfg:
+
+        if isinstance(cfg_i, list):
+            module = build_model_from_cfg(cfg_i, registry, sequential, **kwargs)
+            modules.append(module)
+            continue
+
         cfg_i = deepcopy(cfg_i)
         init_cfg = cfg_i.pop('init_cfg', None)
 
