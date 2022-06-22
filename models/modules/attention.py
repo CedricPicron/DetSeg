@@ -2157,6 +2157,84 @@ class MSDAv6(nn.Module):
 
 
 @MODELS.register_module()
+class PairwiseCrossAttn(nn.Module):
+    """
+    Class implementing the PairwiseCrossAttn module.
+
+    Attributes:
+        qry (nn.Module): Module computing the query features from the input features.
+        key (nn.Module): Module computing the key features from the features paired with the input features.
+        val (nn.Module): Module computing the value features from the input features.
+        num_heads (int): Integer containing the number of attention heads.
+        act (nn.Module): Module with activation function applied on the query-key dot products.
+        out (nn.Module): Module computing the output features from the weighted value features.
+    """
+
+    def __init__(self, qry_cfg, key_cfg, val_cfg, num_heads, act_cfg, out_cfg):
+        """
+        Initializes the PairwiseCrossAttn module.
+
+        Args:
+            qry_cfg (Dict): Configuration dictionary specifying the query module.
+            key_cfg (Dict): Configuration dictionary specifying the key module.
+            val_cfg (Dict): Configuration dictionary specifying the value module.
+            num_heads (int): Integer containing the number of attention heads.
+            act_cfg (Dict): Configuration dictionary specifying the activation module.
+            out_cfg (Dict): Configuration dictionary specifying the output module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build query, key and value modules
+        self.qry = build_model(qry_cfg)
+        self.key = build_model(key_cfg)
+        self.val = build_model(val_cfg)
+
+        # Set attribute with number of attention heads
+        self.num_heads = num_heads
+
+        # Build activation and output modules
+        self.act = build_model(act_cfg)
+        self.out = build_model(out_cfg)
+
+    def forward(self, in_feats, pair_feats, **kwargs):
+        """
+        Forward method of the PairwiseCrossAttn module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
+            pair_feats (FloatTensor): Features paired with input features of shape [num_feats, pair_feat_size].
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, out_feat_size].
+        """
+
+        # Get number of features, input feature size and pair feature size
+        num_feats, in_feat_size = in_feats.size()
+        pair_feat_size = pair_feats.size()[1]
+
+        # Get query, key and value features
+        qry_feats = self.qry(in_feats).view(num_feats, self.num_heads, in_feat_size // self.num_heads)
+        key_feats = self.key(pair_feats).view(num_feats, self.num_heads, pair_feat_size // self.num_heads)
+        val_feats = self.val(in_feats).view(num_feats, self.num_heads, in_feat_size // self.num_heads)
+
+        # Get attention weights
+        attn_ws = (qry_feats * key_feats).sum(dim=2)
+        attn_ws = self.act(attn_ws)
+
+        # Get weighted value features
+        val_feats = attn_ws[:, :, None] * val_feats
+        val_feats = val_feats.flatten(1)
+
+        # Get output features
+        out_feats = self.out(val_feats)
+
+        return out_feats
+
+
+@MODELS.register_module()
 class ParticleAttn(nn.Module):
     """
     Class implementing the ParticleAttn module.
