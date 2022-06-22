@@ -267,7 +267,7 @@ model = dict(
             qk_feat_iters=1,
             key_qry_cfg=dict(
                 type='ModuleSelector',
-                module_cfg=[
+                module_cfg=[[
                     dict(
                         type='nn.Linear',
                         in_features=256,
@@ -278,7 +278,7 @@ model = dict(
                         type='nn.ReLU',
                         inplace=True
                     ),
-                ],
+                ] for _ in range(2)],
                 num_modules=3,
             ),
             refine_iters=2,
