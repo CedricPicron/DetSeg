@@ -15,12 +15,12 @@ class ModuleSelector(nn.Module):
     Class implementing the ModuleSelector module.
 
     The ModuleSelector contains a list of modules, with each module having the same architecture, but different
-    weights. In the forward pass, every input feature is provided with a corresponding module id, determining which
-    module to apply to each input feature.
+    weights. During the forward pass, a module is selected either for all of the input features when 'module_id' is
+    provided, either for every specific input feature when 'module_ids' is
 
     Attributes:
         module_list (nn.ModuleList): List of size [num_modules] containing the modules to choose from.
-        out_feat_size (int): Integer containing the output feature size.
+        out_feat_size (int): Integer containing the output feature size (or None).
     """
 
     def __init__(self, module_cfg, num_modules, out_feat_size=None):
@@ -31,9 +31,6 @@ class ModuleSelector(nn.Module):
             module_cfg (Dict): Configuration dictionary specifying the architecture of the modules.
             num_modules (int): Integer containing the number of modules to choose from.
             out_feat_size (int): Integer containing the output feature size (default=None).
-
-        Raises:
-            ValueError: Error when the output feature size cannot be inferred and was not given as input argument.
         """
 
         # Initialization of default nn.Module
@@ -42,15 +39,17 @@ class ModuleSelector(nn.Module):
         # Build list with modules to choose from
         self.module_list = nn.ModuleList([build_model(module_cfg) for _ in range(num_modules)])
 
+        # Try inferring the output feature size if needed
+        if out_feat_size is None:
+            try:
+                out_feat_size = module_cfg.get('out_size', None)
+            except AttributeError:
+                pass
+
         # Set attribute containing the output feature size
-        self.out_feat_size = module_cfg.get('out_size', out_feat_size)
+        self.out_feat_size = out_feat_size
 
-        if self.out_feat_size is None:
-            error_msg = "The output feature size must either be inferred through the 'out_size' key of the module "
-            error_msg += "configuration dictionary, or must be provided by the 'out_feat_size' input argument."
-            raise ValueError(error_msg)
-
-    def forward(self, in_feats, module_ids):
+    def forward(self, in_feats, module_id=None, module_ids=None):
         """
         Forward method of the ModuleSelector module.
 
@@ -60,17 +59,41 @@ class ModuleSelector(nn.Module):
 
         Returns:
             out_feats (FloatTensor): Output features of shape [num_feats, out_feat_size].
+
+        Raises:
+            ValueError: Error when neither the 'module_id' nor the 'module_ids' arguments were provided.
+            ValueError: Error when both the 'module_id' and the 'module_ids' arguments were provided.
+            ValueError: Error when the 'out_feat_size' wasn't set during initialization when using 'module_ids'.
         """
 
-        # Initialize output features
-        num_feats = in_feats.size(dim=0)
-        out_feats = in_feats.new_zeros([num_feats, self.out_feat_size])
+        # Check inputs
+        if (module_id is None) and (module_ids is None):
+            error_msg = "Either the 'module_id' or the 'module_ids' argument must be provided, but both are missing."
+            raise ValueError(error_msg)
 
-        # Apply requested module to each input feature
-        for module_id in range(len(self.module_list)):
-            apply_mask = module_ids == module_id
-            module = self.module_list[module_id]
-            out_feats[apply_mask] = module(in_feats[apply_mask])
+        elif (module_id is not None) and (module_ids is not None):
+            error_msg = "Either the 'module_id' or the 'module_ids' argument must be provided, but both are given."
+            raise ValueError(error_msg)
+
+        # Get output features
+        if module_id is not None:
+            out_feats = self.module_list[module_id](in_feats)
+
+        elif self.out_feat_size is not None:
+            num_feats = in_feats.size(dim=0)
+            out_feats = in_feats.new_zeros([num_feats, self.out_feat_size])
+
+            for module_id in range(len(self.module_list)):
+                apply_mask = module_ids == module_id
+                module = self.module_list[module_id]
+                out_feats[apply_mask] = module(in_feats[apply_mask])
+
+        else:
+            error_msg = "The output feature size must be set during initialization when using 'module_ids'. "
+            error_msg += "The output feature size is set during initialization either when it is inferred through the "
+            error_msg += "'out_size' key of the module configuration dictionary, or when it is provided by the "
+            error_msg += "'out_feat_size' input argument."
+            raise ValueError(error_msg)
 
         return out_feats
 
