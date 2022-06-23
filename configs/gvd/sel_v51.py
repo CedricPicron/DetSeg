@@ -269,6 +269,7 @@ model = dict(
                 type='ModuleSelector',
                 module_cfg=dict(
                     type='OneStepMLP',
+                    num_layers=2,
                     in_size=256,
                     out_size=256,
                     norm='layer',

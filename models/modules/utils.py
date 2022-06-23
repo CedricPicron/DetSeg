@@ -106,3 +106,44 @@ class GetApplyInsert(nn.Module):
         in_list.insert(self.insert_id, output)
 
         return in_list
+
+
+@MODELS.register_module()
+class SkipConnection(nn.Module):
+    """
+    Class implementing the SkipConnection module.
+
+    Attributes:
+        res (nn.Module): Module computing the residual features from the input features.
+    """
+
+    def __init__(self, res_cfg):
+        """
+        Initializes the SkipConnection module.
+
+        Args:
+            res_cfg (Dict): Configuration dictionary specifying the residual module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build residual module
+        self.res = build_model(res_cfg)
+
+    def forward(self, in_feats, **kwargs):
+        """
+        Forward method of the SkipConnection module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, feat_size].
+            kwargs (Dict): Dictionary of keyword arguments passed to the residual module.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, feat_size].
+        """
+
+        # Get output features
+        out_feats = in_feats + self.res(in_feats, **kwargs)
+
+        return out_feats

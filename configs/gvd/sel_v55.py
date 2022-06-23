@@ -267,47 +267,50 @@ model = dict(
             qk_feat_iters=1,
             key_qry_cfg=dict(
                 type='ModuleSelector',
-                module_cfg=[
-                    dict(
-                        type='nn.LayerNorm',
-                        normalized_shape=256,
-                    ),
-                    dict(
-                        type='PairwiseCrossAttn',
-                        qry_cfg=dict(
-                            type='nn.Linear',
-                            in_features=256,
-                            out_features=256,
-                            bias=True,
+                module_cfg=dict(
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='nn.LayerNorm',
+                            normalized_shape=256,
                         ),
-                        key_cfg=dict(
-                            type='nn.Linear',
-                            in_features=256,
-                            out_features=256,
-                            bias=True,
+                        dict(
+                            type='PairwiseCrossAttn',
+                            qry_cfg=dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=256,
+                                bias=True,
+                            ),
+                            key_cfg=dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=256,
+                                bias=True,
+                            ),
+                            val_cfg=dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=256,
+                                bias=True,
+                            ),
+                            num_heads=8,
+                            act_cfg=dict(
+                                type='nn.Sigmoid',
+                            ),
+                            out_cfg=dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=256,
+                                bias=True,
+                            ),
                         ),
-                        val_cfg=dict(
-                            type='nn.Linear',
-                            in_features=256,
-                            out_features=256,
-                            bias=True,
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
                         ),
-                        num_heads=8,
-                        act_cfg=dict(
-                            type='nn.Sigmoid',
-                        ),
-                        out_cfg=dict(
-                            type='nn.Linear',
-                            in_features=256,
-                            out_features=256,
-                            bias=True,
-                        ),
-                    ),
-                    dict(
-                        type='nn.ReLU',
-                        inplace=True,
-                    ),
-                ],
+                    ],
+                ),
                 num_modules=3,
             ),
             refine_iters=2,

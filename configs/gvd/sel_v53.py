@@ -273,7 +273,7 @@ model = dict(
                     out_size=256,
                     norm='layer',
                     act_fn='relu',
-                    skip=False,
+                    skip=True,
                 ),
                 num_modules=3,
             ),

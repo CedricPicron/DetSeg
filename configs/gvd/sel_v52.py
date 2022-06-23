@@ -267,18 +267,14 @@ model = dict(
             qk_feat_iters=1,
             key_qry_cfg=dict(
                 type='ModuleSelector',
-                module_cfg=[[
-                    dict(
-                        type='nn.Linear',
-                        in_features=256,
-                        out_features=256,
-                        bias=True,
-                    ),
-                    dict(
-                        type='nn.ReLU',
-                        inplace=True
-                    ),
-                ] for _ in range(2)],
+                module_cfg=dict(
+                    type='OneStepMLP',
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
                 num_modules=3,
             ),
             refine_iters=2,
