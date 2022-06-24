@@ -2164,7 +2164,7 @@ class PairwiseCrossAttn(nn.Module):
     Attributes:
         qry (nn.Module): Module computing the query features from the input features.
         key (nn.Module): Module computing the key features from the features paired with the input features.
-        val (nn.Module): Module computing the value features from the input features.
+        val (nn.Module): Module computing the value features from the features paired with the input features.
         num_heads (int): Integer containing the number of attention heads.
         act (nn.Module): Module with activation function applied on the query-key dot products.
         out (nn.Module): Module computing the output features from the weighted value features.
@@ -2218,7 +2218,7 @@ class PairwiseCrossAttn(nn.Module):
         # Get query, key and value features
         qry_feats = self.qry(in_feats).view(num_feats, self.num_heads, in_feat_size // self.num_heads)
         key_feats = self.key(pair_feats).view(num_feats, self.num_heads, pair_feat_size // self.num_heads)
-        val_feats = self.val(in_feats).view(num_feats, self.num_heads, in_feat_size // self.num_heads)
+        val_feats = self.val(pair_feats).view(num_feats, self.num_heads, pair_feat_size // self.num_heads)
 
         # Get attention weights
         attn_ws = (qry_feats * key_feats).sum(dim=2)
