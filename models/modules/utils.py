@@ -15,7 +15,7 @@ class ApplyAll(nn.Module):
     The ApplyAll module applies its underlying module to all inputs from the given input list.
 
     Attributes:
-        module (nn.Module): Underlying module applied to all inputs from the input list.
+        module (Sequential): Underlying module applied to all inputs from the input list.
     """
 
     def __init__(self, module_cfg):
@@ -30,7 +30,7 @@ class ApplyAll(nn.Module):
         super().__init__()
 
         # Build underlying module
-        self.module = build_model(module_cfg)
+        self.module = build_model(module_cfg, sequential=True)
 
     def forward(self, in_list, **kwargs):
         """
@@ -48,6 +48,48 @@ class ApplyAll(nn.Module):
         out_list = [self.module(input, **kwargs) for input in in_list]
 
         return out_list
+
+
+@MODELS.register_module()
+class BottomUp(nn.Module):
+    """
+    Class implementing the BottomUp module.
+
+    Attributes:
+        bu (nn.Module): Module computing the residual bottum-up features.
+    """
+
+    def __init__(self, bu_cfg):
+        """
+        Initializes the BottomUp module.
+
+        Args:
+            bu_cfg (Dict): Configuration dictionary specifying the residual bottom-up module.
+        """
+
+        # Iniialization of default nn.Module
+        super().__init__()
+
+        # Build residual bottom-up module
+        self.bu = build_model(bu_cfg)
+
+    def forward(self, in_feat_maps, **kwargs):
+        """
+        Forward method of the BottomUp module.
+
+        Args:
+            in_feat_maps (List): List of size [num_maps] with input feature maps.
+            kwargs (Dict): Dictionary of keyword arguments passed to the residual bottom-up module.
+
+        Returns:
+            out_feat_maps (List): List of size [num_maps] with output feature maps.
+        """
+
+        # Get list with output feature maps
+        num_maps = len(in_feat_maps)
+        out_feat_list = [in_feat_maps[i+1] + self.bu(in_feat_maps[i], **kwargs) for i in range(num_maps-1)]
+
+        return out_feat_list
 
 
 @MODELS.register_module()
@@ -147,3 +189,45 @@ class SkipConnection(nn.Module):
         out_feats = in_feats + self.res(in_feats, **kwargs)
 
         return out_feats
+
+
+@MODELS.register_module()
+class TopDown(nn.Module):
+    """
+    Class implementing the TopDown module.
+
+    Attributes:
+        td (nn.Module): Module computing the residual top-down features.
+    """
+
+    def __init__(self, td_cfg):
+        """
+        Initializes the TopDown module.
+
+        Args:
+            td_cfg (Dict): Configuration dictionary specifying the residual top-down module.
+        """
+
+        # Iniialization of default nn.Module
+        super().__init__()
+
+        # Build residual top-down module
+        self.td = build_model(td_cfg)
+
+    def forward(self, in_feat_maps, **kwargs):
+        """
+        Forward method of the TopDown module.
+
+        Args:
+            in_feat_maps (List): List of size [num_maps] with input feature maps.
+            kwargs (Dict): Dictionary of keyword arguments passed to the residual top-down module.
+
+        Returns:
+            out_feat_maps (List): List of size [num_maps] with output feature maps.
+        """
+
+        # Get list with output feature maps
+        num_maps = len(in_feat_maps)
+        out_feat_list = [in_feat_maps[i] + self.td(in_feat_maps[i+1], **kwargs) for i in range(num_maps-1)]
+
+        return out_feat_list
