@@ -592,8 +592,8 @@ class TopDownSegHead(nn.Module):
         key (nn.Module): Module computing the key feature map.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         qk_feat_iters (int): Integer containing the number of quey-key feature update iterations.
-        qry_key (nn.Module): Optional module updating query features (possibly) based on corresponding key features.
-        key_qry (nn.Module): Optional module updating key features (possibly) based on corresponding query features.
+        qry_key (Sequential): Optional module updating query features (possibly) based on corresponding key features.
+        key_qry (Sequential): Optional module updating key features (possibly) based on corresponding query features.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
         tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
