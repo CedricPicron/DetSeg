@@ -240,16 +240,29 @@ model = dict(
             ],
             key_cfg=dict(
                 type='ApplyAll',
-                module_cfg=[
+                module_cfg=[[
                     dict(
-                        type='ProjConv',
-                        num_layers=4,
-                        in_channels=256,
-                        out_channels=256,
-                        kernel_size=3,
-                        norm='group',
-                        skip=True,
-                    ),
+                        type='SkipConnection',
+                        res_cfg=[
+                            dict(
+                                type='nn.Conv2d',
+                                in_channels=256,
+                                out_channels=256,
+                                kernel_size=1,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Conv2d',
+                                in_channels=256,
+                                out_channels=256,
+                                kernel_size=3,
+                                padding=1,
+                            ),
+                        ],
+                    ) for _ in range(4)],
                     dict(
                         type='ConvTranspose2d',
                         in_channels=256,

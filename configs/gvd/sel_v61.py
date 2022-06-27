@@ -248,7 +248,7 @@ model = dict(
                         out_channels=256,
                         kernel_size=3,
                         norm='',
-                        skip=True,
+                        skip=False,
                     ),
                     dict(
                         type='ConvTranspose2d',
