@@ -421,7 +421,7 @@ elif profiling_args.model == 'gvd':
     main_args.metadata = MetadataCatalog.get('coco_2017_val')
     main_args.num_classes = 80
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v66.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v67.py'
     model = build_heads(main_args)['gvd'].to('cuda')
 
     feat_map3 = torch.randn(2, 256, 128, 128).to('cuda')

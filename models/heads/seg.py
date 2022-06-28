@@ -594,9 +594,10 @@ class TopDownSegHead(nn.Module):
         qk_feat_iters (int): Integer containing the number of quey-key feature update iterations.
         qry_update (Sequential): Optional module updating the query features.
         key_update (Sequential): Optional module updating the key features.
+        key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
+        key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
-        tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -612,8 +613,8 @@ class TopDownSegHead(nn.Module):
         seg_loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, tgt_sample_mul, mask_thr,
-                 metadata,  refined_weight, seg_loss_cfg, qk_feat_iters=1, qry_update_cfg=None, key_update_cfg=None,
+    def __init__(self, qry_cfg, key_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, mask_thr,
+                 metadata, refined_weight, seg_loss_cfg, qk_feat_iters=1, qry_update_cfg=None, key_update_cfg=None,
                  get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
@@ -622,9 +623,10 @@ class TopDownSegHead(nn.Module):
             qry_cfg (Dict): Configuration dictionary specifying the query module.
             key_cfg (Dict): Configuration dictionary specifying the key module.
             map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
+            key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
+            key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_grid_size (int): Integer containing the size of the refinement grid.
-            tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             refined_weight (float): Factor weighting the predictions and losses of refined query-key pairs.
@@ -662,10 +664,11 @@ class TopDownSegHead(nn.Module):
 
         # Set remaining attributes
         self.map_offset = map_offset
+        self.key_min_id = key_min_id
+        self.key_max_id = key_max_id
         self.qk_feat_iters = qk_feat_iters
         self.refine_iters = refine_iters
         self.refine_grid_size = refine_grid_size
-        self.tgt_sample_mul = tgt_sample_mul
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
@@ -1146,8 +1149,6 @@ class TopDownSegHead(nn.Module):
         tgt_masks = tgt_dict['masks']
 
         if len(matched_qry_ids) > 0:
-            iW, iH = images.size()
-
             tgt_sample_offsets = torch.arange(2, device=device) - 0.5
             tgt_sample_offsets = torch.meshgrid(tgt_sample_offsets, tgt_sample_offsets, indexing='xy')
             tgt_sample_offsets = torch.stack(tgt_sample_offsets, dim=2).flatten(0, 1)
@@ -1188,18 +1189,30 @@ class TopDownSegHead(nn.Module):
             match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
             tgt_ids = matched_tgt_ids[match_ids[qry_ids]]
 
+            tgt_maps = tgt_masks[:, None, :, :].float()
+            tgt_maps_list = []
+
+            for i in range(self.key_max_id):
+                tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
+
+                if (i+1) >= self.key_min_id:
+                    tgt_maps_list.append(tgt_maps)
+
+            tgt_labels_list = [(tgt_maps > 0).byte() + (tgt_maps >= 1.0).byte() for tgt_maps in tgt_maps_list]
+            tgt_labels = torch.cat([tgt_labels_i.flatten(1) for tgt_labels_i in tgt_labels_list], dim=1)
+
+            map_sizes_i = map_sizes[map_ids]
+            map_offsets_i = map_offsets[map_ids]
+
             for i in range(self.refine_iters):
-                delta_tgt_sample_xy = self.tgt_sample_mul * tgt_sample_offsets[None, :, :] * key_wh[:, None, :]
-                tgt_sample_xy = key_xy[:, None, :] + delta_tgt_sample_xy
+                x_ids = (key_xy[:, 0] * map_sizes_i[:, 0]).int()
+                y_ids = (key_xy[:, 1] * map_sizes_i[:, 1]).int()
+                hw_ids = map_offsets_i + y_ids * map_sizes_i[:, 0] + x_ids
 
-                x_ids = (tgt_sample_xy[:, :, 0] * iW).to(torch.int64).clamp(min=0, max=iW-1)
-                y_ids = (tgt_sample_xy[:, :, 1] * iH).to(torch.int64).clamp(min=0, max=iH-1)
+                tgt_labels_i = tgt_labels[tgt_ids, hw_ids]
+                refine_mask = tgt_labels_i == 1
 
-                tgt_ids = tgt_ids[:, None].expand(-1, 4)
-                refine_mask = tgt_masks[tgt_ids, y_ids, x_ids].sum(dim=1)
-                refine_mask = (refine_mask > 0) & (refine_mask < grid_area) & (map_ids > 0)
-
-                tgt_ids = tgt_ids[refine_mask].flatten()
+                tgt_ids = tgt_ids[refine_mask].repeat_interleave(grid_area, dim=0)
                 qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
                 qry_ids_list.append(qry_ids)
 
@@ -1222,9 +1235,11 @@ class TopDownSegHead(nn.Module):
                 map_ids_list.append(map_ids)
 
                 map_sizes_i = map_sizes[map_ids]
+                map_offsets_i = map_offsets[map_ids]
+
                 feat_ids = torch.floor(key_xy * map_sizes_i).int()
                 feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
-                feat_ids = map_offsets[map_ids] + feat_ids.sum(dim=1)
+                feat_ids = map_offsets_i + feat_ids.sum(dim=1)
 
                 if self.key_update is not None:
                     old_key_feats_i = key_feats_i[refine_mask].repeat_interleave(grid_area, dim=0)
