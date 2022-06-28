@@ -592,8 +592,8 @@ class TopDownSegHead(nn.Module):
         key (nn.Module): Module computing the key feature map.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         qk_feat_iters (int): Integer containing the number of quey-key feature update iterations.
-        qry_key (Sequential): Optional module updating query features (possibly) based on corresponding key features.
-        key_qry (Sequential): Optional module updating key features (possibly) based on corresponding query features.
+        qry_update (Sequential): Optional module updating the query features.
+        key_update (Sequential): Optional module updating the key features.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
         tgt_sample_mul (float): Multiplier value determining the target sample locations during refinement.
@@ -613,7 +613,7 @@ class TopDownSegHead(nn.Module):
     """
 
     def __init__(self, qry_cfg, key_cfg, map_offset, refine_iters, refine_grid_size, tgt_sample_mul, mask_thr,
-                 metadata,  refined_weight, seg_loss_cfg, qk_feat_iters=1, qry_key_cfg=None, key_qry_cfg=None,
+                 metadata,  refined_weight, seg_loss_cfg, qk_feat_iters=1, qry_update_cfg=None, key_update_cfg=None,
                  get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
@@ -630,8 +630,8 @@ class TopDownSegHead(nn.Module):
             refined_weight (float): Factor weighting the predictions and losses of refined query-key pairs.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
             qk_feat_iters (int): Integer containing the number of quey-key feature update iterations (default=1).
-            qry_key_cfg (Dict): Configuration dictionary specifying the query-key module (default=None).
-            key_qry_cfg (Dict): Configuration dictionary specifying the key-query module (default=None).
+            qry_update_cfg (Dict): Configuration dictionary specifying the query update module (default=None).
+            key_update_cfg (Dict): Configuration dictionary specifying the key update module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
@@ -648,11 +648,11 @@ class TopDownSegHead(nn.Module):
         # Build key module
         self.key = build_model(key_cfg)
 
-        # Build query-key module if needed
-        self.qry_key = build_model(qry_key_cfg, sequential=True) if qry_key_cfg is not None else None
+        # Build query update module if needed
+        self.qry_update = build_model(qry_update_cfg, sequential=True) if qry_update_cfg is not None else None
 
-        # Build key-query module if needed
-        self.key_qry = build_model(key_qry_cfg, sequential=True) if key_qry_cfg is not None else None
+        # Build key update module if needed
+        self.key_update = build_model(key_update_cfg, sequential=True) if key_update_cfg is not None else None
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -1130,11 +1130,11 @@ class TopDownSegHead(nn.Module):
 
         for _ in range(self.qk_feat_iters):
 
-            if self.qry_key is not None:
-                qry_feats_i = self.qry_key(qry_feats_i, pair_feats=key_feats_i, module_id=0)
+            if self.qry_update is not None:
+                qry_feats_i = self.qry_update(qry_feats_i, pair_feats=key_feats_i, module_id=0)
 
-            if self.key_qry is not None:
-                key_feats_i = self.key_qry(key_feats_i, pair_feats=qry_feats_i, module_id=0)
+            if self.key_update is not None:
+                key_feats_i = self.key_update(key_feats_i, pair_feats=qry_feats_i, module_id=0)
 
         seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
         seg_logits_list = [seg_logits]
@@ -1180,6 +1180,9 @@ class TopDownSegHead(nn.Module):
             batch_ids = batch_ids[match_mask]
             map_ids = map_ids[match_mask]
 
+            if self.key_update is not None:
+                key_feats_i = key_feats_i[match_mask]
+
             num_matches = len(matched_qry_ids)
             match_ids = torch.zeros(max_qry_id+1, dtype=torch.int64, device=device)
             match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
@@ -1223,16 +1226,19 @@ class TopDownSegHead(nn.Module):
                 feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
                 feat_ids = map_offsets[map_ids] + feat_ids.sum(dim=1)
 
+                if self.key_update is not None:
+                    old_key_feats_i = key_feats_i[refine_mask].repeat_interleave(grid_area, dim=0)
+
                 qry_feats_i = qry_feats[qry_ids]
                 key_feats_i = key_feats[batch_ids, feat_ids, :]
 
                 for _ in range(self.qk_feat_iters):
 
-                    if self.qry_key is not None:
-                        qry_feats_i = self.qry_key(qry_feats_i, pair_feats=key_feats_i, module_id=i+1)
+                    if self.qry_update is not None:
+                        qry_feats_i = self.qry_update(qry_feats_i, pair_feats=key_feats_i, module_id=i+1)
 
-                    if self.key_qry is not None:
-                        key_feats_i = self.key_qry(key_feats_i, pair_feats=qry_feats_i, module_id=i+1)
+                    if self.key_update is not None:
+                        key_feats_i = self.key_update(key_feats_i, pair_feats=old_key_feats_i, module_id=i+1)
 
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
                 seg_logits_list.append(seg_logits)
