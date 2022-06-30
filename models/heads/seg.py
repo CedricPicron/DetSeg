@@ -1203,7 +1203,7 @@ class TopDownSegHead(nn.Module):
                 hw_ids = map_offsets_i + y_ids * map_sizes_i[:, 0] + x_ids
 
                 tgt_labels_i = tgt_labels[tgt_ids, hw_ids]
-                refine_mask = tgt_labels_i == 1
+                refine_mask = (tgt_labels_i == 1) & (map_ids > 0)
 
                 tgt_ids = tgt_ids[refine_mask].repeat_interleave(grid_area, dim=0)
                 qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
