@@ -591,12 +591,13 @@ class TopDownSegHead(nn.Module):
         key (nn.Module): Module computing the key feature map.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
         qk_feat_iters (int): Integer containing the number of quey-key feature update iterations.
-        qry_update (Sequential): Optional module updating the query features.
-        key_update (Sequential): Optional module updating the key features.
+        qry_update (Sequential): Optional module updating the query features before query-key dot product.
+        key_update (Sequential): Optional module updating the key features before query-key dot product.
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
+        key_td (nn.Module): Module computing the top-down key features.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -611,9 +612,9 @@ class TopDownSegHead(nn.Module):
         seg_loss (nn.Module): Module computing the segmentation loss.
     """
 
-    def __init__(self, qry_cfg, key_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, mask_thr,
-                 metadata, seg_loss_cfg, qk_feat_iters=1, qry_update_cfg=None, key_update_cfg=None, get_segs=True,
-                 dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+    def __init__(self, qry_cfg, key_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size,
+                 key_td_cfg, mask_thr, metadata, seg_loss_cfg, qk_feat_iters=1, qry_update_cfg=None,
+                 key_update_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -625,6 +626,7 @@ class TopDownSegHead(nn.Module):
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_grid_size (int): Integer containing the size of the refinement grid.
+            key_td_cfg (Dict): Configuration dictionary specifying the key top-down module.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
@@ -652,6 +654,9 @@ class TopDownSegHead(nn.Module):
 
         # Build key update module if needed
         self.key_update = build_model(key_update_cfg, sequential=True) if key_update_cfg is not None else None
+
+        # Build key top-down module
+        self.key_td = build_model(key_td_cfg)
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -686,7 +691,7 @@ class TopDownSegHead(nn.Module):
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
                 - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
+                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
                 - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
                 - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
 
@@ -1001,13 +1006,13 @@ class TopDownSegHead(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
-            storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
-                - tgt_labels (LongTensor): target labels of shape [num_tgts, num_key_feats_total];
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - tgt_labels (LongTensor): target labels of shape [num_tgts, num_labels_per_tgt];
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
                 - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
+                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
                 - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
                 - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
 
@@ -1148,11 +1153,19 @@ class TopDownSegHead(nn.Module):
         matched_tgt_ids = storage_dict['matched_tgt_ids']
         tgt_masks = tgt_dict['masks']
 
-        if len(matched_qry_ids) > 0:
-            tgt_sample_offsets = torch.arange(2, device=device) - 0.5
-            tgt_sample_offsets = torch.meshgrid(tgt_sample_offsets, tgt_sample_offsets, indexing='xy')
-            tgt_sample_offsets = torch.stack(tgt_sample_offsets, dim=2).flatten(0, 1)
+        tgt_maps = tgt_masks[:, None, :, :].float()
+        tgt_maps_list = [tgt_maps]
 
+        for i in range(self.key_max_id):
+            tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
+            tgt_maps_list.append(tgt_maps)
+
+        map_shapes = [tgt_maps.size()[-2:] for tgt_maps in tgt_maps_list]
+        tgt_labels_list = [(tgt_maps > 0).byte() + (tgt_maps >= 1.0).byte() for tgt_maps in tgt_maps_list]
+        tgt_labels = torch.cat([tgt_labels_i.flatten(1) for tgt_labels_i in tgt_labels_list], dim=1)
+        storage_dict['tgt_labels'] = tgt_labels
+
+        if len(matched_qry_ids) > 0:
             grid_size = self.refine_grid_size
             grid_area = grid_size ** 2
 
@@ -1163,8 +1176,7 @@ class TopDownSegHead(nn.Module):
             key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
             key_feats = torch.cat(key_feats, dim=1)
 
-            map_sizes = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
-            map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_sizes]
+            map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_shapes]
             map_sizes = torch.stack(map_sizes, dim=0)
 
             map_offsets = [map_sizes.new_zeros([1]), map_sizes[:-1].prod(dim=1)]
@@ -1179,31 +1191,19 @@ class TopDownSegHead(nn.Module):
             key_xy = key_xy[match_mask]
             key_wh = key_wh[match_mask]
             batch_ids = batch_ids[match_mask]
-            map_ids = map_ids[match_mask]
-
-            if self.key_update is not None:
-                key_feats_i = key_feats_i[match_mask]
+            map_ids = map_ids[match_mask] + self.key_min_id
+            key_feats_i = key_feats_i[match_mask]
 
             num_matches = len(matched_qry_ids)
             match_ids = torch.zeros(max_qry_id+1, dtype=torch.int64, device=device)
             match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
             tgt_ids = matched_tgt_ids[match_ids[qry_ids]]
 
-            tgt_maps = tgt_masks[:, None, :, :].float()
-            tgt_maps_list = []
-
-            for i in range(self.key_max_id):
-                tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
-
-                if (i+1) >= self.key_min_id:
-                    tgt_maps_list.append(tgt_maps)
-
-            tgt_labels_list = [(tgt_maps > 0).byte() + (tgt_maps >= 1.0).byte() for tgt_maps in tgt_maps_list]
-            tgt_labels = torch.cat([tgt_labels_i.flatten(1) for tgt_labels_i in tgt_labels_list], dim=1)
-            storage_dict['tgt_labels'] = tgt_labels
-
             map_sizes_i = map_sizes[map_ids]
             map_offsets_i = map_offsets[map_ids]
+
+            key_feat_size = key_feats_i.size()[1]
+            delta_key_map_offset = map_offsets[self.key_min_id]
 
             for i in range(self.refine_iters):
                 x_ids = (key_xy[:, 0] * map_sizes_i[:, 0]).int()
@@ -1240,13 +1240,15 @@ class TopDownSegHead(nn.Module):
 
                 feat_ids = torch.floor(key_xy * map_sizes_i).int()
                 feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
-                feat_ids = map_offsets_i + feat_ids.sum(dim=1)
+                feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
-                if self.key_update is not None:
-                    old_key_feats_i = key_feats_i[refine_mask].repeat_interleave(grid_area, dim=0)
+                td_key_feats = self.key_td(key_feats_i[refine_mask]).view(-1, key_feat_size)
+                self_key_feats = torch.zeros_like(td_key_feats)
+                self_mask = map_ids >= self.key_min_id
+                self_key_feats[self_mask] = key_feats[batch_ids[self_mask], feat_ids[self_mask], :]
 
                 qry_feats_i = qry_feats[qry_ids]
-                key_feats_i = key_feats[batch_ids, feat_ids, :]
+                key_feats_i = td_key_feats + self_key_feats
 
                 for _ in range(self.qk_feat_iters):
 
@@ -1254,7 +1256,7 @@ class TopDownSegHead(nn.Module):
                         qry_feats_i = self.qry_update(qry_feats_i, pair_feats=key_feats_i, module_id=i+1)
 
                     if self.key_update is not None:
-                        key_feats_i = self.key_update(key_feats_i, pair_feats=old_key_feats_i, module_id=i+1)
+                        key_feats_i = self.key_update(key_feats_i, pair_feats=qry_feats_i, module_id=i+1)
 
                 seg_logits = (qry_feats_i * key_feats_i).sum(dim=1)
                 seg_logits_list.append(seg_logits)
@@ -1282,7 +1284,7 @@ class TopDownSegHead(nn.Module):
         storage_dict['key_xy'] = key_xy
         storage_dict['batch_ids'] = batch_ids
         storage_dict['map_ids'] = map_ids
-        storage_dict['map_shapes'] = [key_feat_map.size()[-2:] for key_feat_map in key_feat_maps]
+        storage_dict['map_shapes'] = map_shapes
         storage_dict['seg_logits'] = seg_logits
         storage_dict['refined_mask'] = refined_mask
 
@@ -1301,12 +1303,12 @@ class TopDownSegHead(nn.Module):
         Forward loss method of the TopDownSegHead module.
 
         Args:
-            storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
-                - tgt_labels (ByteTensor): target labels of shape [num_tgts, num_key_feats_total];
+            storage_dict (Dict): Storage dictionary containing following keys (after matching):
+                - tgt_labels (LongTensor): target labels of shape [num_tgts, num_labels_per_tgt];
                 - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
                 - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
                 - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_shapes (List): list with map shapes in (height, width) format of size [num_key_feat_maps];
+                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
                 - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
@@ -1333,6 +1335,7 @@ class TopDownSegHead(nn.Module):
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve various items of interest from storage dictionary
+        tgt_labels = storage_dict['tgt_labels']
         qry_ids = storage_dict['qry_ids']
         key_xy = storage_dict['key_xy']
         map_ids = storage_dict['map_ids']
@@ -1401,7 +1404,7 @@ class TopDownSegHead(nn.Module):
         y_ids = (key_xy[:, 1] * map_sizes[:, 1]).int()
 
         hw_ids = map_offsets + y_ids * map_sizes[:, 0] + x_ids
-        seg_targets = storage_dict['tgt_labels'][tgt_ids, hw_ids]
+        seg_targets = tgt_labels[tgt_ids, hw_ids]
 
         non_contested_mask = seg_targets != 1
         qry_ids = qry_ids[non_contested_mask]
