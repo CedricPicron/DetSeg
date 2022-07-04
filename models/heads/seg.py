@@ -1128,7 +1128,7 @@ class TopDownSegHead(nn.Module):
         key_wh = torch.cat(key_wh_list, dim=0)
 
         batch_ids = torch.cat(batch_ids_list, dim=0)
-        map_ids = torch.cat(map_ids_list, dim=0)
+        map_ids = torch.cat(map_ids_list, dim=0) + self.key_min_id
 
         qry_ids_list = [qry_ids]
         key_xy_list = [key_xy]
@@ -1191,7 +1191,7 @@ class TopDownSegHead(nn.Module):
             key_xy = key_xy[match_mask]
             key_wh = key_wh[match_mask]
             batch_ids = batch_ids[match_mask]
-            map_ids = map_ids[match_mask] + self.key_min_id
+            map_ids = map_ids[match_mask]
             key_feats_i = key_feats_i[match_mask]
 
             num_matches = len(matched_qry_ids)
