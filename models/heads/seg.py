@@ -9,6 +9,7 @@ from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch_scatter import scatter_sum
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -1392,7 +1393,7 @@ class TopDownSegHead(nn.Module):
 
         seg_logits = seg_logits[seg_mask]
         seg_targets = targets[seg_mask].float() / 2
-        ref_targets = (~seg_mask).float()
+        ref_targets = ~seg_mask
 
         # Get segmentation loss
         inv_ids, counts = torch.unique(qry_ids[seg_mask], sorted=False, return_inverse=True, return_counts=True)[1:]
@@ -1405,10 +1406,27 @@ class TopDownSegHead(nn.Module):
         loss_dict[key_name] = seg_loss
 
         # Get refinement loss
-        inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
-        loss_weights = (1/counts)[inv_ids]
+        ref_preds = ref_logits > 0
 
-        ref_loss = self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
+        true_neg = (~(ref_preds | ref_targets)).sum()
+        true_pos = (ref_preds & ref_targets).sum()
+
+        neg = (~ref_targets).sum()
+        pos = ref_targets.sum()
+
+        tnr = true_neg / neg if neg.item() > 0 else torch.ones_like(neg)
+        tpr = true_pos / pos if pos.item() > 0 else torch.ones_like(pos)
+
+        neg_weight = ((1 - tnr) * tpr)
+        pos_weight = ((1 - tpr) * tnr)
+
+        loss_weights = torch.stack([neg_weight, pos_weight]).clamp(min=1e-6)
+        loss_weights = loss_weights[ref_targets.long()]
+
+        inv_ids = torch.unique(qry_ids, sorted=False, return_inverse=True)[1]
+        loss_weights = loss_weights / scatter_sum(loss_weights, inv_ids)[inv_ids]
+
+        ref_loss = self.ref_loss(ref_logits, ref_targets.float(), weight=loss_weights)
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
@@ -1424,8 +1442,6 @@ class TopDownSegHead(nn.Module):
             analysis_dict[key_name] = 100 * seg_acc
 
             # Get refinement accuracy
-            ref_preds = ref_logits > 0
-            ref_targets = ref_targets.bool()
             ref_acc = (ref_preds == ref_targets).sum() / len(ref_preds)
 
             key_name = f'ref_acc_{id}' if id is not None else 'ref_acc'
