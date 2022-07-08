@@ -1171,7 +1171,7 @@ class TopDownSegHead(nn.Module):
         delta_key_map_offset = map_offsets[self.key_min_id]
 
         for i in range(self.refine_iters):
-            refine_mask = ref_logits > 0.0
+            refine_mask = (ref_logits > 0.0) & (map_ids > 0)
             num_refines += refine_mask.sum().item()
 
             if num_refines > self.max_num_refines:
