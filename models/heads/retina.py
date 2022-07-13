@@ -128,6 +128,23 @@ class RetinaHead(nn.Module):
         # Initialization of metadata attribute
         self.metadata = metadata
 
+    def _load_from_state_dict(self, state_dict, prefix, *args):
+        """
+        Copies parameters and buffers from given state dictionary into only this module, but not its descendants.
+
+        state_dict (Dict): Dictionary containing model parameters and persistent buffers.
+        prefix (str): String containing this module's prefix in the given state dictionary.
+        args (Tuple): Tuple containing additional arguments used by the default loading method.
+        """
+
+        # Remove cell anchors from state dictionary if present
+        for key in state_dict.copy().keys():
+            if f'{prefix}anchor_generator.cell_anchors' in key:
+                del state_dict[key]
+
+        # Continue with default loading
+        super()._load_from_state_dict(state_dict, prefix, *args)
+
     @torch.no_grad()
     def forward_init(self, images, feat_maps, tgt_dict=None):
         """
