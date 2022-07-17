@@ -297,7 +297,7 @@ model = dict(
             ],
             refine_iters=3,
             refine_grid_size=2,
-            max_num_refines=100000,
+            refine_per_iter=20000,
             key_td_cfg=[
                 dict(
                     type='nn.Linear',

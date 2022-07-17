@@ -9,7 +9,6 @@ from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_scatter import scatter_sum
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -599,7 +598,7 @@ class TopDownSegHead(nn.Module):
         key_ref (nn.Module): Optional module computing the key refinement features.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
-        max_num_refines (int): Integer containing the maximum number of refinements.
+        refine_per_iter (int): Integer containing the number of refinements per refinement iteration.
         key_td (nn.Module): Module computing the top-down key features.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
@@ -616,7 +615,7 @@ class TopDownSegHead(nn.Module):
         ref_loss (nn.Module): Module computing the refinement loss.
     """
 
-    def __init__(self, key_2d_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, max_num_refines,
+    def __init__(self, key_2d_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, refine_per_iter,
                  key_td_cfg, mask_thr, metadata, seg_loss_cfg, ref_loss_cfg, qry_shared_cfg=None, qry_seg_cfg=None,
                  qry_ref_cfg=None, key_seg_cfg=None, key_ref_cfg=None, get_segs=True, dup_attrs=None, max_segs=None,
                  matcher_cfg=None, **kwargs):
@@ -630,7 +629,7 @@ class TopDownSegHead(nn.Module):
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_grid_size (int): Integer containing the size of the refinement grid.
-            max_num_refines (int): Integer containing the maximum number of refinements.
+            refine_per_iter (int): Integer containing the number of refinements per refinement iteration.
             key_td_cfg (Dict): Configuration dictionary specifying the key top-down module.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -675,7 +674,7 @@ class TopDownSegHead(nn.Module):
         self.key_max_id = key_max_id
         self.refine_iters = refine_iters
         self.refine_grid_size = refine_grid_size
-        self.max_num_refines = max_num_refines
+        self.refine_per_iter = refine_per_iter
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
@@ -1166,16 +1165,19 @@ class TopDownSegHead(nn.Module):
         map_sizes_i = map_sizes[map_ids]
         map_offsets_i = map_offsets[map_ids]
 
-        num_refines = 0
         key_feat_size = key_feats_i.size()[1]
         delta_key_map_offset = map_offsets[self.key_min_id]
 
         for i in range(self.refine_iters):
-            refine_mask = (ref_logits > 0.0) & (map_ids > 0)
-            num_refines += refine_mask.sum().item()
+            refine_selection = len(ref_logits) > self.refine_per_iter
 
-            if num_refines > self.max_num_refines:
-                break
+            if refine_selection:
+                refine_ids = torch.topk(ref_logits, self.refine_per_iter, sorted=False)[1]
+                refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
+                refine_mask[refine_ids] = True
+
+            refine_mask = refine_mask & (map_ids > 0) if refine_selection else map_ids > 0
+            refined_mask_list.append(refine_mask)
 
             qry_ids = qry_ids[refine_mask].repeat_interleave(grid_area, dim=0)
             qry_ids_list.append(qry_ids)
@@ -1222,9 +1224,8 @@ class TopDownSegHead(nn.Module):
 
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
-            refined_mask_list.append(refine_mask)
 
-        refine_mask = torch.zeros_like(seg_logits, dtype=torch.bool)
+        refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
         refined_mask_list.append(refine_mask)
 
         qry_ids = torch.cat(qry_ids_list, dim=0)
@@ -1393,7 +1394,7 @@ class TopDownSegHead(nn.Module):
 
         seg_logits = seg_logits[seg_mask]
         seg_targets = targets[seg_mask].float() / 2
-        ref_targets = ~seg_mask
+        ref_targets = (~seg_mask).float()
 
         # Get segmentation loss
         inv_ids, counts = torch.unique(qry_ids[seg_mask], sorted=False, return_inverse=True, return_counts=True)[1:]
@@ -1406,27 +1407,10 @@ class TopDownSegHead(nn.Module):
         loss_dict[key_name] = seg_loss
 
         # Get refinement loss
-        ref_preds = ref_logits > 0
+        inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
+        loss_weights = (1/counts)[inv_ids]
 
-        true_neg = (~(ref_preds | ref_targets)).sum()
-        true_pos = (ref_preds & ref_targets).sum()
-
-        neg = (~ref_targets).sum()
-        pos = ref_targets.sum()
-
-        tnr = true_neg / neg if neg.item() > 0 else torch.ones_like(neg)
-        tpr = true_pos / pos if pos.item() > 0 else torch.ones_like(pos)
-
-        neg_weight = ((1 - tnr) * tpr)
-        pos_weight = ((1 - tpr) * tnr)
-
-        loss_weights = torch.stack([neg_weight, pos_weight]).clamp(min=1e-6)
-        loss_weights = loss_weights[ref_targets.long()]
-
-        inv_ids = torch.unique(qry_ids, sorted=False, return_inverse=True)[1]
-        loss_weights = loss_weights / scatter_sum(loss_weights, inv_ids)[inv_ids]
-
-        ref_loss = self.ref_loss(ref_logits, ref_targets.float(), weight=loss_weights)
+        ref_loss = self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
@@ -1442,6 +1426,8 @@ class TopDownSegHead(nn.Module):
             analysis_dict[key_name] = 100 * seg_acc
 
             # Get refinement accuracy
+            ref_preds = ref_logits > 0
+            ref_targets = ref_targets.bool()
             ref_acc = (ref_preds == ref_targets).sum() / len(ref_preds)
 
             key_name = f'ref_acc_{id}' if id is not None else 'ref_acc'
