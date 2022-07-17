@@ -4,6 +4,7 @@ datasets/coco/annotations/*
 datasets/coco/test2017/*
 datasets/coco/train2017/*
 datasets/coco/val2017/*
+datasets/lvis/*.json
 outputs/*
 plots/*/*
 test/*
