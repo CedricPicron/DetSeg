@@ -60,6 +60,89 @@ class CustomClamp(Function):
         return grad_in_tensor, grad_min, grad_max
 
 
+class CustomDotProduct(Function):
+    """
+    Class implementing the CustomDotProduct autograd function.
+
+    Dot product function between query and key features, where the queries and keys forming the query-key pairs are
+    selected by the given query and key indices. If the query/key indices are missing, the given query/key features
+    are used instead without selection.
+
+    This custom dot product function does not keep the tensors with selected queries and keys in memory.
+    """
+
+    @staticmethod
+    def forward(ctx, qry_feats, key_feats, qry_ids=None, key_ids=None):
+        """
+        Forward method of the CustomDotProduct autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            qry_feats (FloatTensor): Query features of shape [num_qry_feats, feat_size].
+            key_feats (FloatTensor): Key features of shape [num_key_feats, feat_size].
+            qry_ids (LongTensor): Indices selecting query pair features of shape [num_pairs] (default=None).
+            key_ids (LongTensor): Indices selecting key pair features of shape [num_pairs] (default=None).
+
+        Returns:
+            dot_prods (FloatTensor): Query-key dot products of shape [num_pairs].
+        """
+
+        # Get pairs of query and key features
+        qry_pair_feats = qry_feats[qry_ids] if qry_ids is not None else qry_feats
+        key_pair_feats = key_feats[key_ids] if key_ids is not None else key_feats
+
+        # Get query-key dot products
+        dot_prods = (qry_pair_feats * key_pair_feats).sum(dim=1)
+
+        # Save input tensors for backward pass
+        ctx.save_for_backward(qry_feats, key_feats, qry_ids, key_ids)
+
+        return dot_prods
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_dot_prods):
+        """
+        Backward method of the CustomDotProduct autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_dot_prods (FloatTensor): Gradient w.r.t. the query-key dot products of shape [num_pairs].
+
+        Returns:
+            grad_qry_feats (FloatTensor): Gradient w.r.t. the query features of shape [num_qry_feats, feat_size].
+            grad_key_feats (FloatTensor): Gradient w.r.t. the key features of shape [num_key_feats, feat_size].
+            grad_qry_ids (None): None.
+            grad_key_ids (None): None.
+        """
+
+        # Recover input tensors of forward method
+        qry_feats, key_feats, qry_ids, key_ids = ctx.saved_tensors
+
+        # Recompute pairs of query and key features
+        qry_pair_feats = qry_feats[qry_ids] if qry_ids is not None else qry_feats
+        key_pair_feats = key_feats[key_ids] if key_ids is not None else key_feats
+
+        # Get gradient tensors
+        grad_qry_pair_feats = grad_dot_prods[:, None] * key_pair_feats
+        grad_key_pair_feats = grad_dot_prods[:, None] * qry_pair_feats
+
+        if qry_ids is not None:
+            grad_qry_feats = torch.zeros_like(qry_feats).index_add_(0, qry_ids, grad_qry_pair_feats)
+        else:
+            grad_qry_feats = grad_qry_pair_feats
+
+        if key_ids is not None:
+            grad_key_feats = torch.zeros_like(key_feats).index_add_(0, key_ids, grad_key_pair_feats)
+        else:
+            grad_key_feats = grad_key_pair_feats
+
+        grad_qry_ids = None
+        grad_key_ids = None
+
+        return grad_qry_feats, grad_key_feats, grad_qry_ids, grad_key_ids
+
+
 class CustomOnes(Function):
     """
     Class implementing the CustomOnes autograd function.

@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
+from models.functional.utils import custom_dot_product
 from structures.boxes import mask_to_box
 
 
@@ -1121,14 +1122,11 @@ class TopDownSegHead(nn.Module):
         batch_ids = torch.cat(batch_ids_list, dim=0)
         map_ids = torch.cat(map_ids_list, dim=0) + self.key_min_id
 
-        qry_seg_feats_i = qry_seg_feats[qry_ids]
-        qry_ref_feats_i = qry_ref_feats[qry_ids]
+        key_seg_feats = self.key_seg(key_feats_i) if self.key_seg is not None else key_feats_i
+        key_ref_feats = self.key_ref(key_feats_i) if self.key_ref is not None else key_feats_i
 
-        key_seg_feats_i = self.key_seg(key_feats_i) if self.key_seg is not None else key_feats_i
-        key_ref_feats_i = self.key_ref(key_feats_i) if self.key_ref is not None else key_feats_i
-
-        seg_logits = (qry_seg_feats_i * key_seg_feats_i).sum(dim=1)
-        ref_logits = (qry_ref_feats_i * key_ref_feats_i).sum(dim=1)
+        seg_logits = custom_dot_product(qry_seg_feats, key_seg_feats, qry_ids=qry_ids)
+        ref_logits = custom_dot_product(qry_ref_feats, key_ref_feats, qry_ids=qry_ids)
 
         qry_ids_list = [qry_ids]
         key_xy_list = [key_xy]
@@ -1213,14 +1211,11 @@ class TopDownSegHead(nn.Module):
             self_key_feats[self_mask] = key_feats[batch_ids[self_mask], feat_ids[self_mask], :]
             key_feats_i = td_key_feats + self_key_feats
 
-            qry_seg_feats_i = qry_seg_feats[qry_ids]
-            qry_ref_feats_i = qry_ref_feats[qry_ids]
+            key_seg_feats = self.key_seg(key_feats_i) if self.key_seg is not None else key_feats_i
+            key_ref_feats = self.key_ref(key_feats_i) if self.key_ref is not None else key_feats_i
 
-            key_seg_feats_i = self.key_seg(key_feats_i) if self.key_seg is not None else key_feats_i
-            key_ref_feats_i = self.key_ref(key_feats_i) if self.key_ref is not None else key_feats_i
-
-            seg_logits = (qry_seg_feats_i * key_seg_feats_i).sum(dim=1)
-            ref_logits = (qry_ref_feats_i * key_ref_feats_i).sum(dim=1)
+            seg_logits = custom_dot_product(qry_seg_feats, key_seg_feats, qry_ids=qry_ids)
+            ref_logits = custom_dot_product(qry_ref_feats, key_ref_feats, qry_ids=qry_ids)
 
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
