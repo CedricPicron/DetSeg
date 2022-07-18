@@ -1,6 +1,8 @@
 **/__pycache__/**
 condor/*
 datasets/coco/annotations/*/*
+datasets/coco/annotations/coco_train_lvis_*.json
+datasets/coco/annotations/coco_val_lvis_*.json
 datasets/coco/test2017/*
 datasets/coco/train2017/*
 datasets/coco/val2017/*

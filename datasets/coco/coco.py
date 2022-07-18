@@ -140,7 +140,7 @@ class CocoDataset(Dataset):
 
         # Load image and place it into Images structure
         if hasattr(self, 'coco'):
-            image_path = self.root / self.coco.loadImgs(image_id)[0]['file_name']
+            image_path = self.root / f"{self.coco.loadImgs(image_id)[0]['id']:012}.jpg"
         elif hasattr(self, 'filenames'):
             image_path = self.root / self.filenames[index // len(self.transforms)]
         else:
@@ -490,6 +490,25 @@ def build_coco(args):
 
         evaluator (object): Object capable of computing evaluations from predictions and storing them.
     """
+
+    # Add COCO splits with LVIS annotations
+    COCO_SPLITS['coco']['coco_train_lvis_v0.5'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v0.5.json')
+    COCO_SPLITS['coco']['coco_val_lvis_v0.5'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v0.5.json')
+    COCO_SPLITS['coco']['coco_train_lvis_v1'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v1.json')
+    COCO_SPLITS['coco']['coco_val_lvis_v1'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
+
+    names = ('coco_train_lvis_v0.5', 'coco_val_lvis_v0.5', 'coco_train_lvis_v1', 'coco_val_lvis_v1')
+    thing_dataset_id_to_contiguous_id = MetadataCatalog.get('coco_2017_train').thing_dataset_id_to_contiguous_id
+    thing_classes = MetadataCatalog.get('coco_2017_train').thing_classes
+    thing_colors = MetadataCatalog.get('coco_2017_train').thing_colors
+
+    for name in names:
+        MetadataCatalog.get(name).json_file = f"datasets/{COCO_SPLITS['coco'][name][1]}"
+        MetadataCatalog.get(name).image_root = f"dataset/{COCO_SPLITS['coco'][name][0]}"
+        MetadataCatalog.get(name).evaluator_type = 'coco'
+        MetadataCatalog.get(name).thing_dataset_id_to_contiguous_id = thing_dataset_id_to_contiguous_id
+        MetadataCatalog.get(name).thing_classes = thing_classes
+        MetadataCatalog.get(name).thing_colors = thing_colors
 
     # Get root directory containing datasets
     root = Path() / 'datasets'
