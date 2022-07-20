@@ -164,7 +164,7 @@ class GVD(nn.Module):
 
         # Apply heads if needed
         if 0 in self.head_apply_ids:
-            local_kwargs['in_feats'] = group_feats
+            local_kwargs['qry_feats'] = group_feats
             [head(mode='pred', id=0, **local_kwargs, **kwargs) for head in self.heads]
 
             if tgt_dict is not None:
@@ -178,7 +178,7 @@ class GVD(nn.Module):
 
             # Apply heads if needed
             if dec_id in self.head_apply_ids:
-                local_kwargs['in_feats'] = group_feats
+                local_kwargs['qry_feats'] = group_feats
                 [head(mode='pred', id=dec_id, **local_kwargs, **kwargs) for head in self.heads]
 
                 if tgt_dict is not None:

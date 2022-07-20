@@ -321,12 +321,12 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         return images_dict
 
-    def forward_pred(self, in_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
         """
         Forward prediction method of the StandardRoIHead module.
 
         Args:
-            in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary (possibly) requiring following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
@@ -352,8 +352,8 @@ class StandardRoIHead(MMDetStandardRoIHead):
         images = storage_dict['images']
 
         # Get number of features and device
-        num_feats = len(in_feats)
-        device = in_feats.device
+        num_feats = len(qry_feats)
+        device = qry_feats.device
 
         # Get cumulative number of features per batch entry if missing
         if cum_feats_batch is None:
@@ -381,7 +381,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             # Get mask query features if needed
             if self.mask_qry is not None:
-                mask_qry_feats = self.mask_qry(in_feats)
+                mask_qry_feats = self.mask_qry(qry_feats)
 
             # Get mask key features
             mask_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]

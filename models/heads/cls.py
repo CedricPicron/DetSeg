@@ -43,12 +43,12 @@ class BaseClsHead(nn.Module):
         # Build loss module
         self.loss = build_model(loss_cfg)
 
-    def forward_pred(self, in_feats, storage_dict, **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, **kwargs):
         """
         Forward prediction method of the BaseClsHead module.
 
         Args:
-            in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest.
             kwargs (Dict): Dictionary of unused keyword arguments.
 
@@ -58,7 +58,7 @@ class BaseClsHead(nn.Module):
         """
 
         # Get classification logits
-        cls_logits = self.logits(in_feats)
+        cls_logits = self.logits(qry_feats)
         storage_dict['cls_logits'] = cls_logits
 
         return storage_dict

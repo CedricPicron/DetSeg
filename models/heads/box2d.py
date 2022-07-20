@@ -304,12 +304,12 @@ class BaseBox2dHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, in_feats, storage_dict, images_dict=None, **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseBox2dHead module.
 
         Args:
-            in_feats (FloatTensor): Input features of shape [num_feats, in_feat_size].
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary possibly containing following key:
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats].
@@ -329,7 +329,7 @@ class BaseBox2dHead(nn.Module):
         """
 
         # Get 2D bounding box logits
-        box_logits = self.logits(in_feats)
+        box_logits = self.logits(qry_feats)
         storage_dict['box_logits'] = box_logits
 
         # Get predicted 2D bounding boxes
