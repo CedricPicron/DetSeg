@@ -684,22 +684,17 @@ class TopDownSegHead(nn.Module):
         self.metadata = metadata
 
     @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
         """
         Method computing the segmentation predictions.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - qry_ids (LongTensor): query indices of query-key pairs of shape [num_qry_key_pairs];
-                - key_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
-                - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
-                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
-                - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -720,23 +715,15 @@ class TopDownSegHead(nn.Module):
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
         pred_boxes = storage_dict['pred_boxes']
-        qry_ids = storage_dict['qry_ids']
-        key_xy = storage_dict['key_xy']
-        seg_batch_ids = storage_dict['batch_ids']
-        map_ids = storage_dict['map_ids']
-        map_shapes = storage_dict['map_shapes']
-        seg_logits = storage_dict['seg_logits']
-        refined_mask = storage_dict['refined_mask']
 
-        # Get number of features, number of classes and device
+        # Get image size, number of features, number of classes and device
+        iW, iH = images.size()
         num_feats = cls_logits.size(dim=0)
         num_classes = cls_logits.size(dim=1) - 1
         device = cls_logits.device
 
-        # Get feature indices
-        feat_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
-
-        # Get prediction labels and scores
+        # Get prediction query indices,labels and scores
+        pred_qry_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
         pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
         pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
@@ -754,20 +741,13 @@ class TopDownSegHead(nn.Module):
         pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
-        # Get additional items common to each iteration
-        iW, iH = images.size()
-        num_maps = len(map_shapes)
-
-        map_shapes_tensor = torch.tensor(map_shapes, device=device)
-        map_shapes_prod = map_shapes_tensor.prod(dim=1)
-
         # Iterate over every batch entry
         for i in range(batch_size):
 
             # Get predictions corresponding to batch entry
             batch_mask = batch_ids == i
 
-            feat_ids_i = feat_ids[batch_mask]
+            pred_qry_ids_i = pred_qry_ids[batch_mask]
             pred_labels_i = pred_labels[batch_mask]
             pred_scores_i = pred_scores[batch_mask]
 
@@ -777,18 +757,18 @@ class TopDownSegHead(nn.Module):
 
                 if dup_removal_type == 'nms':
                     num_candidates = self.dup_attrs['nms_candidates']
-                    num_preds_i = len(pred_scores_i)
-                    candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
+                    num_preds = len(pred_scores_i)
+                    candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds))[1]
 
-                    feat_ids_i = feat_ids_i[candidate_ids]
+                    pred_qry_ids_i = pred_qry_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
+                    pred_boxes_i = pred_boxes[pred_qry_ids_i].to_format('xyxy')
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i.boxes, pred_scores_i, pred_labels_i, iou_thr)
 
-                    feat_ids_i = feat_ids_i[non_dup_ids]
+                    pred_qry_ids_i = pred_qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
 
@@ -801,49 +781,57 @@ class TopDownSegHead(nn.Module):
                 if len(pred_scores_i) > self.max_segs:
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
-                    feat_ids_i = feat_ids_i[top_pred_ids]
+                    pred_qry_ids_i = pred_qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
+            # Get query indices for which to compute segmentations
+            seg_qry_ids, pred_inv_ids = pred_qry_ids_i.unique(sorted=True, return_inverse=True)
+
+            # Compute segmentation predictions for desired queries
+            self.forward_pred(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
+
+            # Retrieve various items related to segmentation predictions from storage dictionary
+            qry_ids = storage_dict['qry_ids']
+            key_xy = storage_dict['key_xy']
+            map_ids = storage_dict['map_ids']
+            map_shapes = storage_dict['map_shapes']
+            seg_logits = storage_dict['seg_logits']
+            refined_mask = storage_dict['refined_mask']
+
+            # Set segmentation logits to zero at locations that were refined
+            seg_logits[refined_mask] = 0.0
+
             # Get prediction masks at image resolution
-            seg_batch_mask = seg_batch_ids == i
+            pred_qry_mask = pred_inv_ids[:, None] == qry_ids[None, :]
+            pred_ids = torch.nonzero(pred_qry_mask)[:, 0]
 
-            qry_ids_i = qry_ids[seg_batch_mask]
-            key_xy_i = key_xy[seg_batch_mask]
-            map_ids_i = map_ids[seg_batch_mask]
-            seg_logits_i = seg_logits[seg_batch_mask]
-            refined_mask_i = refined_mask[seg_batch_mask]
+            num_preds = len(pred_qry_ids_i)
+            key_xy = key_xy[None, :, :].expand(num_preds, -1, -1)[pred_qry_mask]
+            map_ids = map_ids[None, :].expand(num_preds, -1)[pred_qry_mask]
+            seg_logits = seg_logits[None, :].expand(num_preds, -1)[pred_qry_mask]
 
-            num_preds_i = len(feat_ids_i)
-            feat_qry_mask = feat_ids_i[:, None] == qry_ids_i[None, :]
+            num_maps = len(map_shapes)
+            map_shapes_tensor = torch.tensor(map_shapes, device=device)
+            map_shapes_prod = map_shapes_tensor.prod(dim=1)
 
-            key_xy_i = key_xy_i[None, :, :].expand(num_preds_i, -1, -1)[feat_qry_mask]
-            map_ids_i = map_ids_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
-
-            seg_logits_i = seg_logits_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
-            refined_mask_i = refined_mask_i[None, :].expand(num_preds_i, -1)[feat_qry_mask]
-            seg_logits_i[refined_mask_i] = 0.0
-
-            numel_per_pred = feat_qry_mask.sum(dim=1)
-            pred_ids_i = torch.arange(num_preds_i, device=device).repeat_interleave(numel_per_pred, dim=0)
-
-            numel_per_map = num_preds_i * map_shapes_prod
+            numel_per_map = num_preds * map_shapes_prod
             cum_numel_per_map = torch.cat([numel_per_map.new_zeros([1]), numel_per_map.cumsum(dim=0)], dim=0)
 
-            map_shapes_tensor_i = map_shapes_tensor[map_ids_i]
-            x_ids = (key_xy_i[:, 0] * map_shapes_tensor_i[:, 1]).to(torch.int64)
-            y_ids = (key_xy_i[:, 1] * map_shapes_tensor_i[:, 0]).to(torch.int64)
+            map_shapes_tensor = map_shapes_tensor[map_ids]
+            x_ids = (key_xy[:, 0] * map_shapes_tensor[:, 1]).to(torch.int64)
+            y_ids = (key_xy[:, 1] * map_shapes_tensor[:, 0]).to(torch.int64)
 
-            prob_ids = cum_numel_per_map[map_ids_i] + pred_ids_i * map_shapes_prod[map_ids_i]
-            prob_ids = prob_ids + y_ids * map_shapes_tensor_i[:, 1] + x_ids
+            prob_ids = cum_numel_per_map[map_ids] + pred_ids * map_shapes_prod[map_ids]
+            prob_ids = prob_ids + y_ids * map_shapes_tensor[:, 1] + x_ids
 
             numel_total = cum_numel_per_map[-1].item()
             pred_probs = torch.zeros(numel_total, device=device)
-            pred_probs[prob_ids] = seg_logits_i.sigmoid()
+            pred_probs[prob_ids] = seg_logits.sigmoid()
 
             cum_numel_per_map = cum_numel_per_map.tolist()
             pred_prob_maps = [pred_probs[i0:i1] for i0, i1 in zip(cum_numel_per_map[:-1], cum_numel_per_map[1:])]
-            pred_prob_maps = [pred_prob_maps[i].view(num_preds_i, 1, *map_shapes[i]) for i in range(num_maps)]
+            pred_prob_maps = [pred_prob_maps[i].view(num_preds, 1, *map_shapes[i]) for i in range(num_maps)]
             pred_probs = pred_prob_maps[-1]
 
             for j in range(num_maps-2, -1, -1):
@@ -1005,7 +993,7 @@ class TopDownSegHead(nn.Module):
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            seg_qry_ids (Dict): Indices determining for which queries segmentations need to be computed (default=None).
+            seg_qry_ids (Dict): Indices determining for which queries to compute segmetations (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -1019,11 +1007,21 @@ class TopDownSegHead(nn.Module):
                 - ref_logits (FloatTensor): refinement logits of query-key pairs of shape [num_qry_key_pairs];
                 - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
 
-            images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
+            images_dict (Dict): Dictionary (possibly) containing additional images annotated with segmentations.
         """
 
-        # Return during training if no segmentation query indices are provided
-        if self.training and seg_qry_ids is None:
+        # Handle case where no segmentation queries are provided
+        if seg_qry_ids is None:
+
+            if self.training:
+                return storage_dict, images_dict
+
+            if self.get_segs:
+                self.compute_segs(qry_feats, storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
+
+            if images_dict is not None:
+                self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+
             return storage_dict, images_dict
 
         # Get number of features and device
@@ -1045,12 +1043,11 @@ class TopDownSegHead(nn.Module):
         feat_ids = storage_dict['feat_ids']
         qry_boxes = storage_dict['pred_boxes'].clone()
 
-        # Select desired queries during training
-        if self.training:
-            qry_feats = qry_feats[seg_qry_ids]
-            batch_ids = batch_ids[seg_qry_ids]
-            feat_ids = feat_ids[seg_qry_ids]
-            qry_boxes = qry_boxes[seg_qry_ids]
+        # Select for which queries to compute segmentations
+        qry_feats = qry_feats[seg_qry_ids]
+        batch_ids = batch_ids[seg_qry_ids]
+        feat_ids = feat_ids[seg_qry_ids]
+        qry_boxes = qry_boxes[seg_qry_ids]
 
         # Get query segmentation and refinement features
         qry_shared_feats = self.qry_shared(qry_feats) if self.qry_shared is not None else qry_feats
@@ -1257,14 +1254,6 @@ class TopDownSegHead(nn.Module):
         storage_dict['ref_logits'] = ref_logits
         storage_dict['refined_mask'] = refined_mask
 
-        # Get segmentation predictions if needed
-        if self.get_segs and not self.training:
-            self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
-
-        # Draw predicted and target segmentations if needed
-        if images_dict is not None:
-            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
-
         return storage_dict, images_dict
 
     def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
@@ -1355,7 +1344,7 @@ class TopDownSegHead(nn.Module):
         cls_logits = storage_dict['cls_logits']
         tgt_labels = tgt_dict['labels']
 
-        # Get query indices for which segmentation needs to be computed
+        # Get query indices for which to compute segmentations
         qry_cls_logits = cls_logits[matched_qry_ids, tgt_labels[matched_tgt_ids]]
         max_ids = scatter_max(qry_cls_logits, matched_tgt_ids)[1]
         max_ids = max_ids[max_ids < len(matched_qry_ids)]
