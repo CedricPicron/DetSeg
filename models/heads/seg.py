@@ -789,7 +789,8 @@ class TopDownSegHead(nn.Module):
             seg_qry_ids, pred_inv_ids = pred_qry_ids_i.unique(sorted=True, return_inverse=True)
 
             # Compute segmentation predictions for desired queries
-            self.forward_pred(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
+            forward_pred_kwargs = {'cum_feats_batch': cum_feats_batch, 'seg_qry_ids': seg_qry_ids}
+            self.forward_pred(qry_feats, storage_dict, **forward_pred_kwargs, **kwargs)
 
             # Retrieve various items related to segmentation predictions from storage dictionary
             qry_ids = storage_dict['qry_ids']
@@ -1301,8 +1302,11 @@ class TopDownSegHead(nn.Module):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
+        # Get number of positive matches
+        num_matches = len(matched_qry_ids)
+
         # Handle case where there are no positive matches
-        if len(matched_qry_ids) == 0:
+        if num_matches == 0:
 
             # Get segmentation loss
             seg_loss = 0.0 * qry_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
@@ -1371,7 +1375,7 @@ class TopDownSegHead(nn.Module):
         tgt_maps = tgt_masks[:, None, :, :].float()
         tgt_maps_list = [tgt_maps]
 
-        for i in range(self.key_max_id):
+        for _ in range(self.key_max_id):
             tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
             tgt_maps_list.append(tgt_maps)
 
@@ -1400,11 +1404,14 @@ class TopDownSegHead(nn.Module):
         seg_targets = targets[seg_mask].float() / 2
         ref_targets = (~seg_mask).float()
 
+        # Get calibration loss weight
+        cal_loss_weight = num_matches / num_segs
+
         # Get segmentation loss
         inv_ids, counts = torch.unique(qry_ids[seg_mask], sorted=False, return_inverse=True, return_counts=True)[1:]
         loss_weights = (1/counts)[inv_ids]
 
-        seg_loss = self.seg_loss(seg_logits, seg_targets, weight=loss_weights)
+        seg_loss = cal_loss_weight * self.seg_loss(seg_logits, seg_targets, weight=loss_weights)
         seg_loss = seg_loss + sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
@@ -1414,7 +1421,7 @@ class TopDownSegHead(nn.Module):
         inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
         loss_weights = (1/counts)[inv_ids]
 
-        ref_loss = self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
+        ref_loss = cal_loss_weight * self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
