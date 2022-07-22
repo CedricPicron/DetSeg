@@ -9,7 +9,6 @@ from detectron2.utils.visualizer import Visualizer
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_scatter import scatter_max
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -1265,12 +1264,10 @@ class TopDownSegHead(nn.Module):
             qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
-                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - labels (LongTensor): target class indices of shape [num_targets];
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
@@ -1344,18 +1341,8 @@ class TopDownSegHead(nn.Module):
             error_msg = "The TopDownSegHead does not support a single query to be matched with multiple targets."
             raise ValueError(error_msg)
 
-        # Retrieve classfication logits and target class indices
-        cls_logits = storage_dict['cls_logits']
-        tgt_labels = tgt_dict['labels']
-
-        # Get query indices for which to compute segmentations
-        qry_cls_logits = cls_logits[matched_qry_ids, tgt_labels[matched_tgt_ids]]
-        max_ids = scatter_max(qry_cls_logits, matched_tgt_ids)[1]
-        max_ids = max_ids[max_ids < len(matched_qry_ids)]
-        seg_qry_ids = matched_qry_ids[max_ids]
-
         # Compute segmentation predictions for desired queries
-        self.forward_pred(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
+        self.forward_pred(qry_feats, storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
         qry_ids = storage_dict['qry_ids']
@@ -1365,10 +1352,8 @@ class TopDownSegHead(nn.Module):
         seg_logits = storage_dict['seg_logits']
         ref_logits = storage_dict['ref_logits']
 
-        # Update matched query and target indices
-        num_segs = len(seg_qry_ids)
-        matched_qry_ids = torch.arange(num_segs, device=device)
-        matched_tgt_ids = matched_tgt_ids[max_ids]
+        # Update matched query indices
+        matched_qry_ids = torch.arange(num_matches, device=device)
 
         # Get target segmentation values
         tgt_masks = tgt_dict['masks']
@@ -1404,14 +1389,11 @@ class TopDownSegHead(nn.Module):
         seg_targets = targets[seg_mask].float() / 2
         ref_targets = (~seg_mask).float()
 
-        # Get calibration loss weight
-        cal_loss_weight = num_matches / num_segs
-
         # Get segmentation loss
         inv_ids, counts = torch.unique(qry_ids[seg_mask], sorted=False, return_inverse=True, return_counts=True)[1:]
         loss_weights = (1/counts)[inv_ids]
 
-        seg_loss = cal_loss_weight * self.seg_loss(seg_logits, seg_targets, weight=loss_weights)
+        seg_loss = self.seg_loss(seg_logits, seg_targets, weight=loss_weights)
         seg_loss = seg_loss + sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
@@ -1421,7 +1403,7 @@ class TopDownSegHead(nn.Module):
         inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
         loss_weights = (1/counts)[inv_ids]
 
-        ref_loss = cal_loss_weight * self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
+        ref_loss = self.ref_loss(ref_logits, ref_targets, weight=loss_weights)
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
