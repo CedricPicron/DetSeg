@@ -297,7 +297,7 @@ model = dict(
             ],
             refine_iters=3,
             refine_grid_size=2,
-            refine_per_iter=20000,
+            refine_per_iter=40000,
             key_td_cfg=[
                 dict(
                     type='nn.Linear',
@@ -312,6 +312,18 @@ model = dict(
                 dict(
                     type='View',
                     out_shape=(-1, 256),
+                ),
+            ],
+            key_self_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
                 ),
             ],
             get_segs=True,

@@ -309,6 +309,10 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
+                dict(
+                    type='View',
+                    out_shape=(-1, 256),
+                ),
             ],
             get_segs=True,
             dup_attrs=dict(

@@ -314,6 +314,18 @@ model = dict(
                     out_shape=(-1, 256),
                 ),
             ],
+            key_self_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
             get_segs=True,
             dup_attrs=dict(
                 type='nms',

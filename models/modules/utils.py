@@ -231,3 +231,44 @@ class TopDown(nn.Module):
         out_feat_list = [in_feat_maps[i] + self.td(in_feat_maps[i+1], **kwargs) for i in range(num_maps-1)]
 
         return out_feat_list
+
+
+@MODELS.register_module()
+class View(nn.Module):
+    """
+    Class implementing the View module.
+
+    Attributes:
+        out_shape (Tuple): Tuple containing the output shape.
+    """
+
+    def __init__(self, out_shape):
+        """
+        Initializes the View module.
+
+        Args:
+            out_shape (Tuple): Tuple containing the output shape.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set output shape attribute
+        self.out_shape = out_shape
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the View module.
+
+        Args:
+            in_tensor (Tensor): Input tensor of shape [*in_shape].
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            out_tensor (Tensor): Output tensor of shape [*out_shape].
+        """
+
+        # Get output tensor
+        out_tensor = in_tensor.view(*self.out_shape)
+
+        return out_tensor

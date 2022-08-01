@@ -600,7 +600,8 @@ class TopDownSegHead(nn.Module):
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_grid_size (int): Integer containing the size of the refinement grid.
         refine_per_iter (int): Integer containing the number of refinements per refinement iteration.
-        key_td (nn.Module): Module computing the top-down key features.
+        key_td (nn.Module): Optional module computing the top-down key features.
+        key_self (nn.Module): Optional module computing the self key features.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -617,9 +618,9 @@ class TopDownSegHead(nn.Module):
     """
 
     def __init__(self, key_2d_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, refine_per_iter,
-                 key_td_cfg, mask_thr, metadata, seg_loss_cfg, ref_loss_cfg, qry_shared_cfg=None, qry_seg_cfg=None,
-                 qry_ref_cfg=None, key_seg_cfg=None, key_ref_cfg=None, get_segs=True, dup_attrs=None, max_segs=None,
-                 matcher_cfg=None, **kwargs):
+                 mask_thr, metadata, seg_loss_cfg, ref_loss_cfg, qry_shared_cfg=None, qry_seg_cfg=None,
+                 qry_ref_cfg=None, key_seg_cfg=None, key_ref_cfg=None, key_td_cfg=None, key_self_cfg=None,
+                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -631,7 +632,6 @@ class TopDownSegHead(nn.Module):
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_grid_size (int): Integer containing the size of the refinement grid.
             refine_per_iter (int): Integer containing the number of refinements per refinement iteration.
-            key_td_cfg (Dict): Configuration dictionary specifying the key top-down module.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
@@ -641,6 +641,8 @@ class TopDownSegHead(nn.Module):
             qry_ref_cfg (Dict): Configuration dictionary specifying the query refinement module (default=None).
             key_seg_cfg (Dict): Configuration dictionary specifying the key segmentation module (default=None).
             key_ref_cfg (Dict): Configuration dictionary specifying the key refinement module (default=None).
+            key_td_cfg (Dict): Configuration dictionary specifying the key top-down module (default=None).
+            key_self_cfg (Dict): Configuration dictionary specifying the key self module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
@@ -660,7 +662,8 @@ class TopDownSegHead(nn.Module):
         self.key_2d = build_model(key_2d_cfg)
         self.key_seg = build_model(key_seg_cfg) if key_seg_cfg is not None else None
         self.key_ref = build_model(key_ref_cfg) if key_ref_cfg is not None else None
-        self.key_td = build_model(key_td_cfg)
+        self.key_td = build_model(key_td_cfg) if key_td_cfg is not None else None
+        self.key_self = build_model(key_self_cfg) if key_self_cfg is not None else None
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -1176,8 +1179,6 @@ class TopDownSegHead(nn.Module):
 
         map_sizes_i = map_sizes[map_ids]
         map_offsets_i = map_offsets[map_ids]
-
-        key_feat_size = key_feats_i.size()[1]
         delta_key_map_offset = map_offsets[self.key_min_id]
 
         for i in range(self.refine_iters):
@@ -1219,12 +1220,15 @@ class TopDownSegHead(nn.Module):
             feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
             feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
-            td_key_feats = self.key_td(key_feats_i[refine_mask]).view(-1, key_feat_size)
+            td_key_feats = key_feats_i[refine_mask]
+            td_key_feats = self.key_td(td_key_feats) if self.key_td is not None else td_key_feats
+
             self_key_feats = torch.zeros_like(td_key_feats)
             self_mask = map_ids >= self.key_min_id
             self_key_feats[self_mask] = key_feats[batch_ids[self_mask], feat_ids[self_mask], :]
-            key_feats_i = td_key_feats + self_key_feats
+            self_key_feats = self.key_self(self_key_feats) if self.key_self is not None else self_key_feats
 
+            key_feats_i = td_key_feats + self_key_feats
             key_seg_feats = self.key_seg(key_feats_i) if self.key_seg is not None else key_feats_i
             key_ref_feats = self.key_ref(key_feats_i) if self.key_ref is not None else key_feats_i
 
