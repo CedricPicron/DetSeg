@@ -230,7 +230,7 @@ model = dict(
             qry_seg_cfg=dict(
                 type='OneStepMLP',
                 in_size=256,
-                out_size=128,
+                out_size=256,
                 norm='layer',
                 act_fn='relu',
                 skip=False,
@@ -238,7 +238,7 @@ model = dict(
             qry_ref_cfg=dict(
                 type='OneStepMLP',
                 in_size=256,
-                out_size=128,
+                out_size=256,
                 norm='layer',
                 act_fn='relu',
                 skip=False,
@@ -275,7 +275,7 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=128,
+                    out_features=256,
                     bias=True,
                 ),
                 dict(
@@ -287,7 +287,7 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=128,
+                    out_features=256,
                     bias=True,
                 ),
                 dict(
@@ -312,18 +312,6 @@ model = dict(
                 dict(
                     type='View',
                     out_shape=(-1, 256),
-                ),
-            ],
-            key_self_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
                 ),
             ],
             get_segs=True,
