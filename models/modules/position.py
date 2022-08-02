@@ -1,7 +1,9 @@
 """
 Collection of modules related to position encodings.
 """
+import math
 
+import torch
 from torch import nn
 
 from models.build import build_model, MODELS
@@ -52,5 +54,76 @@ class PosEncoder(nn.Module):
 
         # Get position features
         pos_feats = self.net(pos_xy)
+
+        return pos_feats
+
+
+@MODELS.register_module()
+class SinePosEncoder2d(nn.Module):
+    """
+    Class implementing the SinePosEncoder2d module.
+
+    Attributes:
+        feat_size (int): Integer containing the feature size of the position features.
+        normalize (bool): Boolean indicating whether to normalize the input position coordinates.
+        scale_factor (float): Value scaling position coordinates after optional normalization.
+        max_period (float): Value determining the maximum sine and cosine periods.
+    """
+
+    def __init__(self, feat_size, normalize=False, scale_factor=2*math.pi, max_period=1e4):
+        """
+        Initializes the SinePosEncoder2d module.
+
+        Args:
+            feat_size (int): Integer containing the feature size of the position features.
+            normalize (bool): Boolean indicating whether to normalize the input position coordinates (default=False).
+            scale_factor (float): Value scaling position coordinates after optional normalization (default=2*math.pi).
+            max_period (float): Value determining the maximum sine and cosine periods (default=1e4).
+
+        Raises:
+            ValueError: Error when the provided feature size is not even.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check whether the feature size is even
+        if feat_size % 2 != 0:
+            error_msg = f"The feature size (got {feat_size}) of the SinePosEncoder2d module must be even."
+            raise ValueError(error_msg)
+
+        # Set remaining attributes
+        self.feat_size = feat_size
+        self.normalize = normalize
+        self.scale_factor = scale_factor
+        self.max_period = max_period
+
+    def forward(self, pos_xy):
+        """
+        Forward method of the SinePosEncoder2d module.
+
+        Args:
+            pos_xy (FloatTensor): Position coordinates of shape [num_pts, 2].
+
+        Returns:
+            pos_feats (FloatTensor): Position features of shape [num_pts, feat_size].
+        """
+
+        # Get normalized position coordinates if requested
+        if self.normalize:
+            pos_xy = pos_xy - pos_xy.amin(dim=1)
+            pos_xy = pos_xy / (pos_xy.amax(dim=1) + 1e-6)
+
+        # Get scaled position coordinates
+        pos_xy = self.scale_factor * pos_xy
+
+        # Get periods
+        periods = 4 * torch.arange(self.feat_size // 4, dtype=torch.float, device=pos_xy.device) / self.feat_size
+        periods = self.max_period ** periods
+
+        # Get position features
+        pos_feats = pos_xy[:, :, None] / periods
+        pos_feats = torch.cat([pos_feats.sin(), pos_feats.cos()], dim=2)
+        pos_feats = pos_feats.view(-1, self.feat_size)
 
         return pos_feats

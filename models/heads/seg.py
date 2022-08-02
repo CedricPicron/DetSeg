@@ -593,6 +593,7 @@ class TopDownSegHead(nn.Module):
         qry_ref (nn.Module): Optional module computing the query refinement features.
         key_2d (nn.Module): Module computing the 2D key feature maps.
         map_offset (int): Integer with map offset used to determine the initial key feature map for each query.
+        pos_enc (nn.Module): Optional module computing the position features from normalized key coordinates.
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         key_seg (nn.Module): Optional module computing the key segmentation features.
@@ -619,8 +620,8 @@ class TopDownSegHead(nn.Module):
 
     def __init__(self, key_2d_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_grid_size, refine_per_iter,
                  mask_thr, metadata, seg_loss_cfg, ref_loss_cfg, qry_shared_cfg=None, qry_seg_cfg=None,
-                 qry_ref_cfg=None, key_seg_cfg=None, key_ref_cfg=None, key_td_cfg=None, key_self_cfg=None,
-                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+                 qry_ref_cfg=None, pos_enc_cfg=None, key_seg_cfg=None, key_ref_cfg=None, key_td_cfg=None,
+                 key_self_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -639,6 +640,7 @@ class TopDownSegHead(nn.Module):
             qry_shared_cfg (Dict): Configuration dictionary specifying the query shared module (default=None).
             qry_seg_cfg (Dict): Configuration dictionary specifying the query segmentation module (default=None).
             qry_ref_cfg (Dict): Configuration dictionary specifying the query refinement module (default=None).
+            pos_enc_cfg (Dict): Configuration dictionary specifying the position encoder module (default=None).
             key_seg_cfg (Dict): Configuration dictionary specifying the key segmentation module (default=None).
             key_ref_cfg (Dict): Configuration dictionary specifying the key refinement module (default=None).
             key_td_cfg (Dict): Configuration dictionary specifying the key top-down module (default=None).
@@ -653,17 +655,20 @@ class TopDownSegHead(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build query modules if needed
+        # Build provided query modules
         self.qry_shared = build_model(qry_shared_cfg) if qry_shared_cfg is not None else None
         self.qry_seg = build_model(qry_seg_cfg) if qry_seg_cfg is not None else None
         self.qry_ref = build_model(qry_ref_cfg) if qry_ref_cfg is not None else None
 
-        # Build key modules
+        # Build provided key modules
         self.key_2d = build_model(key_2d_cfg)
         self.key_seg = build_model(key_seg_cfg) if key_seg_cfg is not None else None
         self.key_ref = build_model(key_ref_cfg) if key_ref_cfg is not None else None
         self.key_td = build_model(key_td_cfg) if key_td_cfg is not None else None
         self.key_self = build_model(key_self_cfg) if key_self_cfg is not None else None
+
+        # Build position encoder module if needed
+        self.pos_enc = build_model(pos_enc_cfg) if pos_enc_cfg is not None else None
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -1093,7 +1098,7 @@ class TopDownSegHead(nn.Module):
 
                 if len(qry_ids_ij) > 0:
                     qry_boxes_ij = qry_boxes[qry_ids_ij].normalize(images[i])
-                    qry_boxes_ij = qry_boxes_ij.to_format('xyxy').boxes
+                    qry_boxes_ij = qry_boxes_ij.to_format('xyxy')
 
                     key_feat_map = key_feat_maps[j][i]
                     kH, kW = key_feat_map.size()[-2:]
@@ -1101,24 +1106,30 @@ class TopDownSegHead(nn.Module):
                     pts_x = torch.linspace(0.5/kW, 1-0.5/kW, steps=kW, device=device)
                     pts_y = torch.linspace(0.5/kH, 1-0.5/kH, steps=kH, device=device)
 
-                    left_mask = pts_x[None, None, :] > qry_boxes_ij[:, 0, None, None] - 0.5/kW
-                    top_mask = pts_y[None, :, None] > qry_boxes_ij[:, 1, None, None] - 0.5/kH
-                    right_mask = pts_x[None, None, :] < qry_boxes_ij[:, 2, None, None] + 0.5/kW
-                    bot_mask = pts_y[None, :, None] < qry_boxes_ij[:, 3, None, None] + 0.5/kH
+                    left_mask = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] - 0.5/kW
+                    top_mask = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] - 0.5/kH
+                    right_mask = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] + 0.5/kW
+                    bot_mask = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] + 0.5/kH
 
                     key_mask = left_mask & top_mask & right_mask & bot_mask
                     local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
 
-                    key_feats_i = key_feat_map.flatten(1).t().contiguous()
-                    key_feats_i = key_feats_i[key_ids, :]
-                    key_feats_list.append(key_feats_i)
-
                     qry_ids_ij = qry_ids_ij[local_qry_ids]
                     qry_ids_list.append(qry_ids_ij)
+
+                    key_feats_i = key_feat_map.flatten(1).t().contiguous()
+                    key_feats_i = key_feats_i[key_ids, :]
 
                     key_xy_i = torch.meshgrid(pts_x, pts_y, indexing='xy')
                     key_xy_i = torch.stack(key_xy_i, dim=0).flatten(1)
                     key_xy_i = key_xy_i[:, key_ids].t()
+
+                    if self.pos_enc is not None:
+                        qry_boxes_ij = qry_boxes_ij[local_qry_ids].to_format('xywh').boxes
+                        norm_key_xy = (key_xy_i - qry_boxes_ij[:, :2]) / qry_boxes_ij[:, 2:]
+                        key_feats_i = key_feats_i + self.pos_enc(norm_key_xy)
+
+                    key_feats_list.append(key_feats_i)
                     key_xy_list.append(key_xy_i)
 
                     num_keys = len(key_ids)
