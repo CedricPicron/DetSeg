@@ -16,7 +16,6 @@ from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as coco_mask
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from datasets.transforms import get_train_transforms, get_eval_transforms
@@ -129,9 +128,7 @@ class CocoDataset(Dataset):
             tgt_dict (Dict): Target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW];
-                - no_ex_cls_mask (BoolTensor): mask of classes with not all instances annotated of shape [num_classes];
-                - neg_cls_mask (BoolTensor): mask of classes which are not present in the image of shape [num_classes].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
 
         Raises:
             ValueError: Error when neither the 'coco' attribute nor the 'filenames' attribute is set.
@@ -184,20 +181,6 @@ class CocoDataset(Dataset):
                 iW, iH = image.size()
                 masks = self.get_masks(annotations, iH, iW)
                 tgt_dict['masks'] = masks[well_defined]
-
-            # Get not-exhaustive and negative class mask if provided
-            image_dict = self.coco.loadImgs(image_id)[0]
-            num_classes = len(id_dict)
-
-            if 'not_exhaustive_category_ids' in image_dict:
-                no_ex_cat_ids = [id_dict[cat_id] for cat_id in image_dict['not_exhaustive_category_ids']]
-                no_ex_cat_ids = torch.tensor(no_ex_cat_ids)
-                tgt_dict['no_ex_cls_mask'] = F.one_hot(no_ex_cat_ids, num_classes).bool()
-
-            if 'neg_category_ids' in image_dict:
-                neg_cat_ids = [id_dict[cat_id] for cat_id in image_dict['neg_category_ids']]
-                neg_cat_ids = torch.tensor(neg_cat_ids)
-                tgt_dict['neg_cls_mask'] = F.one_hot(neg_cat_ids, num_classes).bool()
 
         # Perform image and target dictionary transformations
         image, tgt_dict = transform(image, tgt_dict)

@@ -74,10 +74,8 @@ class BaseClsHead(nn.Module):
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
-            tgt_dict (Dict): Target dictionary potentially containing following keys:
-                - labels (LongTensor): target class indices of shape [num_targets];
-                - no_ex_cls_mask (BoolTensor): mask of classes with not all instances annotated [batch_size, num_cls];
-                - neg_cls_mask (BoolTensor): mask of classes which are not present in the image [batch_size, num_cls].
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - labels (LongTensor): target class indices of shape [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
