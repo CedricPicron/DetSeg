@@ -21,7 +21,9 @@ def collate_fn(batch):
             - tgt_dict (Dict): target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW];
+                - no_ex_cls_mask (BoolTensor): mask of classes with not all instances annotated of shape [num_classes];
+                - neg_cls_mask (BoolTensor): mask of classes which are not present in the image of shape [num_classes].
 
     Returns:
         images (Images): New Images structure containing the concatenated Images structures across batch entries.
@@ -31,6 +33,8 @@ def collate_fn(batch):
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
             - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+            - no_ex_cls_mask (BoolTensor): mask of classes with not all instances annotated [batch_size, num_classes];
+            - neg_cls_mask (BoolTensor): mask of classes which are not present in the image [batch_size, num_classes].
     """
 
     # Get batch images and target dictionaries
@@ -62,6 +66,13 @@ def collate_fn(batch):
         masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
         padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
         tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
+
+    # Stack non-exhaustive and negative class masks if provided
+    if 'no_ex_cls_mask' in tgt_dicts[0]:
+        tgt_dict['no_ex_cls_mask'] = torch.stack([tgt_dict['no_ex_cls_mask'] for tgt_dict in tgt_dicts], dim=0)
+
+    if 'neg_cls_mask' in tgt_dicts[0]:
+        tgt_dict['neg_cls_mask'] = torch.stack([tgt_dict['neg_cls_mask'] for tgt_dict in tgt_dicts], dim=0)
 
     return images, tgt_dict
 
