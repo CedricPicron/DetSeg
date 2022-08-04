@@ -6,8 +6,8 @@ import json
 
 
 # Load LVIS training and validation jsons
-lvis_train_path = '../../lvis/lvis_v0.5_train.json'
-lvis_val_path = '../../lvis/lvis_v0.5_val.json'
+lvis_train_path = '../../lvis/annotations/lvis_v0.5_train.json'
+lvis_val_path = '../../lvis/annotations/lvis_v0.5_val.json'
 
 with open(lvis_train_path, 'r') as json_file:
     lvis_train_json = json.load(json_file)

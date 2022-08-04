@@ -176,20 +176,18 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
                 filename = ('_').join([str(image_id), *key_parts[:-1]])
                 Image.fromarray(image).save(f'{vis_dir / filename}.png')
 
-    # Perform evaluations
-    if evaluators is not None:
-        for evaluator in evaluators:
-            evaluator.evaluate(device=device)
-
     # Get epoch evaluation statistics
     metric_logger.synchronize_between_processes()
     eval_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+    # Perform evaluations
     if evaluators is not None:
         for i, evaluator in enumerate(evaluators, 1):
-            for metric in evaluator.metrics:
-                if hasattr(evaluator, 'sub_evaluators'):
-                    eval_stats[f'eval_{i}_{metric}'] = evaluator.sub_evaluators[metric].stats.tolist()
+            eval_dict = evaluator.evaluate(device=device)
+
+            if eval_dict is not None:
+                for metric in eval_dict.keys():
+                    eval_stats[f'eval_{i}_{metric}'] = eval_dict[metric]
 
     # Save evaluations to output directory
     if distributed.is_main_process() and output_dir is not None:
@@ -200,7 +198,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         if evaluators is not None:
             for i, evaluator in enumerate(evaluators, 1):
                 for metric in evaluator.metrics:
-                    if save_results or not hasattr(evaluator, 'sub_evaluators'):
+                    if save_results or not evaluator.has_gt_anns:
                         with open(output_dir / f'result_{i}_{metric}_{save_tag}.json', 'w') as result_file:
                             json.dump(evaluator.result_dicts[metric], result_file)
 

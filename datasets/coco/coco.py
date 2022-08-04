@@ -3,12 +3,14 @@ COCO dataset/evaluator and build function.
 """
 import contextlib
 import json
+import logging
 import os
 from pathlib import Path
 
 from detectron2.data import MetadataCatalog
-from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as COCO_SPLITS
+from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as SPLITS
 from detectron2.layers import batched_nms
+from lvis import LVIS, LVISEval, LVISResults
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -209,6 +211,41 @@ class CocoDataset(Dataset):
         return dataset_length
 
 
+class LVISEval(LVISEval):
+    """
+    Sub-evaluator evaluating predictions on data with LVIS annotations.
+
+    It modifies the summarize method by not computing and displaying the evaluation results for the different frequency
+    groups.
+    """
+
+    def summarize(self):
+        """
+        Computes and displays summary metrics of the evaluation results.
+
+        This modified version does not compute and display the evaluation results for the different frequency groups.
+        """
+
+        if not self.eval:
+            raise RuntimeError("Please run accumulate() first.")
+
+        max_dets = self.params.max_dets
+
+        self.results["AP"] = self._summarize('ap')
+        self.results["AP50"] = self._summarize('ap', iou_thr=0.50)
+        self.results["AP75"] = self._summarize('ap', iou_thr=0.75)
+        self.results["APs"] = self._summarize('ap', area_rng="small")
+        self.results["APm"] = self._summarize('ap', area_rng="medium")
+        self.results["APl"] = self._summarize('ap', area_rng="large")
+
+        key = "AR@{}".format(max_dets)
+        self.results[key] = self._summarize('ar')
+
+        for area_rng in ["small", "medium", "large"]:
+            key = "AR{}@{}".format(area_rng[0], max_dets)
+            self.results[key] = self._summarize('ar', area_rng=area_rng)
+
+
 class CocoEvaluator(object):
     """
     Evaluator object capable of computing evaluations from predictions on COCO data and storing them.
@@ -222,17 +259,26 @@ class CocoEvaluator(object):
         eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
         nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections.
 
-        Additional attributes when the evaluation dataset contains annotations:
-            coco (COCO): Object containing the COCO dataset annotations.
-            sub_evaluators (Dict): Dictionary of sub-evaluators, each of them evaluating one metric.
+        has_gt_anns (bool): Boolean indicating whether evaluation dataset has ground-truth annotations.
+
+        If ground-annotations are available:
+            ann_format (str): String containing the annotation format.
+
+            If annotation format is 'coco':
+                coco (COCO): Object containing the COCO annotations.
+
+            If annotation format is 'lvis':
+                lvis (LVIS): Object containing the LVIS annotations.
     """
 
-    def __init__(self, eval_dataset, metrics=None, nms_thr=0.5):
+    def __init__(self, eval_dataset, ann_format=None, lvis_ann_file=None, metrics=None, nms_thr=0.5):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             eval_dataset (CocoDataset): The evaluation dataset.
+            ann_format (str): String containing the annotation format (default=None).
+            lvis_ann_file (str): String containing the path to the file with LVIS annotations (default=None).
             metrics (List): List with strings containing the evaluation metrics to be used (default=None).
             nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
         """
@@ -247,10 +293,17 @@ class CocoEvaluator(object):
         self.eval_nms = len(eval_dataset.transforms) > 1
         self.nms_thr = nms_thr
 
-        # Set additional attributes when evaluation dataset has annotations
-        if hasattr(eval_dataset, 'coco'):
-            self.coco = eval_dataset.coco
-            self.sub_evaluators = {metric: COCOeval(self.coco, iouType=metric) for metric in self.metrics}
+        # Set attributes related to ground-truth annotations
+        self.has_gt_anns = hasattr(eval_dataset, 'coco')
+
+        if self.has_gt_anns:
+            self.ann_format = ann_format if ann_format is not None else 'coco'
+
+            if self.ann_format == 'coco':
+                self.coco = eval_dataset.coco
+
+            elif self.ann_format == 'lvis':
+                self.lvis = LVIS(lvis_ann_file)
 
     def add_metrics(self, metrics):
         """
@@ -262,10 +315,6 @@ class CocoEvaluator(object):
 
         # Add evalutation metrics
         self.metrics.extend(metrics)
-
-        # Add sub-evaluators if needed
-        if hasattr(self, 'coco'):
-            self.sub_evaluators.update({metric: COCOeval(self.coco, iouType=metric) for metric in metrics})
 
         # Reset evaluator
         self.reset()
@@ -396,8 +445,12 @@ class CocoEvaluator(object):
         Args:
             device (str): String containing the type of device used during NMS (default='cpu').
 
+        Returns:
+            eval_dict (Dict): Dictionary with evaluation results for each metric (if annotations are available).
+
         Raises:
             ValueError: Error when none of the allowed NMS metrics match one of the evaluation metrics.
+            ValueError: Error when CocoEvaluator evaluator has unknown annotation format.
         """
 
         # Synchronize image indices and make them unique
@@ -460,20 +513,49 @@ class CocoEvaluator(object):
                 data.drop(index=drop_result_ids, inplace=True)
                 self.result_dicts[metric] = data.to_dict('records')
 
-        # Compare with ground-truth annotations if available
-        if hasattr(self, 'coco'):
-            with open(os.devnull, 'w') as devnull:
-                with contextlib.redirect_stdout(devnull):
-                    for metric in self.metrics:
-                        sub_evaluator = self.sub_evaluators[metric]
+        # Return when no ground-truth annotations are available
+        if not self.has_gt_anns:
+            return
+
+        # Compare predictions with ground-truth annotations
+        eval_dict = {}
+
+        for metric in self.metrics:
+
+            if self.ann_format == 'coco':
+                sub_evaluator = COCOeval(self.coco, iouType=metric)
+
+                with open(os.devnull, 'w') as devnull:
+                    with contextlib.redirect_stdout(devnull):
                         sub_evaluator.cocoDt = self.coco.loadRes(self.result_dicts[metric])
                         sub_evaluator.params.imgIds = self.image_ids
                         sub_evaluator.evaluate()
                         sub_evaluator.accumulate()
 
-            for metric in self.metrics:
                 print(f"Evaluation metric: {metric}")
-                self.sub_evaluators[metric].summarize()
+                sub_evaluator.summarize()
+                eval_dict[metric] = sub_evaluator.stats.tolist()
+
+            elif self.ann_format == 'lvis':
+                prev_log_lvl = logging.root.manager.disable
+                logging.disable()
+
+                lvis_res = LVISResults(self.lvis, self.result_dicts[metric])
+                sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
+                sub_evaluator.params.img_ids = self.image_ids
+
+                sub_evaluator.run()
+                logging.disable(prev_log_lvl)
+
+                print(f"Evaluation metric: {metric}")
+                sub_evaluator.print_results()
+                eval_dict[metric] = list(sub_evaluator.get_results().values())
+
+            else:
+                error_msg = f"Unknown annotation format '{self.evaluator_type}' for CocoEvaluator evaluator."
+                raise ValueError(error_msg)
+
+        return eval_dict
 
 
 def build_coco(args):
@@ -491,20 +573,23 @@ def build_coco(args):
         evaluator (object): Object capable of computing evaluations from predictions and storing them.
     """
 
-    # Add COCO splits with LVIS annotations
-    COCO_SPLITS['coco']['coco_train_lvis_v0.5'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v0.5.json')
-    COCO_SPLITS['coco']['coco_val_lvis_v0.5'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v0.5.json')
-    COCO_SPLITS['coco']['coco_train_lvis_v1'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v1.json')
-    COCO_SPLITS['coco']['coco_val_lvis_v1'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
+    # Add splits with LVIS annotations
+    SPLITS['coco']['coco_lvis_v0.5_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v0.5.json')
+    SPLITS['coco']['coco_lvis_v0.5_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v0.5.json')
+    SPLITS['coco']['coco_lvis_v1_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v1.json')
+    SPLITS['coco']['coco_lvis_v1_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
 
-    names = ('coco_train_lvis_v0.5', 'coco_val_lvis_v0.5', 'coco_train_lvis_v1', 'coco_val_lvis_v1')
+    SPLITS['lvis'] = {}
+    SPLITS['lvis']['lvis_v0.5_val_cocofied'] = ('coco/val2017', 'lvis/annotations/lvis_v0.5_val_cocofied.json')
+
+    names = ('coco_lvis_v0.5_train', 'coco_lvis_v0.5_val', 'coco_lvis_v1_train', 'coco_lvis_v1_val')
     thing_dataset_id_to_contiguous_id = MetadataCatalog.get('coco_2017_train').thing_dataset_id_to_contiguous_id
     thing_classes = MetadataCatalog.get('coco_2017_train').thing_classes
     thing_colors = MetadataCatalog.get('coco_2017_train').thing_colors
 
     for name in names:
-        MetadataCatalog.get(name).json_file = f"datasets/{COCO_SPLITS['coco'][name][1]}"
-        MetadataCatalog.get(name).image_root = f"dataset/{COCO_SPLITS['coco'][name][0]}"
+        MetadataCatalog.get(name).json_file = f"datasets/{SPLITS['coco'][name][1]}"
+        MetadataCatalog.get(name).image_root = f"dataset/{SPLITS['coco'][name][0]}"
         MetadataCatalog.get(name).evaluator_type = 'coco'
         MetadataCatalog.get(name).thing_dataset_id_to_contiguous_id = thing_dataset_id_to_contiguous_id
         MetadataCatalog.get(name).thing_classes = thing_classes
@@ -518,23 +603,29 @@ def build_coco(args):
 
     # Get training dataset if needed
     if not args.eval:
-        image_dir = root / COCO_SPLITS['coco'][f'coco_{args.train_split}'][0]
+        image_dir = root / SPLITS['coco'][f'coco_{args.train_split}'][0]
         train_transforms = get_train_transforms(args.train_transforms_type)
         metadata = MetadataCatalog.get(f'coco_{args.train_split}')
-        annotation_file = root / COCO_SPLITS['coco'][f'coco_{args.train_split}'][1]
+        annotation_file = root / SPLITS['coco'][f'coco_{args.train_split}'][1]
         datasets['train'] = CocoDataset(image_dir, train_transforms, metadata, annotation_file=annotation_file)
 
     # Get evaluation dataset
-    image_dir = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][0]
+    image_dir = root / SPLITS['coco'][f'coco_{args.eval_split}'][0]
     eval_transforms = get_eval_transforms(args.eval_transforms_type)
     metadata = MetadataCatalog.get(f'coco_{args.eval_split}')
-    annotation_file = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
-    info_file = root / COCO_SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'test' in args.eval_split else None
+    annotation_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
+    info_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'test' in args.eval_split else None
 
     file_kwargs = {'annotation_file': annotation_file, 'info_file': info_file}
     datasets['eval'] = CocoDataset(image_dir, eval_transforms, metadata, **file_kwargs)
 
     # Get evaluator
-    evaluator = CocoEvaluator(datasets['eval'], nms_thr=args.eval_nms_thr)
+    if 'lvis' in args.eval_split and 'val' in args.eval_split:
+        lvis_ann_file = root / SPLITS['lvis'][f'{args.eval_split}_cocofied'][1]
+        nms_thr = args.eval_nms_thr
+        evaluator = CocoEvaluator(datasets['eval'], ann_format='lvis', lvis_ann_file=lvis_ann_file, nms_thr=nms_thr)
+
+    else:
+        evaluator = CocoEvaluator(datasets['eval'], nms_thr=args.eval_nms_thr)
 
     return datasets, evaluator

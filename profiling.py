@@ -67,7 +67,7 @@ elif profiling_args.model == 'bch_gvd':
     main_args.core_ids = [3, 4, 5, 6, 7]
     main_args.gc_yaml = './configs/gc/tpn_37_eeec_3b2_gn.yaml'
     main_args.heads = ['gvd']
-    main_args.gvd_cfg_path = './configs/gvd/sel_v29.py'
+    main_args.gvd_cfg_path = './configs/gvd/sel_v79.py'
     model = build_arch(main_args).to('cuda')
 
     images = Images(torch.randn(2, 3, 800, 800)).to('cuda')
