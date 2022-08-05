@@ -7,15 +7,17 @@ import logging
 import os
 from pathlib import Path
 
+from boundary_iou.coco_instance_api.coco import COCO
+from boundary_iou.coco_instance_api.cocoeval import COCOeval
+from boundary_iou.lvis_instance_api.eval import LVISEval
+from boundary_iou.lvis_instance_api.lvis import LVIS
+from boundary_iou.lvis_instance_api.results import LVISResults
 from detectron2.data import MetadataCatalog
 from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as SPLITS
 from detectron2.layers import batched_nms
-from lvis import LVIS, LVISEval, LVISResults
 import numpy as np
 import pandas as pd
 from PIL import Image
-from pycocotools.coco import COCO
-from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as coco_mask
 import torch
 from torch.utils.data import Dataset
@@ -211,41 +213,6 @@ class CocoDataset(Dataset):
         return dataset_length
 
 
-class LVISEval(LVISEval):
-    """
-    Sub-evaluator evaluating predictions on data with LVIS annotations.
-
-    It modifies the summarize method by not computing and displaying the evaluation results for the different frequency
-    groups.
-    """
-
-    def summarize(self):
-        """
-        Computes and displays summary metrics of the evaluation results.
-
-        This modified version does not compute and display the evaluation results for the different frequency groups.
-        """
-
-        if not self.eval:
-            raise RuntimeError("Please run accumulate() first.")
-
-        max_dets = self.params.max_dets
-
-        self.results["AP"] = self._summarize('ap')
-        self.results["AP50"] = self._summarize('ap', iou_thr=0.50)
-        self.results["AP75"] = self._summarize('ap', iou_thr=0.75)
-        self.results["APs"] = self._summarize('ap', area_rng="small")
-        self.results["APm"] = self._summarize('ap', area_rng="medium")
-        self.results["APl"] = self._summarize('ap', area_rng="large")
-
-        key = "AR@{}".format(max_dets)
-        self.results[key] = self._summarize('ar')
-
-        for area_rng in ["small", "medium", "large"]:
-            key = "AR{}@{}".format(area_rng[0], max_dets)
-            self.results[key] = self._summarize('ar', area_rng=area_rng)
-
-
 class CocoEvaluator(object):
     """
     Evaluator object capable of computing evaluations from predictions on COCO data and storing them.
@@ -344,7 +311,7 @@ class CocoEvaluator(object):
 
         Raises:
             ValueError: Error when neither box nor mask predictions are provided when using the 'bbox' metric.
-            ValueError: Error when no masks predictions are provided when using the 'segm' metric.
+            ValueError: Error when no masks predictions are provided when using the 'segm' or 'boundary' metric.
             ValueError: Error when evaluator contains an unknown evaluation metric.
         """
 
@@ -407,14 +374,14 @@ class CocoEvaluator(object):
                 elif segms is not None:
                     result_dict['segmentation'] = segms
                 else:
-                    error_msg = "Box or mask predictions must be provided when using the 'bbox' evaluation metric."
+                    error_msg = "Box or mask predictions must be provided when using the 'bbox' metric."
                     raise ValueError(error_msg)
 
-            elif metric == 'segm':
+            elif metric in ['segm', 'boundary']:
                 if segms is not None:
                     result_dict['segmentation'] = segms
                 else:
-                    error_msg = "Mask predictions must be provided when using the 'segm' evaluation metric."
+                    error_msg = "Mask predictions must be provided when using the 'segm' or 'boundary' metric."
                     raise ValueError(error_msg)
 
             else:
@@ -471,7 +438,7 @@ class CocoEvaluator(object):
             result_ids = {image_id: [] for image_id in self.image_ids}
             keep_result_ids = []
 
-            allowed_metrics = ['bbox', 'segm', 'keypoints']
+            allowed_metrics = ['bbox', 'segm', 'boundary']
             nms_metrics = [metric for metric in self.metrics if metric in allowed_metrics]
 
             if len(nms_metrics) > 0:
@@ -523,11 +490,10 @@ class CocoEvaluator(object):
         for metric in self.metrics:
 
             if self.ann_format == 'coco':
-                sub_evaluator = COCOeval(self.coco, iouType=metric)
-
                 with open(os.devnull, 'w') as devnull:
                     with contextlib.redirect_stdout(devnull):
-                        sub_evaluator.cocoDt = self.coco.loadRes(self.result_dicts[metric])
+                        coco_res = self.coco.loadRes(self.result_dicts[metric])
+                        sub_evaluator = COCOeval(self.coco, coco_res, iouType=metric)
                         sub_evaluator.params.imgIds = self.image_ids
                         sub_evaluator.evaluate()
                         sub_evaluator.accumulate()
@@ -540,11 +506,15 @@ class CocoEvaluator(object):
                 prev_log_lvl = logging.root.manager.disable
                 logging.disable()
 
-                lvis_res = LVISResults(self.lvis, self.result_dicts[metric])
-                sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
-                sub_evaluator.params.img_ids = self.image_ids
+                with open(os.devnull, 'w') as devnull:
+                    with contextlib.redirect_stdout(devnull):
+                        lvis_res = LVISResults(self.lvis, self.result_dicts[metric])
+                        sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
+                        sub_evaluator.params.img_ids = self.image_ids
 
-                sub_evaluator.run()
+                sub_evaluator.evaluate()
+                sub_evaluator.accumulate()
+                sub_evaluator.summarize(show_freq_groups=False)
                 logging.disable(prev_log_lvl)
 
                 print(f"Evaluation metric: {metric}")

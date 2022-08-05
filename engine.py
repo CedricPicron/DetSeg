@@ -74,8 +74,8 @@ def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, print_freq=10, save_stats=False,
-             save_results=False, save_tag='single_scale', visualize=False, vis_score_thr=0.4):
+def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None, output_dir=None, print_freq=10,
+             save_stats=False, save_results=False, save_tag='single_scale', visualize=False, vis_score_thr=0.4):
     """
     Evaluates model on data from given dataloader. It additionally computes visualizations if 'visualize' is set.
 
@@ -83,6 +83,7 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
         model (nn.Module): Module to be evaluated computing predictions from images.
         dataloader (torch.utils.data.Dataloader): Evaluation dataloader.
         evaluator (object): Object computing evaluations from predictions and storing them (default=None).
+        eval_with_bnd (bool): Boolean indicating whether to evaluate segmentations with boundary IoU (default=False).
         epoch (int): Integer containing the number of training epochs completed (default=None).
         output_dir (Path): Path to directory to save evaluations and potentially visualizations (default=None).
         print_freq (int): Integer containing the logger print frequency (default=10).
@@ -113,7 +114,8 @@ def evaluate(model, dataloader, evaluator=None, epoch=None, output_dir=None, pri
             evaluator_i = deepcopy(evaluator)
 
             if 'masks' in pred_dict:
-                evaluator_i.add_metrics(['bbox', 'segm'])
+                metrics = ['bbox', 'segm', 'boundary'] if eval_with_bnd else ['bbox', 'segm']
+                evaluator_i.add_metrics(metrics)
 
             elif 'boxes' in pred_dict:
                 evaluator_i.add_metrics(['bbox'])

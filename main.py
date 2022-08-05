@@ -47,6 +47,7 @@ def get_parser():
     # Evaluation
     parser.add_argument('--eval', action='store_true', help='perform evaluation task instead of training')
     parser.add_argument('--eval_task', default='performance', type=str, help='name of the evaluation task')
+    parser.add_argument('--eval_with_bnd', action='store_true', help='also evaluate segmentations with boundary IoU')
 
     # * FLOPS computation
     parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
@@ -582,7 +583,7 @@ def main(args):
 
         # Evaluate model performance and return
         elif args.eval_task == 'performance':
-            perf_kwargs = {'save_stats': True, 'save_results': args.perf_save_res}
+            perf_kwargs = {'eval_with_bnd': args.eval_with_bnd, 'save_stats': True, 'save_results': args.perf_save_res}
             perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
             perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis, 'vis_score_thr': args.vis_score_thr}
             evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
