@@ -55,7 +55,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         """
 
         # Initialize module using parent __init__ method
-        super().__init__(**kwargs)
+        MMDetStandardRoIHead.__init__(self, **kwargs)
 
         # Build mask query module if needed
         self.mask_qry = build_model(mask_qry_cfg) if mask_qry_cfg is not None else None
@@ -182,7 +182,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             # Get prediction masks
             mask_logits_i = mask_logits[feat_ids_i]
 
-            if mask_logits_i.size(dim=1) > 1:
+            if self.mask_qry is None:
                 num_masks = len(mask_logits_i)
                 mask_logits_i = mask_logits_i[range(num_masks), pred_labels_i]
                 mask_logits_i = mask_logits_i[:, None]
@@ -531,7 +531,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
 
 @MODELS.register_module()
-class PointRendRoIHead(StandardRoIHead):
+class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
     """
     Class implementing the PointRendRoIHead module.
 
@@ -580,6 +580,154 @@ class PointRendRoIHead(StandardRoIHead):
         # Set training and test attributes
         self.train_attrs = Config(train_attrs)
         self.test_attrs = Config(test_attrs)
+
+    @torch.no_grad()
+    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+        """
+        Method computing the segmentation predictions.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
+                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
+                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW].
+
+            pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+
+        Returns:
+            pred_dicts (List): List with prediction dictionaries containing following additional entry:
+                pred_dict (Dict): Prediction dictionary containing following keys:
+                    - labels (LongTensor): predicted class indices of shape [num_preds];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
+                    - scores (FloatTensor): normalized prediction scores of shape [num_preds];
+                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
+
+        Raises:
+            ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+        """
+
+        # Retrieve desired items from storage dictionary
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        cls_logits = storage_dict['cls_logits']
+        pred_boxes = storage_dict['pred_boxes']
+        roi_boxes = storage_dict['roi_boxes']
+        mask_logits = storage_dict['mask_logits']
+
+        # Get image width and height with padding
+        iW, iH = images.size()
+
+        # Get number of features, number of classes and device
+        num_feats = cls_logits.size(dim=0)
+        num_classes = cls_logits.size(dim=1) - 1
+        device = cls_logits.device
+
+        # Get feature indices
+        feat_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+
+        # Get prediction labels and scores
+        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
+        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, num_feats], device=device)
+
+        # Get batch indices
+        batch_size = len(cum_feats_batch) - 1
+        batch_ids = torch.arange(batch_size, device=device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+
+        # Initialize prediction dictionary
+        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_dict = {pred_key: [] for pred_key in pred_keys}
+
+        # Iterate over every batch entry
+        for i in range(batch_size):
+
+            # Get predictions corresponding to batch entry
+            batch_mask = batch_ids == i
+
+            feat_ids_i = feat_ids[batch_mask]
+            pred_labels_i = pred_labels[batch_mask]
+            pred_scores_i = pred_scores[batch_mask]
+
+            # Remove duplicate predictions if needed
+            if self.dup_attrs is not None:
+                dup_removal_type = self.dup_attrs['type']
+
+                if dup_removal_type == 'nms':
+                    num_candidates = self.dup_attrs['nms_candidates']
+                    num_preds_i = len(pred_scores_i)
+                    candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
+
+                    feat_ids_i = feat_ids_i[candidate_ids]
+                    pred_labels_i = pred_labels_i[candidate_ids]
+                    pred_scores_i = pred_scores_i[candidate_ids]
+
+                    pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
+                    pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
+
+                    iou_thr = self.dup_attrs['nms_thr']
+                    non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
+
+                    feat_ids_i = feat_ids_i[non_dup_ids]
+                    pred_labels_i = pred_labels_i[non_dup_ids]
+                    pred_boxes_i = pred_boxes_i[non_dup_ids]
+                    pred_scores_i = pred_scores_i[non_dup_ids]
+
+                else:
+                    error_msg = f"Invalid type of duplicate removal mechanism (got '{dup_removal_type}')."
+                    raise ValueError(error_msg)
+
+            # Only keep top predictions if needed
+            if self.max_segs is not None:
+                if len(pred_scores_i) > self.max_segs:
+                    top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
+
+                    feat_ids_i = feat_ids_i[top_pred_ids]
+                    pred_labels_i = pred_labels_i[top_pred_ids]
+                    pred_boxes_i = pred_boxes_i[top_pred_ids]
+                    pred_scores_i = pred_scores_i[top_pred_ids]
+
+            # Get prediction masks
+            roi_boxes_i = roi_boxes[feat_ids_i]
+            mask_logits_i = mask_logits[feat_ids_i]
+
+            self.test_cfg = self.test_attrs
+            roi_boxes_i[:, 0] = 0
+            img_metas = [None for _ in range(batch_size)]
+
+            point_test_args = (feat_maps, roi_boxes_i, pred_labels_i, mask_logits_i, img_metas)
+            mask_logits_i = self._mask_point_forward_test(*point_test_args)
+
+            if self.mask_qry is None:
+                num_masks = len(mask_logits_i)
+                mask_logits_i = mask_logits_i[range(num_masks), pred_labels_i]
+                mask_logits_i = mask_logits_i[:, None]
+
+            mask_scores_i = mask_logits_i.sigmoid()
+            mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            pred_masks_i = mask_scores_i > 0.5
+
+            # Add predictions to prediction dictionary
+            pred_dict['labels'].append(pred_labels_i)
+            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['scores'].append(pred_scores_i)
+            pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
+
+        # Concatenate predictions of different batch entries
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
+
+        # Add prediction dictionary to list of prediction dictionaries
+        pred_dicts.append(pred_dict)
+
+        return pred_dicts
 
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
@@ -676,8 +824,7 @@ class PointRendRoIHead(StandardRoIHead):
 
         feat_maps = storage_dict['feat_maps']
         img_metas = [None for _ in range(len(feat_maps[0]))]
-        fine_args = (self, feat_maps, roi_boxes, roi_pts, img_metas)
-        fine_feats = MMDetPointRendRoIHead._get_fine_grained_point_feats(*fine_args)
+        fine_feats = self._get_fine_grained_point_feats(feat_maps, roi_boxes, roi_pts, img_metas)
 
         coarse_feats = point_sample(mask_logits, roi_pts)
         point_logits = self.point_head(fine_feats, coarse_feats)
