@@ -259,7 +259,7 @@ model = dict(
                 importance_sample_ratio=0.75,
             ),
             test_attrs=dict(
-                subdivision_steps=5,
+                subdivision_steps=3,
                 subdivision_num_points=784,
                 scale_factor=2.0,
             ),
