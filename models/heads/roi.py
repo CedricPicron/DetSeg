@@ -700,7 +700,6 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             mask_logits_i = mask_logits[feat_ids_i]
 
             self.test_cfg = self.test_attrs
-            roi_boxes_i[:, 0] = 0
             img_metas = [None for _ in range(batch_size)]
 
             point_test_args = (feat_maps, roi_boxes_i, pred_labels_i, mask_logits_i, img_metas)
