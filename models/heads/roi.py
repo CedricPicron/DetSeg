@@ -780,13 +780,26 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
 
-            # Get mask accuracy if needed
+            # Get point loss
+            point_loss = sum(0.0 * p.flatten()[0] for p in self.point_head.parameters())
+            key_name = f'point_loss_{id}' if id is not None else 'point_loss'
+            loss_dict[key_name] = point_loss
+
+            # Get mask and point accuracies if needed
             if analysis_dict is not None:
+
+                # Get mask accuracy
                 mask_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
                 mask_acc = torch.tensor(mask_acc, dtype=mask_loss.dtype, device=device)
 
                 key_name = f'mask_acc_{id}' if id is not None else 'mask_acc'
                 analysis_dict[key_name] = 100 * mask_acc
+
+                # Get point accuracy
+                point_acc = mask_acc.clone()
+
+                key_name = f'point_acc_{id}' if id is not None else 'point_acc'
+                analysis_dict[key_name] = 100 * point_acc
 
             return loss_dict, analysis_dict
 
