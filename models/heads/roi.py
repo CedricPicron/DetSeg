@@ -877,3 +877,221 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             analysis_dict[key_name] = 100 * point_acc
 
         return loss_dict, analysis_dict
+
+
+@MODELS.register_module()
+class RefineMaskRoIHead(StandardRoIHead):
+    """
+    Class implementing the RefineMaskRoIHead module.
+
+    The module is based on the SimpleRefineRoIHead module from https://github.com/zhanggang001/RefineMask.
+
+    Attributes:
+        get_segs (bool): Boolean indicating whether to get segmentation predictions.
+
+        dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
+            - type (str): string containing the type of duplicate removal mechanism (mandatory);
+            - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
+            - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
+
+        max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+        matcher (nn.Module): Optional matcher module matching predictions with targets.
+    """
+
+    def __init__(self, metadata, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+        """
+        Initializes the RefineMaskRoIHead module.
+
+        Args:
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
+            dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
+            max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
+        """
+
+        # Initialize module using MMDetStandardRoIHead __init__ method
+        MMDetStandardRoIHead.__init__(self, **kwargs)
+
+        # Build matcher module if needed
+        self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
+
+        # Set additional attributes
+        self.get_segs = get_segs
+        self.dup_attrs = dup_attrs
+        self.max_segs = max_segs
+        self.metadata = metadata
+
+    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
+        """
+        Forward prediction method of the RefineMaskRoIHead module.
+
+        Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
+            storage_dict (Dict): Storage dictionary (possibly) requiring following keys:
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
+
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
+            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary (possibly) containing following additional key:
+                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
+                - ins_feats (FloatTensor): instance features of shape [num_feats, ins_size, roi_height, roi_width].
+
+            images_dict (Dict): Dictionary with (possibly) additional images annotated with 2D boxes/segmentations.
+
+        Raises:
+            NotImplementedError: Error when the RefineMaskRoIHead module contains a bounding box head.
+        """
+
+        # Retrieve desired items from storage dictionary
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+
+        # Get number of features and device
+        num_feats = len(qry_feats)
+        device = qry_feats.device
+
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, num_feats], device=device)
+
+        # Get batch indices
+        batch_size = len(cum_feats_batch) - 1
+        batch_ids = torch.arange(batch_size, device=device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+
+        # Get box-related predictions
+        if self.with_bbox:
+            raise NotImplementedError
+
+        # Get mask-related predictions
+        if self.with_mask:
+
+            # Get predicted 2D bounding boxes
+            pred_boxes = storage_dict['pred_boxes']
+
+            # Get RoI-boxes
+            pred_boxes = pred_boxes.clone().to_format('xyxy')
+            pred_boxes = pred_boxes.to_img_scale(images).boxes.detach()
+            roi_boxes = torch.cat([batch_ids[:, None], pred_boxes], dim=1)
+
+            # Get instance features
+            roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
+            ins_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+            # Add RoI-boxes and instance features to storage dictionary
+            storage_dict['roi_boxes'] = roi_boxes
+            storage_dict['ins_feats'] = ins_feats
+
+            # Get segmentation predictions if needed
+            if self.get_segs and not self.training:
+                self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
+
+            # Draw predicted and target segmentations if needed
+            if images_dict is not None:
+                self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+
+        return storage_dict, images_dict
+
+    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+        """
+        Forward loss method of the RefineMaskRoIHead module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing following keys (after matching):
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
+                - ins_feats (FloatTensor): instance features of shape [num_feats, ins_size, roi_height, roi_width];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+
+            tgt_dict (Dict): Target dictionary containing at least following keys:
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
+
+            loss_dict (Dict): Dictionary containing different weighted loss terms.
+            analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            id (int): Integer containing the head id (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
+
+        Returns:
+            loss_dict (Dict): Loss dictionary containing following additional key:
+                - mask_loss (FloatTensor): mask loss of shape [].
+
+            analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
+                - mask_acc (FloatTensor): mask accuracy of shape [].
+        """
+
+        # Perform matching if matcher is available
+        if self.matcher is not None:
+            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+
+        # Retrieve desired items from storage dictionary
+        ins_feats = storage_dict['ins_feats']
+        matched_qry_ids = storage_dict['matched_qry_ids']
+        matched_tgt_ids = storage_dict['matched_tgt_ids']
+
+        # Get device and number of positive matches
+        device = ins_feats.device
+        num_pos_matches = len(matched_qry_ids)
+
+        # Handle case where there are no positive matches
+        if num_pos_matches == 0:
+
+            # Get mask loss
+            mask_loss = 0.0 * ins_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+            key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
+            loss_dict[key_name] = mask_loss
+
+            # Get mask accuracy if needed
+            if analysis_dict is not None:
+                mask_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
+                mask_acc = torch.tensor(mask_acc, dtype=mask_loss.dtype, device=device)
+
+                key_name = f'mask_acc_{id}' if id is not None else 'mask_acc'
+                analysis_dict[key_name] = 100 * mask_acc
+
+            return loss_dict, analysis_dict
+
+        # Get matched RoI-boxes, instance feats and target labels
+        roi_boxes = storage_dict['roi_boxes'][matched_qry_ids]
+        ins_feats = ins_feats[matched_qry_ids]
+        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+
+        # Get mask logits
+        semantic_feat_map = storage_dict['feat_maps'][0]
+        mask_logits = self.mask_head(ins_feats, semantic_feat_map, roi_boxes, tgt_labels)
+
+        # Get mask targets
+        tgt_masks = tgt_dict['masks'].cpu().numpy()
+        tgt_masks = BitmapMasks(tgt_masks, *tgt_masks.shape[-2:])
+        mask_targets = self.mask_head.get_targets([roi_boxes[:, 1:]], [matched_tgt_ids], [tgt_masks])
+
+        # Get mask loss
+        mask_loss = self.mask_head.loss(mask_logits, mask_targets)['loss_instance']
+        mask_loss = num_pos_matches * mask_loss
+
+        key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
+        loss_dict[key_name] = mask_loss
+
+        # Get mask accuracy if needed
+        if analysis_dict is not None:
+            mask_logits = torch.cat([mask_logits_i.flatten() for mask_logits_i in mask_logits], dim=0)
+            mask_targets = torch.cat([mask_targets_i.flatten() for mask_targets_i in mask_targets], dim=0)
+
+            mask_preds = mask_logits > 0
+            mask_targets = mask_targets.bool()
+            mask_acc = (mask_preds == mask_targets).sum() / (mask_preds).numel()
+
+            key_name = f'mask_acc_{id}' if id is not None else 'mask_acc'
+            analysis_dict[key_name] = 100 * mask_acc
+
+        return loss_dict, analysis_dict
