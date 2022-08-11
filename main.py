@@ -14,7 +14,7 @@ from engine import evaluate, save_checkpoint, save_log, train
 from models.archs.build import build_arch
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
-from utils.flops import compute_flops
+from utils.analysis import analyze_model
 
 
 def get_parser():
@@ -49,8 +49,8 @@ def get_parser():
     parser.add_argument('--eval_task', default='performance', type=str, help='name of the evaluation task')
     parser.add_argument('--eval_with_bnd', action='store_true', help='also evaluate segmentations with boundary IoU')
 
-    # * FLOPS computation
-    parser.add_argument('--flops_samples', default=100, type=int, help='input samples used during FLOPS computation')
+    # * Analysis
+    parser.add_argument('--analysis_samples', default=100, type=int, help='number of samples used for model analysis')
 
     # * Performance
     parser.add_argument('--perf_save_res', action='store_true', help='save results even when having annotations')
@@ -497,6 +497,7 @@ def main(args):
         args (argparse.Namespace): Command-line arguments.
 
     Raises:
+        ValueError: Error when in distributed mode for the 'analysis' evaluation task.
         ValueError: Error when no output directory could be determined for the 'visualize' evaluation task.
         ValueError: Error when in distributed mode for the 'visualize' evaluation task.
         ValueError: Error when an unknown evaluation task is provided.
@@ -564,56 +565,6 @@ def main(args):
 
     eval_dataloader = DataLoader(eval_dataset, args.batch_size, sampler=eval_sampler, **dataloader_kwargs)
 
-    # Get output directory
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-    elif checkpoint_path:
-        output_dir = Path(checkpoint_path).parent
-    else:
-        output_dir = None
-
-    # Perform evaluation task if requested
-    if args.eval:
-
-        # Compute average number of FLOPS of model and return
-        if args.eval_task == 'compute_flops':
-            avg_flops = compute_flops(model, eval_dataset, num_samples=args.flops_samples)
-            print(f"Average number of FLOPS: {avg_flops: .1f} GFLOPS")
-            return
-
-        # Evaluate model performance and return
-        elif args.eval_task == 'performance':
-            perf_kwargs = {'eval_with_bnd': args.eval_with_bnd, 'save_stats': True, 'save_results': args.perf_save_res}
-            perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
-            perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis, 'vis_score_thr': args.vis_score_thr}
-            evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
-            return
-
-        # Visualize model predictions and return
-        elif args.eval_task == 'visualize':
-            if output_dir is None:
-                error_msg = "The 'visualize' evaluation task requires an output directory, but no output directory "
-                error_msg += "was given or could be derived from checkpoint."
-                raise ValueError(error_msg)
-
-            if args.distributed:
-                error_msg = "Distributed mode is not supported for the 'visualize' evaluation task."
-                raise ValueError(error_msg)
-
-            if args.batch_size > 1:
-                msg = "It's recommended to use 'batch_size=1' for the 'visualize' evaluation task, so that the printed "
-                msg += "loss and analysis dictionaries are image-specific."
-                print(msg)
-
-            vis_kwargs = {'print_freq': 1, 'visualize': True, 'vis_score_thr': args.vis_score_thr}
-            evaluate(model, eval_dataloader, output_dir=output_dir, **vis_kwargs)
-            return
-
-        # Raise error
-        else:
-            error_msg = f"An unknown evaluation task was provided (got '{args.eval_task}')."
-            raise ValueError(error_msg)
-
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
     param_families = ['offset', 'steps', 'reference_points', *param_families, 'default']
@@ -653,6 +604,61 @@ def main(args):
         else:
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
+
+    # Get output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    elif checkpoint_path:
+        output_dir = Path(checkpoint_path).parent
+    else:
+        output_dir = None
+
+    # Perform evaluation task if requested
+    if args.eval:
+
+        # Perform model analysis and return
+        if args.eval_task == 'analysis':
+
+            if args.distributed:
+                error_msg = "Distributed mode is not supported for the 'analysis' evaluation task."
+                raise ValueError(error_msg)
+
+            analysis_kwargs = {'num_samples': args.analysis_samples, 'output_dir': output_dir}
+            analyze_model(model, eval_dataloader, optimizer, max_grad_norm=args.max_grad_norm, **analysis_kwargs)
+            return
+
+        # Evaluate model performance and return
+        elif args.eval_task == 'performance':
+            perf_kwargs = {'eval_with_bnd': args.eval_with_bnd, 'save_stats': True, 'save_results': args.perf_save_res}
+            perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
+            perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis, 'vis_score_thr': args.vis_score_thr}
+            evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
+            return
+
+        # Visualize model predictions and return
+        elif args.eval_task == 'visualize':
+            if output_dir is None:
+                error_msg = "The 'visualize' evaluation task requires an output directory, but no output directory "
+                error_msg += "was given or could be derived from checkpoint."
+                raise ValueError(error_msg)
+
+            if args.distributed:
+                error_msg = "Distributed mode is not supported for the 'visualize' evaluation task."
+                raise ValueError(error_msg)
+
+            if args.batch_size > 1:
+                msg = "It's recommended to use 'batch_size=1' for the 'visualize' evaluation task, so that the printed "
+                msg += "loss and analysis dictionaries are image-specific."
+                print(msg)
+
+            vis_kwargs = {'print_freq': 1, 'visualize': True, 'vis_score_thr': args.vis_score_thr}
+            evaluate(model, eval_dataloader, output_dir=output_dir, **vis_kwargs)
+            return
+
+        # Raise error
+        else:
+            error_msg = f"An unknown evaluation task was provided (got '{args.eval_task}')."
+            raise ValueError(error_msg)
 
     # Get start epoch
     start_epoch = checkpoint['epoch']+1 if checkpoint_path else 1
