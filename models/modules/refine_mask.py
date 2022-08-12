@@ -140,7 +140,7 @@ class MultiBranchFusionAvg(MultiBranchFusion):
         feat_1 = self.dilation_conv_1(x)
         feat_2 = self.dilation_conv_2(x)
         feat_3 = self.dilation_conv_3(x)
-        feat_4 = F.avg_pool2d(x, x.shape[-1])
+        feat_4 = F.avg_pool2d(x, int(x.shape[-1]))
         out_feat = self.merge_conv(feat_1 + feat_2 + feat_3 + feat_4)
         return out_feat
 

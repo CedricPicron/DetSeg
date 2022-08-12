@@ -2,6 +2,8 @@
 Collection of analysis utilities.
 """
 import json
+import logging
+import warnings
 
 from detectron2.utils.analysis import flop_count_operators, _IGNORED_OPS
 import torch
@@ -105,6 +107,12 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
     # Iterate over dataloader
     for i, (images, _) in enumerate(dataloader, 1):
 
+        # Disable some logging and ignore warnings from second iteration onwards
+        if i == 2:
+            jit_analysis_logger = logging.getLogger('fvcore.nn.jit_analysis')
+            jit_analysis_logger.disabled = True
+            warnings.filterwarnings('ignore')
+
         # Place images on correct device
         images = images.to(device)
 
@@ -124,12 +132,17 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
 
         # Print batch inference FLOPS and FPS
         print_str = f"Analysis inference [{i:{num_digits}d}/{num_samples}]:  "
-        print_str += f"train_flops: {inf_flops:.1f} GFLOPS  "
-        print_str += f"train_fps: {inf_fps:.2f} FPS"
+        print_str += f"inf_flops: {inf_flops:.1f} GFLOPS  "
+        print_str += f"inf_fps: {inf_fps:.2f} FPS"
         print(print_str)
 
         # Break when 'num_samples' batches are processed
         if i == num_samples:
+
+            if i >= 2:
+                jit_analysis_logger.disabled = False
+                warnings.filterwarnings('default')
+
             break
 
     # Get maximum memory utilization during inference
