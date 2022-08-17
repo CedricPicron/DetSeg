@@ -72,16 +72,18 @@ class StandardRoIHead(MMDetStandardRoIHead):
         self.metadata = metadata
 
     @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
         """
         Method computing the segmentation predictions.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing at least following keys:
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -99,10 +101,13 @@ class StandardRoIHead(MMDetStandardRoIHead):
         """
 
         # Retrieve desired items from storage dictionary
+        feat_maps = storage_dict['feat_maps']
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
         pred_boxes = storage_dict['pred_boxes']
-        mask_logits = storage_dict['mask_logits']
+
+        # Get RoI feat maps
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
 
         # Get image width and height with padding
         iW, iH = images.size()
@@ -182,11 +187,17 @@ class StandardRoIHead(MMDetStandardRoIHead):
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Get prediction masks
-            mask_logits_i = mask_logits[feat_ids_i]
+            batch_ids_i = torch.full_like(pred_labels_i, i)
+            roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
+            mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
-            if self.mask_qry is None:
-                num_masks = len(mask_logits_i)
-                mask_logits_i = mask_logits_i[range(num_masks), pred_labels_i]
+            if self.mask_qry is not None:
+                mask_qry_feats = self.mask_qry(qry_feats[feat_ids_i])
+                mask_logits_i = self.mask_head(mask_qry_feats, mask_key_feats)
+
+            else:
+                mask_logits_i = self.mask_head(mask_key_feats)
+                mask_logits_i = mask_logits_i[range(len(mask_logits_i)), pred_labels_i]
                 mask_logits_i = mask_logits_i[:, None]
 
             mask_scores_i = mask_logits_i.sigmoid()
@@ -325,49 +336,22 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         return images_dict
 
-    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
+    def forward_pred(self, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the StandardRoIHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
-
-            storage_dict (Dict): Storage dictionary (possibly) requiring following keys:
-                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure containing the batched images of size [batch_size];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
-
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            storage_dict (Dict): Dictionary storing various items of interest.
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
-            storage_dict (Dict): Storage dictionary (possibly) containing following additional key:
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW].
-
+            storage_dict (Dict): Dictionary with (possibly) additional stored items of interest.
             images_dict (Dict): Dictionary with (possibly) additional images annotated with 2D boxes/segmentations.
 
         Raises:
             NotImplementedError: Error when the StandardRoIHead module contains a bounding box head.
         """
-
-        # Retrieve desired items from storage dictionary
-        feat_maps = storage_dict['feat_maps']
-        images = storage_dict['images']
-
-        # Get number of features and device
-        num_feats = len(qry_feats)
-        device = qry_feats.device
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
-
-        # Get batch indices
-        batch_size = len(cum_feats_batch) - 1
-        batch_ids = torch.arange(batch_size, device=device)
-        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
 
         # Get box-related predictions
         if self.with_bbox:
@@ -376,33 +360,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
         # Get mask-related predictions
         if self.with_mask:
 
-            # Get predicted 2D bounding boxes
-            pred_boxes = storage_dict['pred_boxes']
-
-            # Get RoI-boxes
-            pred_boxes = pred_boxes.clone().to_format('xyxy')
-            pred_boxes = pred_boxes.to_img_scale(images).boxes.detach()
-            roi_boxes = torch.cat([batch_ids[:, None], pred_boxes], dim=1)
-
-            # Get mask key features
-            mask_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
-            mask_key_feats = self.mask_roi_extractor(mask_feat_maps, roi_boxes)
-
-            # Get mask logits
-            if self.mask_qry is not None:
-                mask_qry_feats = self.mask_qry(qry_feats)
-                mask_logits = self.mask_head(mask_qry_feats, mask_key_feats)
-
-            else:
-                mask_logits = self.mask_head(mask_key_feats)
-
-            # Add RoI-boxes and mask logits to storage dictionary
-            storage_dict['roi_boxes'] = roi_boxes
-            storage_dict['mask_logits'] = mask_logits
-
             # Get segmentation predictions if needed
             if self.get_segs and not self.training:
-                self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
+                self.compute_segs(storage_dict=storage_dict, **kwargs)
 
             # Draw predicted and target segmentations if needed
             if images_dict is not None:
@@ -410,14 +370,18 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         return storage_dict, images_dict
 
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict=None, cum_feats_batch=None,
+                     id=None, **kwargs):
         """
         Forward loss method of the StandardRoIHead module.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW];
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -427,6 +391,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             id (int): Integer containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
@@ -443,19 +408,21 @@ class StandardRoIHead(MMDetStandardRoIHead):
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
-        mask_logits = storage_dict['mask_logits']
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        pred_boxes = storage_dict['pred_boxes']
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
         # Get device and number of positive matches
-        device = mask_logits.device
+        device = matched_qry_ids.device
         num_pos_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
         if num_pos_matches == 0:
 
             # Get mask loss
-            mask_loss = 0.0 * mask_logits.sum()
+            mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
 
@@ -469,26 +436,42 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             return loss_dict, analysis_dict
 
-        # Get matched mask logits
-        mask_logits = mask_logits[matched_qry_ids]
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, len(pred_boxes)], device=device)
 
-        if self.mask_qry is None:
-            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-            mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
+        # Get batch indices
+        batch_size = len(cum_feats_batch) - 1
+        batch_ids = torch.arange(batch_size, device=device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+        batch_ids = batch_ids[matched_qry_ids]
 
-        else:
+        # Get RoI-boxes
+        roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
+        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
+
+        # Get mask logits
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
+        mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+        if self.mask_qry is not None:
+            mask_qry_feats = self.mask_qry(qry_feats[matched_qry_ids])
+            mask_logits = self.mask_head(mask_qry_feats, mask_key_feats)
             mask_logits = mask_logits[:, 0]
 
-        # Get matched mask targets
-        roi_boxes = storage_dict['roi_boxes']
-        roi_boxes = roi_boxes[matched_qry_ids, 1:]
+        else:
+            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+            mask_logits = self.mask_head(mask_key_feats)
+            mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
 
+        # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
         tgt_masks = BitmapMasks(tgt_masks, *tgt_masks.shape[-2:])
 
         mask_size = tuple(mask_logits.size()[-2:])
         mask_tgt_cfg = Config({'mask_size': mask_size})
-        mask_targets = mask_target_single(roi_boxes, matched_tgt_ids, tgt_masks, mask_tgt_cfg)
+        mask_targets = mask_target_single(roi_boxes[:, 1:], matched_tgt_ids, tgt_masks, mask_tgt_cfg)
 
         # Get mask loss
         mask_loss = self.mask_head.loss_mask(mask_logits, mask_targets)
@@ -584,18 +567,18 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         self.test_attrs = Config(test_attrs)
 
     @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
         """
         Method computing the segmentation predictions.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -617,8 +600,9 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
         pred_boxes = storage_dict['pred_boxes']
-        roi_boxes = storage_dict['roi_boxes']
-        mask_logits = storage_dict['mask_logits']
+
+        # Get RoI feat maps
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
 
         # Get image width and height with padding
         iW, iH = images.size()
@@ -698,8 +682,16 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Get prediction masks
-            roi_boxes_i = roi_boxes[feat_ids_i]
-            mask_logits_i = mask_logits[feat_ids_i]
+            batch_ids_i = torch.full_like(pred_labels_i, i)
+            roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
+            mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
+
+            if self.mask_qry is not None:
+                mask_qry_feats = self.mask_qry(qry_feats[feat_ids_i])
+                mask_logits_i = self.mask_head(mask_qry_feats, mask_key_feats)
+
+            else:
+                mask_logits_i = self.mask_head(mask_key_feats)
 
             self.test_cfg = self.test_attrs
             img_metas = [None for _ in range(batch_size)]
@@ -730,15 +722,18 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         return pred_dicts
 
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict=None, cum_feats_batch=None,
+                     id=None, **kwargs):
         """
         Forward loss method of the PointRendRoIHead module.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - mask_logits (FloatTensor): map with mask logits of shape [num_feats, mC, mH, mW];
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -748,6 +743,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             id (int): Integer containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
@@ -766,19 +762,21 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
-        mask_logits = storage_dict['mask_logits']
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        pred_boxes = storage_dict['pred_boxes']
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
         # Get device and number of positive matches
-        device = mask_logits.device
+        device = matched_qry_ids.device
         num_pos_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
         if num_pos_matches == 0:
 
             # Get mask loss
-            mask_loss = 0.0 * mask_logits.sum()
+            mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
 
@@ -805,18 +803,34 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             return loss_dict, analysis_dict
 
-        # Get matched RoI-boxes and mask logits
-        roi_boxes = storage_dict['roi_boxes'][matched_qry_ids]
-        mask_logits = mask_logits[matched_qry_ids]
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, len(pred_boxes)], device=device)
 
-        # Get mask logits of target class
-        if self.mask_qry is None:
-            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-            mask_logits_i = mask_logits[range(num_pos_matches), tgt_labels]
+        # Get batch indices
+        batch_size = len(cum_feats_batch) - 1
+        batch_ids = torch.arange(batch_size, device=device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+        batch_ids = batch_ids[matched_qry_ids]
+
+        # Get RoI-boxes
+        roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
+        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
+
+        # Get mask logits
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
+        mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+        if self.mask_qry is not None:
+            mask_qry_feats = self.mask_qry(qry_feats[matched_qry_ids])
+            mask_logits = self.mask_head(mask_qry_feats, mask_key_feats)
+            mask_logits_i = mask_logits[:, 0]
 
         else:
-            tgt_labels = torch.zeros_like(matched_tgt_ids)
-            mask_logits_i = mask_logits[:, 0]
+            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+            mask_logits = self.mask_head(mask_key_feats)
+            mask_logits_i = mask_logits[range(num_pos_matches), tgt_labels]
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
@@ -936,9 +950,7 @@ class RefineMaskRoIHead(StandardRoIHead):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - ins_feats (FloatTensor): instance features of shape [num_feats, ins_size, roi_height, roi_width].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
@@ -960,8 +972,9 @@ class RefineMaskRoIHead(StandardRoIHead):
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
         pred_boxes = storage_dict['pred_boxes']
-        roi_boxes = storage_dict['roi_boxes']
-        ins_feats = storage_dict['ins_feats']
+
+        # Get RoI feat maps
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
 
         # Get image width and height with padding
         iW, iH = images.size()
@@ -1041,8 +1054,9 @@ class RefineMaskRoIHead(StandardRoIHead):
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Get prediction masks
-            roi_boxes_i = roi_boxes[feat_ids_i]
-            ins_feats_i = ins_feats[feat_ids_i]
+            batch_ids_i = torch.full_like(pred_labels_i, i)
+            roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
+            ins_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
             mask_logits_i = self.mask_head(ins_feats_i, feat_maps[0], roi_boxes_i, pred_labels_i)
             num_stages = len(mask_logits_i)
@@ -1068,7 +1082,7 @@ class RefineMaskRoIHead(StandardRoIHead):
             pred_dict['labels'].append(pred_labels_i)
             pred_dict['masks'].append(pred_masks_i)
             pred_dict['scores'].append(pred_scores_i)
-            pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
+            pred_dict['batch_ids'].append(batch_ids_i)
 
         # Concatenate predictions of different batch entries
         pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
@@ -1078,92 +1092,16 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         return pred_dicts
 
-    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
-        """
-        Forward prediction method of the RefineMaskRoIHead module.
-
-        Args:
-            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
-
-            storage_dict (Dict): Storage dictionary (possibly) requiring following keys:
-                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure containing the batched images of size [batch_size];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
-
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
-            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            kwargs (Dict): Dictionary of keyword arguments not used by this module.
-
-        Returns:
-            storage_dict (Dict): Storage dictionary (possibly) containing following additional key:
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - ins_feats (FloatTensor): instance features of shape [num_feats, ins_size, roi_height, roi_width].
-
-            images_dict (Dict): Dictionary with (possibly) additional images annotated with 2D boxes/segmentations.
-
-        Raises:
-            NotImplementedError: Error when the RefineMaskRoIHead module contains a bounding box head.
-        """
-
-        # Retrieve desired items from storage dictionary
-        feat_maps = storage_dict['feat_maps']
-        images = storage_dict['images']
-
-        # Get number of features and device
-        num_feats = len(qry_feats)
-        device = qry_feats.device
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
-
-        # Get batch indices
-        batch_size = len(cum_feats_batch) - 1
-        batch_ids = torch.arange(batch_size, device=device)
-        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
-
-        # Get box-related predictions
-        if self.with_bbox:
-            raise NotImplementedError
-
-        # Get mask-related predictions
-        if self.with_mask:
-
-            # Get predicted 2D bounding boxes
-            pred_boxes = storage_dict['pred_boxes']
-
-            # Get RoI-boxes
-            pred_boxes = pred_boxes.clone().to_format('xyxy')
-            pred_boxes = pred_boxes.to_img_scale(images).boxes.detach()
-            roi_boxes = torch.cat([batch_ids[:, None], pred_boxes], dim=1)
-
-            # Get instance features
-            roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
-            ins_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
-
-            # Add RoI-boxes and instance features to storage dictionary
-            storage_dict['roi_boxes'] = roi_boxes
-            storage_dict['ins_feats'] = ins_feats
-
-            # Get segmentation predictions if needed
-            if self.get_segs and not self.training:
-                self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
-
-            # Draw predicted and target segmentations if needed
-            if images_dict is not None:
-                self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
-
-        return storage_dict, images_dict
-
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, cum_feats_batch=None, id=None,
+                     **kwargs):
         """
         Forward loss method of the RefineMaskRoIHead module.
 
         Args:
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - roi_boxes (FloatTensor): RoI-boxes with batch indices and box coordinates of shape [num_feats, 5];
-                - ins_feats (FloatTensor): instance features of shape [num_feats, ins_size, roi_height, roi_width];
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -1173,6 +1111,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             id (int): Integer containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
@@ -1189,19 +1128,23 @@ class RefineMaskRoIHead(StandardRoIHead):
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
-        ins_feats = storage_dict['ins_feats']
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        pred_boxes = storage_dict['pred_boxes']
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
         # Get device and number of positive matches
-        device = ins_feats.device
+        device = matched_qry_ids.device
         num_pos_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
         if num_pos_matches == 0:
 
             # Get mask loss
-            mask_loss = 0.0 * ins_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+            mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
+            mask_loss += sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
 
@@ -1215,14 +1158,28 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             return loss_dict, analysis_dict
 
-        # Get matched RoI-boxes, instance feats and target labels
-        roi_boxes = storage_dict['roi_boxes'][matched_qry_ids]
-        ins_feats = ins_feats[matched_qry_ids]
-        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+        # Get cumulative number of features per batch entry if missing
+        if cum_feats_batch is None:
+            cum_feats_batch = torch.tensor([0, len(pred_boxes)], device=device)
+
+        # Get batch indices
+        batch_size = len(cum_feats_batch) - 1
+        batch_ids = torch.arange(batch_size, device=device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+        batch_ids = batch_ids[matched_qry_ids]
+
+        # Get RoI-boxes
+        roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
+        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
+
+        # Get instance features
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
+        ins_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
 
         # Get mask logits
-        semantic_feat_map = storage_dict['feat_maps'][0]
-        mask_logits = self.mask_head(ins_feats, semantic_feat_map, roi_boxes, tgt_labels)
+        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+        mask_logits = self.mask_head(ins_feats, feat_maps[0], roi_boxes, tgt_labels)
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
