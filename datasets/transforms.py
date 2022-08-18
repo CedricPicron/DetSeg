@@ -338,7 +338,7 @@ def resize(image, tgt_dict, size, max_size=None):
             1) size (int): integer containing the minimum size (width or height) to resize to;
             2) size (Tuple): tuple of size [2] containing the image size in (width, height) format to resize to.
 
-        max_size (int): Overrules above size whenever this value is exceded in width or height (default=None).
+        max_size (int): Overrules above size whenever this value is exceeded in width or height (default=None).
 
     Returns:
         image (Images): Updated Images structure with resized PIL Image.
@@ -366,7 +366,7 @@ class RandomResize(object):
 
     Attributes:
         sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
-        max_size (int): Overrules size whenever this value is exceded in width or height (default=None).
+        max_size (int): Overrules size whenever this value is exceeded in width or height (default=None).
     """
 
     def __init__(self, sizes, max_size=None):
@@ -375,7 +375,7 @@ class RandomResize(object):
 
         Args:
             sizes (List or Tuple): Collection of minimum size integers or size tuples in (width, height) format.
-            max_size (int): Overrules size whenever this value is exceded in width or height (default=None).
+            max_size (int): Overrules size whenever this value is exceeded in width or height (default=None).
         """
 
         assert isinstance(sizes, (list, tuple))
@@ -521,12 +521,12 @@ class Compose(object):
 
 
 # 6. Functions getting training and evaluation transforms
-def get_train_transforms(transforms_type='multi_scale'):
+def get_train_transforms(transforms_type='coco_multi_scale'):
     """
     Function getting a list containing the specified training transforms.
 
     Args:
-        transforms_type (str): String containing the training transforms type (default='multi_scale').
+        transforms_type (str): String containing the training transforms type (default='coco_multi_scale').
 
     Returns:
         transforms (List): List [num_train_transforms] containing training transforms.
@@ -536,13 +536,13 @@ def get_train_transforms(transforms_type='multi_scale'):
     """
 
     # Get training transforms
-    if transforms_type == 'single_scale':
+    if transforms_type == 'coco_single_scale':
         hflip = RandomHorizontalFlip()
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([hflip, resize, to_tensor])]
 
-    elif transforms_type == 'multi_scale':
+    elif transforms_type == 'coco_multi_scale':
         scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
         default_resize = RandomResize(scales, max_size=1333)
 
@@ -554,6 +554,20 @@ def get_train_transforms(transforms_type='multi_scale'):
         to_tensor = ToTensor()
         transforms = [Compose([hflip, resize, to_tensor])]
 
+    elif transforms_type == 'cityscapes_single_scale':
+        hflip = RandomHorizontalFlip()
+        resize = RandomResize([1024], max_size=2048)
+        to_tensor = ToTensor()
+        transforms = [Compose([hflip, resize, to_tensor])]
+
+    elif transforms_type == 'cityscapes_multi_scale':
+        scales = [800, 832, 864, 896, 928, 960, 992, 1024]
+        resize = RandomResize(scales, max_size=2048)
+
+        hflip = RandomHorizontalFlip()
+        to_tensor = ToTensor()
+        transforms = [Compose([hflip, resize, to_tensor])]
+
     else:
         error_msg = f"Unknown training transforms type (got '{transforms_type}')."
         raise ValueError(error_msg)
@@ -561,12 +575,12 @@ def get_train_transforms(transforms_type='multi_scale'):
     return transforms
 
 
-def get_eval_transforms(transforms_type='single_scale'):
+def get_eval_transforms(transforms_type='coco_single_scale'):
     """
     Function getting a list containing the specified evaluation transforms.
 
     Args:
-        transform_type (str): String containing the evaluation transforms type (default='single_scale').
+        transform_type (str): String containing the evaluation transforms type (default='coco_single_scale').
 
     Returns:
         transforms (List): List [num_eval_transforms] containing evaluation transforms.
@@ -576,24 +590,24 @@ def get_eval_transforms(transforms_type='single_scale'):
     """
 
     # Get evaluation transforms
-    if transforms_type == 'single_scale':
+    if transforms_type == 'coco_single_scale':
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor])]
 
-    elif transforms_type == 'single_scale_flip':
+    elif transforms_type == 'coco_single_scale_flip':
         hflip = RandomHorizontalFlip(flip_prob=1.0)
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor]), Compose([hflip, resize, to_tensor])]
 
-    elif transforms_type == 'multi_scale':
+    elif transforms_type == 'coco_multi_scale':
         scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
         resizes = [RandomResize([scale]) for scale in scales]
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor]) for resize in resizes]
 
-    elif transforms_type == 'multi_scale_flip':
+    elif transforms_type == 'coco_multi_scale_flip':
         hflip = RandomHorizontalFlip(flip_prob=1.0)
         scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
         resizes = [RandomResize([scale]) for scale in scales]
@@ -601,6 +615,17 @@ def get_eval_transforms(transforms_type='single_scale'):
 
         transforms = [Compose([resize, to_tensor]) for resize in resizes]
         transforms.extend([Compose([hflip, resize, to_tensor]) for resize in resizes])
+
+    elif transforms_type == 'cityscapes_single_scale':
+        resize = RandomResize([1024], max_size=2048)
+        to_tensor = ToTensor()
+        transforms = [Compose([resize, to_tensor])]
+
+    elif transforms_type == 'cityscapes_single_scale_flip':
+        hflip = RandomHorizontalFlip(flip_prob=1.0)
+        resize = RandomResize([1024], max_size=2048)
+        to_tensor = ToTensor()
+        transforms = [Compose([resize, to_tensor]), Compose([hflip, resize, to_tensor])]
 
     else:
         error_msg = f"Unknown evaluation transforms type (got '{transforms_type}')."

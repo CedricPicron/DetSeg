@@ -34,15 +34,12 @@ class CocoDataset(Dataset):
     Class implementing the CocoDataset dataset.
 
     Attributes:
-        root (Path): Path to directory with COCO images.
+        root (Path): Path to main directory from which datasets directory can be accessed.
         transforms (List): List [num_transforms] of transforms applied to image (and targets if available).
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-
-        coco (COCO): Optional object containing COCO annotations.
-        image_ids (List): List [num_images] of image indices, sorted in ascending order.
-        file_names (List): Optional list [num_images] of image file names aligned with image_ids list.
-
         requires_masks (bool): Boolean indicating whether target dictionaries require masks.
+        coco (COCO): Optional object containing COCO annotations in COCO format.
+        image_paths (List): List [num_images] with image paths relative to the root path.
     """
 
     def __init__(self, image_dir, transforms, metadata, annotation_file=None, info_file=None, requires_masks=False):
@@ -62,32 +59,27 @@ class CocoDataset(Dataset):
         """
 
         # Set base attributes
-        self.root = image_dir
+        self.root = Path()
         self.transforms = transforms
         self.metadata = metadata
+        self.requires_masks = requires_masks
 
         # Process annotation or info file
         if annotation_file is not None:
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
                     self.coco = COCO(annotation_file)
-                    self.image_ids = list(sorted(self.coco.imgs.keys()))
+                    self.coco.img_ids = list(sorted(self.coco.imgs.keys()))
+                    self.image_paths = [f'{image_dir}/{img_id:012}.jpg' for img_id in self.coco.img_ids]
 
         elif info_file is not None:
             with open(info_file) as json_file:
-                data = json.load(json_file)
-                filenames = {img['id']: img['file_name'] for img in data['images']}
-                filenames = dict(sorted(filenames.items()))
-
-                self.image_ids = list(filenames.keys())
-                self.filenames = list(filenames.values())
+                info_dict = json.load(json_file)
+                self.image_paths = [f"{image_dir}/{img['file_name']}" for img in info_dict['images']]
 
         else:
             error_msg = "No annotation or info file was provided during CocoDataset initialization."
             raise ValueError(error_msg)
-
-        # Set additional attributes
-        self.requires_masks = requires_masks
 
     @staticmethod
     def get_masks(annotations, iH, iW):
@@ -133,26 +125,14 @@ class CocoDataset(Dataset):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
                 - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
-
-        Raises:
-            ValueError: Error when neither the 'coco' attribute nor the 'filenames' attribute is set.
         """
 
-        # Get image index and transform
-        image_id = self.image_ids[index // len(self.transforms)]
-        transform = self.transforms[index % len(self.transforms)]
-
         # Load image and place it into Images structure
-        if hasattr(self, 'coco'):
-            image_path = self.root / f"{self.coco.loadImgs(image_id)[0]['id']:012}.jpg"
-        elif hasattr(self, 'filenames'):
-            image_path = self.root / self.filenames[index // len(self.transforms)]
-        else:
-            error_msg = "Neither the 'coco' attribute nor the 'filenames' attribute is set."
-            raise ValueError(error_msg)
+        contiguous_img_id = index // len(self.transforms)
+        image_path = self.image_paths[contiguous_img_id]
 
         image = Image.open(image_path).convert('RGB')
-        image = Images(image, image_id)
+        image = Images(image, contiguous_img_id)
 
         # Initialize empty target dictionary
         tgt_dict = {}
@@ -161,7 +141,8 @@ class CocoDataset(Dataset):
         if hasattr(self, 'coco'):
 
             # Load annotations and remove crowd annotations
-            annotation_ids = self.coco.getAnnIds(imgIds=image_id)
+            coco_img_id = self.coco.img_ids[contiguous_img_id]
+            annotation_ids = self.coco.getAnnIds(imgIds=coco_img_id)
             annotations = self.coco.loadAnns(annotation_ids)
             annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
@@ -187,6 +168,7 @@ class CocoDataset(Dataset):
                 tgt_dict['masks'] = masks[well_defined]
 
         # Perform image and target dictionary transformations
+        transform = self.transforms[index % len(self.transforms)]
         image, tgt_dict = transform(image, tgt_dict)
 
         # Only keep targets with well-defined boxes
@@ -208,14 +190,14 @@ class CocoDataset(Dataset):
         """
 
         # Get dataset length
-        dataset_length = len(self.image_ids) * len(self.transforms)
+        dataset_length = len(self.image_paths) * len(self.transforms)
 
         return dataset_length
 
 
 class CocoEvaluator(object):
     """
-    Evaluator object capable of computing evaluations from predictions on COCO data and storing them.
+    Class implementing the CocoEvaluator evaluator.
 
     Attributes:
         image_ids (List): List of evaluated image ids.
@@ -540,7 +522,7 @@ def build_coco(args):
             - train (CocoDataset): the training dataset (only present during training);
             - eval (CocoDataset): the evaluation dataset (always present).
 
-        evaluator (object): Object capable of computing evaluations from predictions and storing them.
+        evaluator (CocoEvaluator): Object capable of computing evaluations from predictions and storing them.
     """
 
     # Add splits with LVIS annotations
@@ -574,14 +556,14 @@ def build_coco(args):
     # Get training dataset if needed
     if not args.eval:
         image_dir = root / SPLITS['coco'][f'coco_{args.train_split}'][0]
-        train_transforms = get_train_transforms(args.train_transforms_type)
+        train_transforms = get_train_transforms(f'coco_{args.train_transforms_type}')
         metadata = MetadataCatalog.get(f'coco_{args.train_split}')
         annotation_file = root / SPLITS['coco'][f'coco_{args.train_split}'][1]
         datasets['train'] = CocoDataset(image_dir, train_transforms, metadata, annotation_file=annotation_file)
 
     # Get evaluation dataset
     image_dir = root / SPLITS['coco'][f'coco_{args.eval_split}'][0]
-    eval_transforms = get_eval_transforms(args.eval_transforms_type)
+    eval_transforms = get_eval_transforms(f'coco_{args.eval_transforms_type}')
     metadata = MetadataCatalog.get(f'coco_{args.eval_split}')
     annotation_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
     info_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'test' in args.eval_split else None

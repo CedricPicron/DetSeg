@@ -1,5 +1,7 @@
 **/__pycache__/**
 condor/*
+datasets/cityscapes/gtFine/*
+datasets/cityscapes/leftImg8bit/*
 datasets/coco/annotations/*/*
 datasets/coco/annotations/coco_train_lvis_*.json
 datasets/coco/annotations/coco_val_lvis_*.json

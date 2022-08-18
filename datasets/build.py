@@ -2,6 +2,7 @@
 Dataset/evaluator build function.
 """
 
+from datasets.cityscapes.cityscapes import build_cityscapes
 from datasets.coco.coco import build_coco
 
 
@@ -28,6 +29,10 @@ def build_dataset(args):
     # Build datasets and evaluator
     if args.dataset == 'coco':
         datasets, evaluator = build_coco(args)
+
+    elif args.dataset == 'cityscapes':
+        datasets, evaluator = build_cityscapes(args)
+
     else:
         raise ValueError(f"Unknown dataset name '{args.dataset}' was provided.")
 
