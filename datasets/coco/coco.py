@@ -84,10 +84,10 @@ class CocoDataset(Dataset):
     @staticmethod
     def get_masks(annotations, iH, iW):
         """
-        Get segmentation masks from COCO annotations.
+        Get segmentation masks from polygon segmentation annotations.
 
         Args:
-            annotations (List): List of size [num_targets] with COCO annotation dictionaries with key:
+            annotations (List): List [num_targets] with annotation dictionaries at least containing the key:
                 - segmentation (List): list of polygons delineating the segmentation mask related to the annotation.
 
             iH (int): Height of image corresponding to the input annotations.
@@ -146,7 +146,7 @@ class CocoDataset(Dataset):
             annotations = self.coco.loadAnns(annotation_ids)
             annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
-            # Get object class labels (in contiguous id space)
+            # Get object class labels (in contiguous label id space)
             id_dict = self.metadata.thing_dataset_id_to_contiguous_id
             labels = [id_dict[annotation['category_id']] for annotation in annotations]
             labels = torch.tensor(labels, dtype=torch.int64)
