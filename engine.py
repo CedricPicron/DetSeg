@@ -88,7 +88,7 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
         output_dir (Path): Path to directory to save evaluations and potentially visualizations (default=None).
         print_freq (int): Integer containing the logger print frequency (default=10).
         save_stats (bool): Boolean indicating whether to save evaluation statistics (default=False).
-        save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
+        save_results (bool): Boolean indicating whether to save results (default=False).
         save_tag (str): String containing tag used at the end of evaluation file names (default='single_scale').
         visualize (bool): Boolean indicating whether visualizations should be computed (default=False).
         vis_score_thr (float): Threshold indicating the minimum score for a detection to be drawn (default=0.4).
@@ -106,12 +106,11 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     if evaluator is not None:
         sample_images = next(iter(dataloader))[0]
         pred_dicts = model(sample_images.to(device))[0]
-
-        evaluator.reset()
         evaluators = []
 
         for pred_dict in pred_dicts:
             evaluator_i = deepcopy(evaluator)
+            evaluator_i.metrics = []
 
             if 'masks' in pred_dict:
                 metrics = ['bbox', 'segm', 'boundary'] if eval_with_bnd else ['bbox', 'segm']
@@ -119,6 +118,11 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
 
             elif 'boxes' in pred_dict:
                 evaluator_i.add_metrics(['bbox'])
+
+            if len(evaluator_i.metrics) > 0:
+                evaluator_i.reset()
+            else:
+                evaluator_i = None
 
             evaluators.append(evaluator_i)
 
@@ -165,7 +169,8 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
         # Update evaluators
         if evaluators is not None:
             for evaluator, pred_dict in zip(evaluators, pred_dicts):
-                evaluator.update(images, pred_dict)
+                if evaluator is not None:
+                    evaluator.update(images, pred_dict)
 
         # Save visualizations to visualization directory
         if visualize and output_dir is not None:
@@ -185,24 +190,20 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     # Perform evaluations
     if evaluators is not None:
         for i, evaluator in enumerate(evaluators, 1):
-            eval_dict = evaluator.evaluate(device=device)
 
-            if eval_dict is not None:
-                for metric in eval_dict.keys():
-                    eval_stats[f'eval_{i}_{metric}'] = eval_dict[metric]
+            if evaluator is not None:
+                eval_kwargs = {'device': device, 'output_dir': output_dir, 'save_results': save_results}
+                eval_kwargs['save_name'] = f'results_{i}'
+                eval_dict = evaluator.evaluate(**eval_kwargs)
+
+                if eval_dict is not None:
+                    for metric in eval_dict.keys():
+                        eval_stats[f'eval_{i}_{metric}'] = eval_dict[metric]
 
     # Save evaluations to output directory
-    if distributed.is_main_process() and output_dir is not None:
-        if save_stats:
-            with (output_dir / f'eval_{save_tag}.txt').open('w') as eval_file:
-                eval_file.write(json.dumps(eval_stats) + "\n")
-
-        if evaluators is not None:
-            for i, evaluator in enumerate(evaluators, 1):
-                for metric in evaluator.metrics:
-                    if save_results or not evaluator.has_gt_anns:
-                        with open(output_dir / f'result_{i}_{metric}_{save_tag}.json', 'w') as result_file:
-                            json.dump(evaluator.result_dicts[metric], result_file)
+    if distributed.is_main_process() and output_dir is not None and save_stats:
+        with (output_dir / f'eval_{save_tag}.txt').open('w') as eval_file:
+            eval_file.write(json.dumps(eval_stats) + "\n")
 
     return eval_stats
 

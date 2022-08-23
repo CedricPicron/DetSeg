@@ -265,9 +265,6 @@ class CocoEvaluator(object):
         # Add evalutation metrics
         self.metrics.extend(metrics)
 
-        # Reset evaluator
-        self.reset()
-
     def reset(self):
         """
         Resets the image_ids and result_dicts attributes of the CocoEvaluator evaluator.
@@ -387,12 +384,15 @@ class CocoEvaluator(object):
             # Update result_dicts attribute
             self.result_dicts[metric].extend(result_dicts)
 
-    def evaluate(self, device='cpu'):
+    def evaluate(self, device='cpu', output_dir=None, save_results=False, save_name='results'):
         """
         Perform evaluation by finalizing the result dictionaries and by comparing with ground-truth (if available).
 
         Args:
             device (str): String containing the type of device used during NMS (default='cpu').
+            output_dir (Path): Path to output directory to save result dictionaries (default=None).
+            save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
+            save_name (str): String containing the base file name of the saved result dictionaries (default='results').
 
         Returns:
             eval_dict (Dict): Dictionary with evaluation results for each metric (if annotations are available).
@@ -412,6 +412,10 @@ class CocoEvaluator(object):
             gathered_result_dicts = distributed.all_gather(self.result_dicts[metric])
             self.result_dicts[metric] = [result_dict for list in gathered_result_dicts for result_dict in list]
 
+        # Return if not main process
+        if not distributed.is_main_process():
+            return
+
         # Peform NMS if requested
         if self.eval_nms:
             boxes = {image_id: [] for image_id in self.image_ids}
@@ -420,7 +424,7 @@ class CocoEvaluator(object):
             result_ids = {image_id: [] for image_id in self.image_ids}
             keep_result_ids = []
 
-            allowed_metrics = ['bbox', 'segm', 'boundary']
+            allowed_metrics = ['bbox']
             nms_metrics = [metric for metric in self.metrics if metric in allowed_metrics]
 
             if len(nms_metrics) > 0:
@@ -506,6 +510,13 @@ class CocoEvaluator(object):
             else:
                 error_msg = f"Unknown annotation format '{self.evaluator_type}' for CocoEvaluator evaluator."
                 raise ValueError(error_msg)
+
+        # Save result dictionaries if needed
+        if distributed.is_main_process() and output_dir is not None:
+            if save_results or not self.has_gt_anns:
+                for metric in self.metrics:
+                    with open(output_dir / f'{save_name}_{metric}.json', 'w') as result_file:
+                        json.dump(self.result_dicts[metric], result_file)
 
         return eval_dict
 
