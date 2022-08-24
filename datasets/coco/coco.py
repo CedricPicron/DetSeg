@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from zipfile import ZipFile
 
 from boundary_iou.coco_instance_api.coco import COCO
 from boundary_iou.coco_instance_api.cocoeval import COCOeval
@@ -129,10 +130,11 @@ class CocoDataset(Dataset):
 
         # Load image and place it into Images structure
         contiguous_img_id = index // len(self.transforms)
-        image_path = self.image_paths[contiguous_img_id]
+        img_id = self.coco.img_ids[contiguous_img_id] if hasattr(self, 'coco') else contiguous_img_id
 
+        image_path = self.image_paths[contiguous_img_id]
         image = Image.open(image_path).convert('RGB')
-        image = Images(image, contiguous_img_id)
+        image = Images(image, img_id)
 
         # Initialize empty target dictionary
         tgt_dict = {}
@@ -141,8 +143,7 @@ class CocoDataset(Dataset):
         if hasattr(self, 'coco'):
 
             # Load annotations and remove crowd annotations
-            coco_img_id = self.coco.img_ids[contiguous_img_id]
-            annotation_ids = self.coco.getAnnIds(imgIds=coco_img_id)
+            annotation_ids = self.coco.getAnnIds(imgIds=img_id)
             annotations = self.coco.loadAnns(annotation_ids)
             annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
@@ -236,7 +237,7 @@ class CocoEvaluator(object):
         self.image_ids = []
         self.metadata = eval_dataset.metadata
         self.metrics = metrics if metrics is not None else []
-        self.result_dicts = {metric: [] for metric in self.metrics}
+        self.result_dicts = []
 
         # Set NMS attributes
         self.eval_nms = len(eval_dataset.transforms) > 1
@@ -272,7 +273,7 @@ class CocoEvaluator(object):
 
         # Reset image_ids and result_dicts attributes
         self.image_ids = []
-        self.result_dicts = {metric: [] for metric in self.metrics}
+        self.result_dicts = []
 
     def update(self, images, pred_dict):
         """
@@ -289,9 +290,7 @@ class CocoEvaluator(object):
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
-            ValueError: Error when neither box nor mask predictions are provided when using the 'bbox' metric.
-            ValueError: Error when no masks predictions are provided when using the 'segm' or 'boundary' metric.
-            ValueError: Error when evaluator contains an unknown evaluation metric.
+            ValueError: Error when no box predictions are provided when using evaluation NMS.
         """
 
         # Update the image_ids attribute
@@ -334,55 +333,43 @@ class CocoEvaluator(object):
         boxes = boxes.boxes.tolist() if boxes is not None else None
         scores = scores.tolist()
 
-        # Get base result dictionary
-        base_result_dict = {}
-        base_result_dict['image_id'] = image_ids
-        base_result_dict['category_id'] = labels
-        base_result_dict['score'] = scores
+        # Get result dictionary
+        result_dict = {}
+        result_dict['image_id'] = image_ids
+        result_dict['category_id'] = labels
+        result_dict['score'] = scores
 
-        # Get result dictionaries for every evaluation metric
-        for metric in self.metrics:
+        if boxes is not None:
+            result_dict['bbox'] = boxes
 
-            # Get shallow copy of base result dictionary
-            result_dict = base_result_dict.copy()
+        elif self.eval_nms:
+            error_msg = "Box predictions must be provided when using evaluation NMS."
+            raise ValueError(error_msg)
 
-            # Get metric-specific result dictionary
-            if metric == 'bbox':
+        if segms is not None:
+            result_dict['segmentation'] = segms
+
+        # Get list of result dictionaries
+        result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
+
+        # Make sure there is at least one result dictionary per image
+        for image_id in images.image_ids:
+            if image_id not in image_ids:
+                result_dict = {}
+                result_dict['image_id'] = image_id
+                result_dict['category_id'] = 0
+                result_dict['score'] = 0.0
+
                 if boxes is not None:
-                    result_dict['bbox'] = boxes
-                elif segms is not None:
-                    result_dict['segmentation'] = segms
-                else:
-                    error_msg = "Box or mask predictions must be provided when using the 'bbox' metric."
-                    raise ValueError(error_msg)
-
-            elif metric in ['segm', 'boundary']:
-                if segms is not None:
-                    result_dict['segmentation'] = segms
-                else:
-                    error_msg = "Mask predictions must be provided when using the 'segm' or 'boundary' metric."
-                    raise ValueError(error_msg)
-
-            else:
-                error_msg = f"CocoEvaluator object contains an unknown evaluation metric (got '{metric}')."
-                raise ValueError(error_msg)
-
-            # Get list of result dictionaries
-            result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
-
-            # Make sure there is at least one result dictionary per image
-            for image_id in images.image_ids:
-                if image_id not in image_ids:
-                    result_dict = {}
-                    result_dict['image_id'] = image_id
-                    result_dict['category_id'] = 0
                     result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
-                    result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
-                    result_dict['score'] = 0.0
-                    result_dicts.append(result_dict)
 
-            # Update result_dicts attribute
-            self.result_dicts[metric].extend(result_dicts)
+                if segms is not None:
+                    result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
+
+                result_dicts.append(result_dict)
+
+        # Update result_dicts attribute
+        self.result_dicts.extend(result_dicts)
 
     def evaluate(self, device='cpu', output_dir=None, save_results=False, save_name='results'):
         """
@@ -391,14 +378,13 @@ class CocoEvaluator(object):
         Args:
             device (str): String containing the type of device used during NMS (default='cpu').
             output_dir (Path): Path to output directory to save result dictionaries (default=None).
-            save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
-            save_name (str): String containing the base file name of the saved result dictionaries (default='results').
+            save_results (bool): Boolean indicating whether to save the results (default=False).
+            save_name (str) String containing the name of the saved result file (default='results').
 
         Returns:
             eval_dict (Dict): Dictionary with evaluation results for each metric (if annotations are available).
 
         Raises:
-            ValueError: Error when none of the allowed NMS metrics match one of the evaluation metrics.
             ValueError: Error when CocoEvaluator evaluator has unknown annotation format.
         """
 
@@ -407,10 +393,9 @@ class CocoEvaluator(object):
         self.image_ids = [image_id for list in gathered_image_ids for image_id in list]
         self.image_ids = list(np.unique(self.image_ids))
 
-        # Synchronize result dictionaries for each evaluation metric
-        for metric in self.metrics:
-            gathered_result_dicts = distributed.all_gather(self.result_dicts[metric])
-            self.result_dicts[metric] = [result_dict for list in gathered_result_dicts for result_dict in list]
+        # Synchronize result dictionaries
+        gathered_result_dicts = distributed.all_gather(self.result_dicts)
+        self.result_dicts = [result_dict for list in gathered_result_dicts for result_dict in list]
 
         # Return if not main process
         if not distributed.is_main_process():
@@ -424,16 +409,7 @@ class CocoEvaluator(object):
             result_ids = {image_id: [] for image_id in self.image_ids}
             keep_result_ids = []
 
-            allowed_metrics = ['bbox']
-            nms_metrics = [metric for metric in self.metrics if metric in allowed_metrics]
-
-            if len(nms_metrics) > 0:
-                nms_metric = nms_metrics[0]
-            else:
-                error_msg = f"NMS requires at least one metric from {allowed_metrics}, but got {self.metrics}."
-                raise ValueError(error_msg)
-
-            for result_id, result_dict in enumerate(self.result_dicts[nms_metric]):
+            for result_id, result_dict in enumerate(self.result_dicts):
                 image_id = result_dict['image_id']
                 label = result_dict['category_id']
                 box = result_dict['bbox'].copy()
@@ -457,28 +433,43 @@ class CocoEvaluator(object):
                 keep_result_ids_i = result_ids_i[keep_ids].tolist()
                 keep_result_ids.extend(keep_result_ids_i)
 
-            result_ids = set(range(len(self.result_dicts[nms_metric])))
+            result_ids = set(range(len(self.result_dicts)))
             keep_result_ids = set(keep_result_ids)
             drop_result_ids = result_ids - keep_result_ids
 
-            for metric in self.metrics:
-                data = pd.DataFrame(self.result_dicts[metric])
-                data.drop(index=drop_result_ids, inplace=True)
-                self.result_dicts[metric] = data.to_dict('records')
+            data = pd.DataFrame(self.result_dicts)
+            data.drop(index=drop_result_ids, inplace=True)
+            self.result_dicts = data.to_dict('records')
 
-        # Return when no ground-truth annotations are available
+        # Save result dictionaries if needed
+        if output_dir is not None:
+            if save_results or not self.has_gt_anns:
+                json_file_name = output_dir / f'{save_name}.json'
+                zip_file_name = output_dir / f'{save_name}.zip'
+
+                with open(json_file_name, 'w') as json_file:
+                    json.dump(self.result_dicts, json_file)
+
+                with ZipFile(zip_file_name, 'w') as zip_file:
+                    zip_file.write(json_file_name)
+                    os.remove(json_file_name)
+
+        # Return if no ground-truth annotations are available
         if not self.has_gt_anns:
             return
 
         # Compare predictions with ground-truth annotations
         eval_dict = {}
 
-        for metric in self.metrics:
+        for metric_id, metric in enumerate(self.metrics):
 
             if self.ann_format == 'coco':
                 with open(os.devnull, 'w') as devnull:
                     with contextlib.redirect_stdout(devnull):
-                        coco_res = self.coco.loadRes(self.result_dicts[metric])
+
+                        if metric_id == 0:
+                            coco_res = self.coco.loadRes(self.result_dicts)
+
                         sub_evaluator = COCOeval(self.coco, coco_res, iouType=metric)
                         sub_evaluator.params.imgIds = self.image_ids
                         sub_evaluator.evaluate()
@@ -494,7 +485,10 @@ class CocoEvaluator(object):
 
                 with open(os.devnull, 'w') as devnull:
                     with contextlib.redirect_stdout(devnull):
-                        lvis_res = LVISResults(self.lvis, self.result_dicts[metric])
+
+                        if metric_id == 0:
+                            lvis_res = LVISResults(self.lvis, self.result_dicts)
+
                         sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
                         sub_evaluator.params.img_ids = self.image_ids
 
@@ -510,13 +504,6 @@ class CocoEvaluator(object):
             else:
                 error_msg = f"Unknown annotation format '{self.evaluator_type}' for CocoEvaluator evaluator."
                 raise ValueError(error_msg)
-
-        # Save result dictionaries if needed
-        if distributed.is_main_process() and output_dir is not None:
-            if save_results or not self.has_gt_anns:
-                for metric in self.metrics:
-                    with open(output_dir / f'{save_name}_{metric}.json', 'w') as result_file:
-                        json.dump(self.result_dicts[metric], result_file)
 
         return eval_dict
 

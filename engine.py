@@ -193,7 +193,7 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
 
             if evaluator is not None:
                 eval_kwargs = {'device': device, 'output_dir': output_dir, 'save_results': save_results}
-                eval_kwargs['save_name'] = f'results_{i}'
+                eval_kwargs['save_name'] = f'results_{i}_{save_tag}'
                 eval_dict = evaluator.evaluate(**eval_kwargs)
 
                 if eval_dict is not None:

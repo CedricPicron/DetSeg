@@ -1,7 +1,10 @@
 """
 Cityscapes dataset/evaluator and build function.
 """
+import glob
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 
 import boundary_iou.cityscapes_instance_api.evalInstanceLevelSemanticLabeling as cityscapes_eval
 from cityscapesscripts.helpers.labels import name2label
@@ -280,7 +283,6 @@ class CityscapesEvaluator(object):
         result_dict = {}
         result_dict['image_id'] = image_ids
         result_dict['category_id'] = labels
-        result_dict['segmentation'] = segms
         result_dict['score'] = scores
 
         if self.eval_nms:
@@ -290,19 +292,24 @@ class CityscapesEvaluator(object):
                 error_msg = "Box predictions must be provided when using evaluation NMS."
                 raise ValueError(error_msg)
 
-        # Get list of result dictionaries and update result_dicts attribute
+        if segms is not None:
+            result_dict['segmentation'] = segms
+
+        # Get list of result dictionaries
         result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
+
+        # Update result_dicts attribute
         self.result_dicts.extend(result_dicts)
 
-    def evaluate(self, device='cpu', output_dir=None, save_results=False, **kwargs):
+    def evaluate(self, device='cpu', output_dir=None, save_results=False, save_name='results'):
         """
         Perform evaluation by finalizing the result dictionaries and by comparing with ground-truth (if available).
 
         Args:
             device (str): String containing the type of device used during NMS (default='cpu').
             output_dir (Path): Path to output directory to save result dictionaries (default=None).
-            save_results (bool): Boolean indicating whether to save result dictionaries (default=False).
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            save_results (bool): Boolean indicating whether to save the results (default=False).
+            save_name (str) String containing the name of the saved result file (default='results').
 
         Returns:
             eval_dict (Dict): Dictionary with evaluation results for each metric (if annotations are available).
@@ -355,18 +362,16 @@ class CityscapesEvaluator(object):
             data.drop(index=drop_result_ids, inplace=True)
             self.result_dicts = data.to_dict('records')
 
-        # Return when no ground-truth annotations are available
-        if not self.has_gt_anns:
-            return
-
-        # Get prediction files
-        pred_dir = output_dir / 'eval' if output_dir is not None else Path() / 'test' / 'cityscapes_eval'
-        pred_dir.mkdir(exist_ok=True)
+        # Get result files
+        temp_dir = TemporaryDirectory()
+        temp_dir_name = Path(temp_dir.name)
 
         base_names_dict = {}
-        gt_dir = self.metadata.gt_dir[:-1]
-        gt_imgs = []
         pred_txts = []
+
+        if self.has_gt_anns:
+            gt_dir = self.metadata.gt_dir[:-1]
+            gt_imgs = []
 
         for image_id in self.image_ids:
             file_name = self.file_names[image_id]
@@ -375,14 +380,17 @@ class CityscapesEvaluator(object):
             base_name = base_name.split('.')[0]
             base_name = base_name.split('_')
 
-            city_name = base_name[0]
+            if self.has_gt_anns:
+                city_name = base_name[0]
+
             base_name = '_'.join(base_name[:3])
             base_names_dict[image_id] = base_name
 
-            gt_img = f'{gt_dir}/{city_name}/{base_name}_gtFine_instanceIds.png'
-            gt_imgs.append(gt_img)
+            if self.has_gt_anns:
+                gt_img = f'{gt_dir}/{city_name}/{base_name}_gtFine_instanceIds.png'
+                gt_imgs.append(gt_img)
 
-            pred_txt = f'{pred_dir}/{base_name}_pred.txt'
+            pred_txt = f'{temp_dir_name}/{base_name}_pred.txt'
             open(pred_txt, 'w').close()
             pred_txts.append(pred_txt)
 
@@ -397,16 +405,35 @@ class CityscapesEvaluator(object):
             pred_txt = f'{base_name}_pred.txt'
 
             segm = rle_to_mask(segm)
-            Image.fromarray(segm * 255).save(pred_dir / pred_img)
+            Image.fromarray(segm * 255).save(temp_dir_name / pred_img)
 
-            with open(pred_dir / pred_txt, 'a') as pred_file:
+            with open(temp_dir_name / pred_txt, 'a') as pred_file:
                 pred_file.write(f"{pred_img} {label} {score}\n")
 
+        # Save result files if needed
+        if output_dir is not None:
+            if save_results or not self.has_gt_anns:
+                res_files = [*glob.glob(str(temp_dir_name / '*.png')), *pred_txts]
+
+                with ZipFile(output_dir / f'{save_name}.zip', 'w') as zip_file:
+                    for res_file in res_files:
+                        zip_file.write(res_file)
+
+        # Clean up and return if no ground-truth annotations are available
+        if not self.has_gt_anns:
+            temp_dir.cleanup()
+            return
+
         # Set arguments of Cityscapes evaluation API
+        if output_dir is not None:
+            gt_instances_file = output_dir / 'gtInstances.json'
+        else:
+            gt_instances_file = temp_dir_name / 'gtInstances.json'
+
         cityscapes_eval.args.colorized = False
-        cityscapes_eval.args.gtInstancesFile = f'{pred_dir}/gtInstances.json'
+        cityscapes_eval.args.gtInstancesFile = gt_instances_file
         cityscapes_eval.args.JSONOutput = False
-        cityscapes_eval.args.predictionPath = str(pred_dir)
+        cityscapes_eval.args.predictionPath = str(temp_dir_name)
         cityscapes_eval.args.predictionWalk = None
         cityscapes_eval.args.quiet = True
 
@@ -420,6 +447,9 @@ class CityscapesEvaluator(object):
 
             print(f"Evaluation metric: {metric}")
             cityscapes_eval.printResults(results, cityscapes_eval.args)
+
+        # Clean up temporary directory
+        temp_dir.cleanup()
 
         return eval_dict
 
