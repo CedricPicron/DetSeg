@@ -425,13 +425,8 @@ class CityscapesEvaluator(object):
             return
 
         # Set arguments of Cityscapes evaluation API
-        if output_dir is not None:
-            gt_instances_file = output_dir / 'gtInstances.json'
-        else:
-            gt_instances_file = temp_dir_name / 'gtInstances.json'
-
         cityscapes_eval.args.colorized = False
-        cityscapes_eval.args.gtInstancesFile = gt_instances_file
+        cityscapes_eval.args.gtInstancesFile = temp_dir_name / 'gtInstances.json'
         cityscapes_eval.args.JSONOutput = False
         cityscapes_eval.args.predictionPath = str(temp_dir_name)
         cityscapes_eval.args.predictionWalk = None
