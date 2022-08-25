@@ -171,7 +171,7 @@ model = dict(
                 alpha=0.25,
                 gamma=2.0,
                 reduction='sum',
-                weight=18.0,
+                weight=1.0,
             ),
         ),
         dict(
