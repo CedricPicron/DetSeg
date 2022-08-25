@@ -6,7 +6,7 @@ model = dict(
         sel_cfg=dict(
             type='AnchorSelector',
             anchor_attrs=dict(
-                map_ids=(3, 4, 5, 6, 7),
+                map_ids=(2, 3, 4, 5, 6, 7),
                 num_sizes=3,
                 scale_factor=4.0,
                 aspect_ratios=(0.5, 1.0, 2.0),
@@ -103,7 +103,7 @@ model = dict(
                 skip=True,
                 version=1,
                 num_heads=8,
-                num_levels=5,
+                num_levels=6,
                 num_points=1,
                 val_size=256,
             ),
@@ -171,7 +171,7 @@ model = dict(
                 alpha=0.25,
                 gamma=2.0,
                 reduction='sum',
-                weight=18.0,
+                weight=9.0,
             ),
         ),
         dict(
@@ -223,8 +223,7 @@ model = dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
                 out_channels=256,
-                featmap_strides=[8, 16, 32],
-                finest_scale=112,
+                featmap_strides=[4, 8, 16, 32],
             ),
             mask_head=dict(
                 type='mmdet.FCNMaskHead',
