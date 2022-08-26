@@ -43,12 +43,13 @@ class MMDetCore(nn.Module):
         self.body = build_core(cfg.core)
         self.body.init_weights()
 
-    def forward(self, in_feat_maps):
+    def forward(self, in_feat_maps, **kwargs):
         """
         Forward method of the MMDetCore module.
 
         Args:
             in_feat_maps (List): Input feature maps [num_in_maps] of shape [batch_size, feat_size, fH, fW].
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             out_feat_maps (List): Output feature maps [num_out_maps] of shape [batch_size, feat_size, fH, fW].
