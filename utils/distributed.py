@@ -93,6 +93,15 @@ def get_rank():
     return torch.distributed.get_rank()
 
 
+def synchronize():
+    """
+    Synchronizes all processes from the process group.
+    """
+
+    if is_dist_avail_and_initialized():
+        torch.distributed.barrier()
+
+
 def is_main_process():
     """
     Checks whether process corresponds to main process of process group.

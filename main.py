@@ -677,6 +677,7 @@ def main(args):
 
         eval_stats = evaluate(model, eval_dataloader, evaluator=evaluator, epoch=epoch)
         save_log(args.output_dir, epoch, train_stats, eval_stats)
+        distributed.synchronize()
 
     # End training timer and report total training time
     total_time = time.time() - start_time
