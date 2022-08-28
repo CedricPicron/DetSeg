@@ -44,6 +44,9 @@ def get_parser():
     parser.add_argument('--batch_size', default=2, type=int, help='batch size per device')
     parser.add_argument('--num_workers', default=2, type=int, help='number of subprocesses to use for data loading')
 
+    # Training
+    parser.add_argument('--eval_freq', default=1, type=int, help='evaluation frequency during training')
+
     # Evaluation
     parser.add_argument('--eval', action='store_true', help='perform evaluation task instead of training')
     parser.add_argument('--eval_task', default='performance', type=str, help='name of the evaluation task')
@@ -675,7 +678,11 @@ def main(args):
         checkpoint_model = model.module if args.distributed else model
         save_checkpoint(args, epoch, checkpoint_model, optimizer, scheduler)
 
-        eval_stats = evaluate(model, eval_dataloader, evaluator=evaluator, epoch=epoch)
+        if epoch % args.eval_freq == 0:
+            eval_stats = evaluate(model, eval_dataloader, evaluator=evaluator, epoch=epoch)
+        else:
+            eval_stats = None
+
         save_log(args.output_dir, epoch, train_stats, eval_stats)
         distributed.synchronize()
 

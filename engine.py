@@ -239,7 +239,7 @@ def save_checkpoint(args, epoch, model, optimizer, scheduler):
             torch.save(checkpoint, checkpoint_path)
 
 
-def save_log(output_dir, epoch, train_stats, eval_stats):
+def save_log(output_dir, epoch, train_stats, eval_stats=None):
     """
     Function used for log saving.
 
@@ -249,7 +249,7 @@ def save_log(output_dir, epoch, train_stats, eval_stats):
         output_dir (str): String containing the path to the output directory used for saving.
         epoch (int): Training epochs completed.
         train_stats (Dict): Dictionary containing the training statistics.
-        eval_stats (Dict): Dictionary containing the evaluation statistics.
+        eval_stats (Dict): Dictionary containing the evaluation statistics (default=None).
     """
 
     if output_dir and distributed.is_main_process():
@@ -257,7 +257,9 @@ def save_log(output_dir, epoch, train_stats, eval_stats):
 
         log_dict = {'epoch': epoch}
         log_dict.update({f'train_{k}': v for k, v in train_stats.items()})
-        log_dict.update({f'eval_{k}': v for k, v in eval_stats.items()})
+
+        if eval_stats is not None:
+            log_dict.update({f'eval_{k}': v for k, v in eval_stats.items()})
 
         with (output_dir / 'log.txt').open('a') as log_file:
             log_file.write(json.dumps(log_dict) + "\n")
