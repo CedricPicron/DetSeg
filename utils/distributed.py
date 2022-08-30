@@ -2,6 +2,7 @@
 Distributed utilities.
 """
 import builtins
+import datetime
 import logging
 import os
 import pickle
@@ -28,6 +29,7 @@ def init_distributed_mode(args):
     torch.cuda.set_device(args.gpu)
 
     kwargs = {'backend': 'nccl', 'init_method': args.dist_url, 'world_size': args.world_size, 'rank': args.rank}
+    kwargs['timeout'] = datetime.timedelta(hours=1)
     torch.distributed.init_process_group(**kwargs)
 
     print(f"| distributed init (rank {args.rank}): {args.dist_url}", flush=True)
