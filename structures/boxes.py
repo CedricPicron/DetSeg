@@ -717,13 +717,14 @@ def box_giou(boxes1, boxes2):
     return gious
 
 
-def box_intersection(boxes1, boxes2):
+def box_intersection(boxes1, boxes2, shard_size=int(1e7)):
     """
     Function computing the intersection areas between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
         boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
+        shard_size (int): Integer containing the maximum number of elements per shard (default=1e7).
 
     Returns:
         inters (FloatTensor): The intersection areas between every pair of boxes of shape [N, M].
@@ -743,10 +744,43 @@ def box_intersection(boxes1, boxes2):
     boxes2 = boxes2.clone().to_format('xyxy').boxes
 
     # Get intersection areas
-    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # [N,M,2]
-    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # [N,M,2]
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
-    inters = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+    N = len(boxes1)
+    M = len(boxes2)
+
+    if N*M <= shard_size:
+        lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])
+        rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])
+        inters = (rb - lt).clamp(min=0).prod(dim=2)
+
+    else:
+        tensor_kwargs = {'dtype': boxes1.dtype, 'device': boxes1.device}
+        inters = torch.empty(N, M, **tensor_kwargs)
+
+        if N >= M:
+            sM = M
+            sN = shard_size // sM
+            num_steps = int(math.ceil(N / sN))
+            shard_n = True
+
+        else:
+            sN = N
+            sM = shard_size // sN
+            num_steps = int(math.ceil(M / sM))
+            shard_n = False
+
+        lt = torch.empty(sN, sM, 2, **tensor_kwargs)
+        rb = torch.empty(sN, sM, 2, **tensor_kwargs)
+
+        for i in range(num_steps):
+            glob_n = slice(i*sN, min((i+1)*sN, N)) if shard_n else slice(None)
+            glob_m = slice(i*sM, min((i+1)*sM, M)) if not shard_n else slice(None)
+
+            loc_n = slice(min((i+1)*sN, N) - i*sN) if shard_n else slice(None)
+            loc_m = slice(min((i+1)*sM, M) - i*sM) if not shard_n else slice(None)
+
+            lt[loc_n, loc_m] = torch.max(boxes1[glob_n, None, :2], boxes2[glob_m, :2])
+            rb[loc_n, loc_m] = torch.min(boxes1[glob_n, None, 2:], boxes2[glob_m, 2:])
+            inters[glob_n, glob_m] = (rb[loc_n, loc_m] - lt[loc_n, loc_m]).clamp(min=0).prod(dim=2)
 
     return inters
 
