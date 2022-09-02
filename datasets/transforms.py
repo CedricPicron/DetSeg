@@ -360,6 +360,47 @@ def resize(image, tgt_dict, size, max_size=None):
     return image, tgt_dict
 
 
+class RandomRescale(object):
+    """
+    Class implementing the RandomRescale transform.
+
+    Attributes:
+        min_scale_factor (float): Value containing the minumum scale factor.
+        max_scale_factor (float): Value containing the maximum scale factor.
+    """
+
+    def __init__(self, min_scale_factor, max_scale_factor):
+        """
+        Initializes the RandomRescale transform.
+
+        Args:
+            min_scale_factor (float): Value containing the minumum scale factor.
+            max_scale_factor (float): Value containing the maximum scale factor.
+        """
+
+        self.min_scale_factor = min_scale_factor
+        self.max_scale_factor = max_scale_factor
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomRescale transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be resized.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with resized PIL Image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new resized image.
+        """
+
+        scale_factor = random.uniform(self.min_scale_factor, self.max_scale_factor)
+        size = int(scale_factor * min(image.size()))
+        image, tgt_dict = resize(image, tgt_dict, size)
+
+        return image, tgt_dict
+
+
 class RandomResize(object):
     """
     Class implementing the RandomResize transform.
@@ -561,10 +602,11 @@ def get_train_transforms(transforms_type='coco_multi_scale'):
         transforms = [Compose([hflip, resize, to_tensor])]
 
     elif transforms_type == 'cityscapes_multi_scale':
-        scales = [800, 832, 864, 896, 928, 960, 992, 1024]
-        resize = RandomResize(scales, max_size=2048)
+        shrink = RandomRescale(0.5, 1.0)
+        expand_crop = Compose([RandomRescale(1.0, 2.0), RandomCrop((1024, 2048))])
 
         hflip = RandomHorizontalFlip()
+        resize = RandomSelect(shrink, expand_crop)
         to_tensor = ToTensor()
         transforms = [Compose([hflip, resize, to_tensor])]
 
