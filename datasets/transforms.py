@@ -602,8 +602,8 @@ def get_train_transforms(transforms_type='coco_multi_scale'):
         transforms = [Compose([hflip, resize, to_tensor])]
 
     elif transforms_type == 'cityscapes_multi_scale':
-        shrink = RandomRescale(0.5, 1.0)
-        expand_crop = Compose([RandomRescale(1.0, 2.0), RandomCrop((1024, 2048))])
+        shrink = RandomRescale(0.25, 1.0)
+        expand_crop = Compose([RandomRescale(1.0, 4.0), RandomCrop((1024, 2048))])
 
         hflip = RandomHorizontalFlip()
         resize = RandomSelect(shrink, expand_crop)
