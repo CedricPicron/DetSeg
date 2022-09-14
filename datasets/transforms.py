@@ -1,6 +1,7 @@
 """
 Transforms on both image and corresponding target dictionaries.
 """
+import math
 import random
 
 import torch.nn.functional as F
@@ -360,6 +361,60 @@ def resize(image, tgt_dict, size, max_size=None):
     return image, tgt_dict
 
 
+class RandomCropResize(object):
+    """
+    Class implementing the RandomCropResize transform.
+
+    Attributes:
+        min_crop_factor (float): Value containing the minumum crop factor.
+        max_crop_factor (float): Value containing the maximum crop factor.
+    """
+
+    def __init__(self, min_crop_factor, max_crop_factor=1.0):
+        """
+        Initializes the RandomCropResize transform.
+
+        Args:
+            min_crop_factor (float): Value containing the minumum crop factor.
+            max_crop_factor (float): Value containing the maximum crop factor (default=1.0).
+        """
+
+        assert max_crop_factor <= 1
+        assert min_crop_factor <= max_crop_factor
+
+        self.min_crop_factor = min_crop_factor
+        self.max_crop_factor = max_crop_factor
+
+    def __call__(self, image, tgt_dict):
+        """
+        The __call__ method of the RandomCropResize transform.
+
+        Args:
+            image (Images): Images structure with PIL Image to be resized.
+            tgt_dict (Dict): Target dictionary corresponding to the input image.
+
+        Returns:
+            image (Images): Updated Images structure with resized PIL Image.
+            tgt_dict (Dict): Updated target dictionary corresponding to the new resized image.
+        """
+
+        low = math.log2(self.min_crop_factor)
+        high = math.log2(self.max_crop_factor)
+        crop_factor = 2**random.uniform(low, high)
+
+        iW, iH = image.size()
+        crop_size = (int(crop_factor * iH), int(crop_factor * iW))
+
+        crop_top, crop_left, crop_height, crop_width = T.RandomCrop.get_params(image.images, crop_size)
+        crop_right, crop_bottom = (crop_left + crop_width, crop_top + crop_height)
+
+        crop_region = (crop_left, crop_top, crop_right, crop_bottom)
+        image, tgt_dict = crop(image, tgt_dict, crop_region)
+        image, tgt_dict = resize(image, tgt_dict, (iW, iH))
+
+        return image, tgt_dict
+
+
 class RandomRescale(object):
     """
     Class implementing the RandomRescale transform.
@@ -394,7 +449,10 @@ class RandomRescale(object):
             tgt_dict (Dict): Updated target dictionary corresponding to the new resized image.
         """
 
-        scale_factor = random.uniform(self.min_scale_factor, self.max_scale_factor)
+        low = math.log2(self.min_scale_factor)
+        high = math.log2(self.max_scale_factor)
+        scale_factor = 2**random.uniform(low, high)
+
         size = int(scale_factor * min(image.size()))
         image, tgt_dict = resize(image, tgt_dict, size)
 
@@ -602,11 +660,11 @@ def get_train_transforms(transforms_type='coco_multi_scale'):
         transforms = [Compose([hflip, resize, to_tensor])]
 
     elif transforms_type == 'cityscapes_multi_scale':
-        shrink = RandomRescale(0.25, 1.0)
-        expand_crop = Compose([RandomRescale(1.0, 4.0), RandomCrop((1024, 2048))])
+        shrink = RandomRescale(0.33, 1.0)
+        crop_expand = RandomCropResize(0.33, 1.0)
 
         hflip = RandomHorizontalFlip()
-        resize = RandomSelect(shrink, expand_crop)
+        resize = RandomSelect(shrink, crop_expand)
         to_tensor = ToTensor()
         transforms = [Compose([hflip, resize, to_tensor])]
 
