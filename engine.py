@@ -135,7 +135,8 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     model_kwargs = {'extended_analysis': True, 'visualize': visualize, 'vis_score_thr': vis_score_thr}
 
     # Initialize metric logger
-    metric_logger = MetricLogger(delimiter="  ")
+    window_size = 1 if visualize else 20
+    metric_logger = MetricLogger(delimiter="  ", window_size=window_size)
     header = "Evaluation:" if epoch is None else f"Eval epoch {epoch}:"
 
     # Iterate over evaluation images
