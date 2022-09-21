@@ -1347,8 +1347,8 @@ class TopDownSegHead(nn.Module):
             key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
             loss_dict[key_name] = ref_loss
 
-            # Perform analyses if needed
-            if analysis_dict is not None:
+            # Get segmentation and refinement accuracies
+            with torch.no_grad():
 
                 # Get segmentation accuracies
                 seg_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
@@ -1475,7 +1475,7 @@ class TopDownSegHead(nn.Module):
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
-        # Perform analyses if needed
+        # Get segmentation and refinement accuracies
         with torch.no_grad():
 
             # Get segmentation accuracies
