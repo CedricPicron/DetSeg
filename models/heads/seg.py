@@ -1067,7 +1067,7 @@ class TopDownSegHead(nn.Module):
         qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
 
         # Get updated key feature maps
-        key_feat_maps = self.key_2d(key_feat_maps)
+        key_feat_maps = self.key_2d(key_feat_maps) if self.key_2d is not None else key_feat_maps
 
         # Get coarse map indices to sample keys from for each query
         cum_feats_map = [key_feat_map.flatten(2).size(dim=2) for key_feat_map in key_feat_maps]
