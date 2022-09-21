@@ -1274,7 +1274,7 @@ class TopDownSegHead(nn.Module):
 
         return storage_dict, images_dict
 
-    def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict, id=None, **kwargs):
         """
         Forward loss method of the TopDownSegHead module.
 
@@ -1289,18 +1289,18 @@ class TopDownSegHead(nn.Module):
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
-            analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            analysis_dict (Dict): Dictionary containing different analyses.
             id (int): Integer containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional keys:
-                - seg_loss_{i} (FloatTensor): segmentation loss of stage {i} of shape [];
                 - seg_loss (FloatTensor): segmentation loss over all stages of shape [];
-                - ref_loss_{i} (FloatTensor): refinement loss of stage {i} of shape [];
                 - ref_loss (FloatTensor): refinement loss over all stages of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional keys (if not None):
+                - seg_loss_{i} (FloatTensor): segmentation loss of stage {i} of shape [];
+                - ref_loss_{i} (FloatTensor): refinement loss of stage {i} of shape [];
                 - seg_acc_{i} (FloatTensor): segmentation accuracy of stage {i} of shape [];
                 - seg_acc (FloatTensor): segmentation accuracy over all stages of shape [];
                 - ref_acc_{i} (FloatTensor): refinement accuracy of stage {i} of shape [];
@@ -1332,7 +1332,7 @@ class TopDownSegHead(nn.Module):
 
             for i in range(self.refine_iters+1):
                 key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
-                loss_dict[key_name] = seg_loss
+                analysis_dict[key_name] = seg_loss.detach()
 
             key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
             loss_dict[key_name] = seg_loss
@@ -1342,7 +1342,7 @@ class TopDownSegHead(nn.Module):
 
             for i in range(self.refine_iters+1):
                 key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
-                loss_dict[key_name] = ref_loss
+                analysis_dict[key_name] = ref_loss.detach()
 
             key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
             loss_dict[key_name] = ref_loss
@@ -1449,7 +1449,7 @@ class TopDownSegHead(nn.Module):
             seg_loss += seg_loss_i
 
             key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
-            loss_dict[key_name] = seg_loss_i
+            analysis_dict[key_name] = seg_loss_i.detach()
 
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
@@ -1470,13 +1470,13 @@ class TopDownSegHead(nn.Module):
             ref_loss += ref_loss_i
 
             key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
-            loss_dict[key_name] = ref_loss_i
+            analysis_dict[key_name] = ref_loss_i.detach()
 
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
 
         # Perform analyses if needed
-        if analysis_dict is not None:
+        with torch.no_grad():
 
             # Get segmentation accuracies
             seg_preds = seg_logits > 0
@@ -1512,12 +1512,16 @@ class TopDownSegHead(nn.Module):
                 if len(ref_preds_i) > 0:
                     ref_acc_i = (ref_preds_i == ref_targets_i).sum() / len(ref_preds_i)
                 else:
-                    ref_acc_i = torch.tensor(0.0, dtype=torch.float, device=device)
+                    ref_acc_i = torch.tensor(1.0, dtype=torch.float, device=device)
 
                 key_name = f'ref_acc_{id}_{i}' if id is not None else f'ref_acc_{i}'
                 analysis_dict[key_name] = 100 * ref_acc_i
 
-            ref_acc = (ref_preds == ref_targets).sum() / len(ref_preds)
+            if len(ref_preds) > 0:
+                ref_acc = (ref_preds == ref_targets).sum() / len(ref_preds)
+            else:
+                ref_acc = torch.tensor(1.0, dtype=torch.float, device=device)
+
             key_name = f'ref_acc_{id}' if id is not None else 'ref_acc'
             analysis_dict[key_name] = 100 * ref_acc
 
