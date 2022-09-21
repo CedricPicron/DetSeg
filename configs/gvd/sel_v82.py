@@ -231,17 +231,6 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            key_2d_cfg=dict(
-                type='ApplyAll',
-                module_cfg=dict(
-                    type='mmcv.ConvModule',
-                    num_layers=4,
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=1,
-                    padding=0,
-                ),
-            ),
             key_coa_cfg=[
                 dict(
                     type='nn.Linear',
