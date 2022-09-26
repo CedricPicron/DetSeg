@@ -1024,15 +1024,15 @@ class TopDownSegHead(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
-                - qry_ids (LongTensor): query indices (post-selection) of query-key pairs of shape [num_qry_key_pairs];
-                - seg_xy (FloatTensor): normalized key locations of query-key pairs of shape [num_qry_key_pairs, 2];
-                - batch_ids (LongTensor): batch indices of query-key pairs of shape [num_qry_key_pairs];
-                - map_ids (LongTensor): map indices of query-key pairs of shape [num_qry_key_pairs];
+                - qry_ids (LongTensor): query indices (post-selection) of predictions of shape [num_preds];
+                - seg_xy (FloatTensor): normalized key locations of predictions of shape [num_preds, 2];
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
+                - map_ids (LongTensor): map indices of predictions of shape [num_preds];
                 - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
-                - seg_logits (FloatTensor): segmentation logits of query-key pairs of shape [num_qry_key_pairs];
-                - ref_logits (FloatTensor): refinement logits of query-key pairs of shape [num_qry_key_pairs];
-                - num_stage_preds (List): list with number of predictions per stage of size [num_stages];
-                - refined_mask (BoolTensor): mask indicating refined query-key pairs of shape [num_qry_key_pairs].
+                - seg_logits (FloatTensor): segmentation logits of shape [num_preds];
+                - ref_logits (FloatTensor): refinement logits of shape [num_preds];
+                - num_stage_preds (List): list with number of predictions per stage of size [self.refine_iters+1];
+                - refined_mask (BoolTensor): mask indicating refined predictions of shape [num_preds].
 
             images_dict (Dict): Dictionary (possibly) containing additional images annotated with segmentations.
         """
@@ -1096,7 +1096,7 @@ class TopDownSegHead(nn.Module):
         batch_masks = [batch_ids == i for i in range(batch_size)]
         map_masks = [coa_map_ids == j for j in range(num_maps)]
 
-        # Get coarse segmentation and refinement logits
+        # Initialize empty lists
         qry_ids_list = []
         seg_xy_list = []
         seg_wh_list = []
@@ -1104,99 +1104,110 @@ class TopDownSegHead(nn.Module):
         map_ids_list = []
         seg_feats_list = []
 
+        # Get segmentation features per image and map
         for i in range(batch_size):
             for j in range(num_maps):
+
+                # Get query indices of interest
                 qry_ids_ij = torch.nonzero(batch_masks[i] & map_masks[j])[:, 0]
 
-                if len(qry_ids_ij) > 0:
-                    qry_boxes_ij = qry_boxes[qry_ids_ij].normalize(images[i])
-                    qry_boxes_ij = qry_boxes_ij.to_format('xyxy')
+                if len(qry_ids_ij) == 0:
+                    continue
 
-                    key_feat_map = key_feat_maps[j][i]
-                    kH, kW = key_feat_map.size()[-2:]
+                # Get query boxes
+                qry_boxes_ij = qry_boxes[qry_ids_ij].normalize(images[i])
+                qry_boxes_ij = qry_boxes_ij.to_format('xyxy')
 
-                    key_feat_map = F.pad(key_feat_map, (1, 1, 1, 1), mode='constant', value=0.0)
-                    key_feats = key_feat_map.flatten(1).t().contiguous()
+                # Get padded key features in desired format
+                key_feat_map = key_feat_maps[j][i]
+                kH, kW = key_feat_map.size()[-2:]
 
-                    pts_x = torch.linspace(-0.5/kW, 1+0.5/kW, steps=kW, device=device)
-                    pts_y = torch.linspace(-0.5/kH, 1+0.5/kH, steps=kH, device=device)
+                key_feat_map = F.pad(key_feat_map, (1, 1, 1, 1), mode='constant', value=0.0)
+                key_feats = key_feat_map.flatten(1).t().contiguous()
 
-                    left_mask_0 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] - 1.5/kW
-                    top_mask_0 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] - 1.5/kH
-                    right_mask_0 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] + 1.5/kW
-                    bot_mask_0 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] + 1.5/kH
+                # Get key and local query indices
+                pts_x = torch.linspace(-0.5/kW, 1+0.5/kW, steps=kW, device=device)
+                pts_y = torch.linspace(-0.5/kH, 1+0.5/kH, steps=kH, device=device)
 
-                    left_mask_1 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] - 0.5/kW
-                    top_mask_1 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] - 0.5/kH
-                    right_mask_1 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] + 0.5/kW
-                    bot_mask_1 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] + 0.5/kH
+                left_mask_0 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] - 1.5/kW
+                top_mask_0 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] - 1.5/kH
+                right_mask_0 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] + 1.5/kW
+                bot_mask_0 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] + 1.5/kH
 
-                    left_mask_2 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] + 0.5/kW
-                    top_mask_2 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] + 0.5/kH
-                    right_mask_2 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] - 0.5/kW
-                    bot_mask_2 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] - 0.5/kH
+                left_mask_1 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] - 0.5/kW
+                top_mask_1 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] - 0.5/kH
+                right_mask_1 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] + 0.5/kW
+                bot_mask_1 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] + 0.5/kH
 
-                    key_mask = left_mask_0 & top_mask_0 & right_mask_0 & bot_mask_0
-                    local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
+                left_mask_2 = pts_x[None, None, :] > qry_boxes_ij.boxes[:, 0, None, None] + 0.5/kW
+                top_mask_2 = pts_y[None, :, None] > qry_boxes_ij.boxes[:, 1, None, None] + 0.5/kH
+                right_mask_2 = pts_x[None, None, :] < qry_boxes_ij.boxes[:, 2, None, None] - 0.5/kW
+                bot_mask_2 = pts_y[None, :, None] < qry_boxes_ij.boxes[:, 3, None, None] - 0.5/kH
 
-                    core_mask = left_mask_1 & top_mask_1 & right_mask_1 & bot_mask_1
-                    core_mask = core_mask[local_qry_ids, key_ids]
-                    aux_mask = ~core_mask
+                key_mask = left_mask_0 & top_mask_0 & right_mask_0 & bot_mask_0
+                local_qry_ids, key_ids = torch.nonzero(key_mask.flatten(1), as_tuple=True)
 
-                    i00 = (left_mask_0 & top_mask_0 & right_mask_2 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
-                    i01 = (left_mask_1 & top_mask_0 & right_mask_1 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
-                    i02 = (left_mask_2 & top_mask_0 & right_mask_0 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
-                    i10 = (left_mask_0 & top_mask_1 & right_mask_2 & bot_mask_1)[local_qry_ids, key_ids].nonzero()
-                    i11 = core_mask.nonzero()
-                    i12 = (left_mask_2 & top_mask_1 & right_mask_0 & bot_mask_1)[local_qry_ids, key_ids].nonzero()
-                    i20 = (left_mask_0 & top_mask_2 & right_mask_2 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
-                    i21 = (left_mask_1 & top_mask_2 & right_mask_1 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
-                    i22 = (left_mask_2 & top_mask_2 & right_mask_0 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
-                    adj_ids = torch.cat([i00, i01, i02, i10, i11, i12, i20, i21, i22], dim=1)
+                # Get core and auxiliary masks
+                core_mask = left_mask_1 & top_mask_1 & right_mask_1 & bot_mask_1
+                core_mask = core_mask[local_qry_ids, key_ids]
+                aux_mask = ~core_mask
 
-                    # Get query indices
-                    qry_ids_ij = qry_ids_ij[local_qry_ids]
-                    qry_ids_list.append(qry_ids_ij)
+                # Get adjacency indices
+                i00 = (left_mask_0 & top_mask_0 & right_mask_2 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
+                i01 = (left_mask_1 & top_mask_0 & right_mask_1 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
+                i02 = (left_mask_2 & top_mask_0 & right_mask_0 & bot_mask_2)[local_qry_ids, key_ids].nonzero()
+                i10 = (left_mask_0 & top_mask_1 & right_mask_2 & bot_mask_1)[local_qry_ids, key_ids].nonzero()
+                i11 = core_mask.nonzero()
+                i12 = (left_mask_2 & top_mask_1 & right_mask_0 & bot_mask_1)[local_qry_ids, key_ids].nonzero()
+                i20 = (left_mask_0 & top_mask_2 & right_mask_2 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
+                i21 = (left_mask_1 & top_mask_2 & right_mask_1 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
+                i22 = (left_mask_2 & top_mask_2 & right_mask_0 & bot_mask_0)[local_qry_ids, key_ids].nonzero()
+                adj_ids = torch.cat([i00, i01, i02, i10, i11, i12, i20, i21, i22], dim=1)
 
-                    # Get segmentation locations
-                    seg_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
-                    seg_xy = torch.stack(seg_xy, dim=0).flatten(1)
-                    seg_xy = seg_xy[:, key_ids].t()
-                    seg_xy_list.append(seg_xy)
+                # Get query indices
+                qry_ids_ij = qry_ids_ij[local_qry_ids]
+                qry_ids_list.append(qry_ids_ij[core_mask])
 
-                    # Get segmentation widths and heights
-                    num_keys = len(key_ids)
-                    seg_wh_i = torch.tensor([1/kW, 1/kH], device=device)
-                    seg_wh_i = seg_wh_i[None, :].expand(num_keys, -1)
-                    seg_wh_list.append(seg_wh_i)
+                # Get segmentation locations
+                seg_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                seg_xy = torch.stack(seg_xy, dim=0).flatten(1)
+                seg_xy = seg_xy[:, key_ids].t()
+                seg_xy_list.append(seg_xy[core_mask])
 
-                    # Get batch indices
-                    batch_ids_i = torch.full(size=[num_keys], fill_value=i, device=device)
-                    batch_ids_list.append(batch_ids_i)
+                # Get segmentation widths and heights
+                num_core_keys = core_mask.sum().item()
+                seg_wh = torch.tensor([1/kW, 1/kH], device=device)
+                seg_wh = seg_wh[None, :].expand(num_core_keys, -1)
+                seg_wh_list.append(seg_wh)
 
-                    # Get map indices
-                    map_ids_i = torch.full(size=[num_keys], fill_value=j, device=device)
-                    map_ids_list.append(map_ids_i)
+                # Get batch indices
+                batch_ids_i = torch.full(size=[num_core_keys], fill_value=i, device=device)
+                batch_ids_list.append(batch_ids_i)
 
-                    # Get segmentation features
-                    seg_feats = key_feats[key_ids, :]
-                    seg_feats = self.coa_key(seg_feats) if self.coa_key is not None else seg_feats
+                # Get map indices
+                map_ids_i = torch.full(size=[num_core_keys], fill_value=j, device=device)
+                map_ids_list.append(map_ids_i)
 
-                    if self.pos_enc is not None:
-                        qry_boxes_ij = qry_boxes_ij[local_qry_ids].to_format('xywh').boxes
-                        norm_seg_xy = (seg_xy - qry_boxes_ij[:, :2]) / qry_boxes_ij[:, 2:]
-                        seg_feats = seg_feats + self.pos_enc(norm_seg_xy)
+                # Get segmentation features
+                seg_feats = key_feats[key_ids, :]
+                seg_feats = self.coa_key(seg_feats) if self.coa_key is not None else seg_feats
 
-                    qry_feats_ij = qry_feats[qry_ids_ij]
-                    seg_feats = torch.cat([qry_feats_ij, seg_feats], dim=1)
-                    seg_feats = self.coa_in(seg_feats) if self.coa_in is not None else seg_feats
+                if self.pos_enc is not None:
+                    qry_boxes_ij = qry_boxes_ij[local_qry_ids].to_format('xywh').boxes
+                    norm_seg_xy = (seg_xy - qry_boxes_ij[:, :2]) / qry_boxes_ij[:, 2:]
+                    seg_feats = seg_feats + self.pos_enc(norm_seg_xy)
 
-                    if self.coa_conv is not None:
-                        seg_feats = self.coa_conv(seg_feats, core_mask, adj_ids, aux_mask=aux_mask)
+                qry_feats_ij = qry_feats[qry_ids_ij]
+                seg_feats = torch.cat([qry_feats_ij, seg_feats], dim=1)
+                seg_feats = self.coa_in(seg_feats) if self.coa_in is not None else seg_feats
 
-                    seg_feats = self.coa_out(seg_feats) if self.coa_out is not None else seg_feats
-                    seg_feats_list.append(seg_feats)
+                if self.coa_conv is not None:
+                    seg_feats = self.coa_conv(seg_feats, core_mask, adj_ids, aux_mask=aux_mask)
 
+                seg_feats = self.coa_out(seg_feats) if self.coa_out is not None else seg_feats
+                seg_feats_list.append(seg_feats)
+
+        # Concatenate entries from different images and maps
         qry_ids = torch.cat(qry_ids_list, dim=0)
         seg_xy = torch.cat(seg_xy_list, dim=0)
         seg_wh = torch.cat(seg_wh_list, dim=0)
@@ -1204,10 +1215,12 @@ class TopDownSegHead(nn.Module):
         map_ids = torch.cat(map_ids_list, dim=0) + self.key_min_id
         seg_feats = torch.cat(seg_feats_list, dim=0)
 
+        # Get segmentation and refinement logits
         core_seg_feats = seg_feats[core_mask]
         seg_logits = self.seg(core_seg_feats)
         ref_logits = self.ref(core_seg_feats)
 
+        # Store desired items in lists
         qry_ids_list = [qry_ids]
         seg_xy_list = [seg_xy]
         batch_ids_list = [batch_ids]
@@ -1217,14 +1230,16 @@ class TopDownSegHead(nn.Module):
         num_stage_preds = [len(qry_ids)]
         refined_mask_list = []
 
-        # Get fine segmentation and refinement logits
+        # Get grid offsets
         grid_offsets = torch.arange(2, device=device) - 0.5
         grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
         grid_offsets = torch.stack(grid_offsets, dim=2).flatten(0, 1)
 
+        # Get concatenated key features
         cat_key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
         cat_key_feats = torch.cat(cat_key_feats, dim=1)
 
+        # Get map shapes, sizes and offsets
         base_map_size = images.size(mode='with_padding')
         base_map_size = (base_map_size[1], base_map_size[0])
 
@@ -1242,7 +1257,10 @@ class TopDownSegHead(nn.Module):
         map_offsets = torch.cat(map_offsets).cumsum(dim=0)
         delta_key_map_offset = map_offsets[self.key_min_id]
 
+        # Perform refinement iterations
         for i in range(self.refine_iters):
+
+            # Get refine mask
             refine_mask = core_mask & (map_ids > 0)
 
             if refine_mask.sum().item() > self.refines_per_iter:
@@ -1252,43 +1270,68 @@ class TopDownSegHead(nn.Module):
                 refine_mask = torch.zeros_like(refine_mask)
                 refine_mask[refine_ids] = True
 
-            refined_mask_list.append(refine_mask)
+            core_refine_mask = refine_mask[core_mask]
+            refined_mask_list.append(core_refine_mask)
+
+            # Update adjacency indices
+            adj_ids = adj_ids[core_refine_mask]
 
             shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
-            adj_ids = adj_ids[refine_mask[core_mask]]
             adj_ids += shifts[adj_ids]
 
-            num_refines = len(adj_ids)
-            adj_ids = adj_ids.repeat_interleave(4, dim=0)
+            ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
+                                [1, 1, 2, 4, 4, 5, 4, 4, 5],
+                                [3, 4, 4, 3, 4, 4, 6, 7, 7],
+                                [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
 
-            adj_ids[:, 0] += None
-            adj_ids[:, 5] += torch.arange(-3, 1, device=device).repeat_interleave(num_refines, dim=0)
+            offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
+                                 [1, 0, 1, 3, 2, 3, 1, 0, 1],
+                                 [2, 3, 2, 0, 1, 0, 2, 3, 2],
+                                 [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
 
+            adj_refine_mask = refine_mask[adj_ids][core_refine_mask]
+            adj_refine_mask = adj_refine_mask[:, None, :].expand(-1, 4, -1)
+
+            offs = offs[None, :, :].expand_as(adj_refine_mask)
+            offs[~adj_refine_mask] = 0
+
+            adj_ids = adj_ids[:, ids] - offs
+            adj_ids = adj_ids.flatten(0, 1)
+            used_ids, adj_ids = adj_ids.unique(sorted=True, return_inverse=True)
+
+            # Update core and auxiliary masks
             repeats = torch.where(refine_mask, 4, 1)
             core_mask = refine_mask.repeat_interleave(repeats, dim=0)
+            core_mask = core_mask[used_ids]
             aux_mask = ~core_mask
 
-            qry_ids = qry_ids[refine_mask].repeat_interleave(4, dim=0)
+            # Update query indices
+            qry_ids = qry_ids[core_refine_mask].repeat_interleave(4, dim=0)
             qry_ids_list.append(qry_ids)
 
-            seg_wh = seg_wh[refine_mask] / 2
+            # Update segmentation widths and heights
+            seg_wh = seg_wh[core_refine_mask] / 2
             seg_wh = seg_wh.repeat_interleave(4, dim=0)
 
+            # Update segmentation locations
             delta_seg_xy = grid_offsets[None, :, :] * seg_wh.view(-1, 4, 2)
             delta_seg_xy = delta_seg_xy.flatten(0, 1)
 
-            seg_xy = seg_xy[refine_mask].repeat_interleave(4, dim=0)
+            seg_xy = seg_xy[core_refine_mask].repeat_interleave(4, dim=0)
             seg_xy = seg_xy + delta_seg_xy
             seg_xy_list.append(seg_xy)
 
-            batch_ids = batch_ids[refine_mask]
+            # Update batch indices
+            batch_ids = batch_ids[core_refine_mask]
             batch_ids = batch_ids.repeat_interleave(4, dim=0)
             batch_ids_list.append(batch_ids)
 
-            map_ids = map_ids[refine_mask] - 1
+            # Update map indices
+            map_ids = map_ids[core_refine_mask] - 1
             map_ids = map_ids.repeat_interleave(4, dim=0)
             map_ids_list.append(map_ids)
 
+            # Update segmentation features
             map_sizes_i = map_sizes[map_ids]
             map_offsets_i = map_offsets[map_ids]
 
@@ -1296,7 +1339,7 @@ class TopDownSegHead(nn.Module):
             feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
             feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
-            core_feats = seg_feats[refine_mask]
+            core_feats = seg_feats[core_refine_mask]
             core_feats = self.td(core_feats) if self.td is not None else core_feats.repeat_interleave(4, dim=0)
 
             select_mask = map_ids >= self.key_min_id
@@ -1314,18 +1357,23 @@ class TopDownSegHead(nn.Module):
                 seg_feats = self.fine_conv(seg_feats, core_mask, adj_ids, aux_mask=aux_mask)
 
             seg_feats = self.fine_out(seg_feats) if self.fine_out is not None else seg_feats
-            core_seg_feats = seg_feats[core_mask]
 
+            # Get segmentation and refinement logits
+            core_seg_feats = seg_feats[core_mask]
             seg_logits = self.seg(core_seg_feats)
             ref_logits = self.ref(core_seg_feats)
 
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
+
+            # Save number of predictions for this refinement stage
             num_stage_preds.append(len(qry_ids))
 
-        refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
-        refined_mask_list.append(refine_mask)
+        # Get final refine mask
+        core_refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
+        refined_mask_list.append(core_refine_mask)
 
+        # Concatenate entries from different refinement iterations
         qry_ids = torch.cat(qry_ids_list, dim=0)
         seg_xy = torch.cat(seg_xy_list, dim=0)
         batch_ids = torch.cat(batch_ids_list, dim=0)
@@ -1334,6 +1382,7 @@ class TopDownSegHead(nn.Module):
         ref_logits = torch.cat(ref_logits_list, dim=0)
         refined_mask = torch.cat(refined_mask_list, dim=0)
 
+        # Store desired items in storage dictionary
         storage_dict['qry_ids'] = qry_ids
         storage_dict['seg_xy'] = seg_xy
         storage_dict['batch_ids'] = batch_ids
