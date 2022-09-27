@@ -1099,7 +1099,7 @@ class TopDownSegHead(nn.Module):
         # Normalize and clip query boxes
         boxes_per_img = [batch_mask.sum().item() for batch_mask in batch_masks]
         qry_boxes.boxes_per_img = torch.tensor(boxes_per_img, device=device)
-        qry_boxes = qry_boxes.normalize(images).clip((1e-4, 1e-4, 1-1e-4, 1-1e-4))[0]
+        qry_boxes = qry_boxes.normalize(images).clip((0.0, 0.0, 1.0, 1.0))[0]
 
         # Initialize adjacency offset and empty lists
         core_masks_list = []
@@ -1139,20 +1139,20 @@ class TopDownSegHead(nn.Module):
                 grid_x = pts_x[None, None, :].expand(-1, kH+2, -1).flatten(1)
                 grid_y = pts_y[None, :, None].expand(-1, -1, kW+2).flatten(1)
 
-                left_mask_0 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 1.5/kW
-                top_mask_0 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 1.5/kH
-                right_mask_0 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 1.5/kW
-                bot_mask_0 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 1.5/kH
+                left_mask_0 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 1.5/kW + 1e-6
+                top_mask_0 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 1.5/kH + 1e-6
+                right_mask_0 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 1.5/kW - 1e-6
+                bot_mask_0 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 1.5/kH - 1e-6
 
-                left_mask_1 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 0.5/kW
-                top_mask_1 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 0.5/kH
-                right_mask_1 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 0.5/kW
-                bot_mask_1 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 0.5/kH
+                left_mask_1 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 0.5/kW + 1e-6
+                top_mask_1 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 0.5/kH + 1e-6
+                right_mask_1 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 0.5/kW - 1e-6
+                bot_mask_1 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 0.5/kH - 1e-6
 
-                left_mask_2 = grid_x > qry_boxes_ij.boxes[:, 0, None] + 0.5/kW
-                top_mask_2 = grid_y > qry_boxes_ij.boxes[:, 1, None] + 0.5/kH
-                right_mask_2 = grid_x < qry_boxes_ij.boxes[:, 2, None] - 0.5/kW
-                bot_mask_2 = grid_y < qry_boxes_ij.boxes[:, 3, None] - 0.5/kH
+                left_mask_2 = grid_x > qry_boxes_ij.boxes[:, 0, None] + 0.5/kW + 1e-6
+                top_mask_2 = grid_y > qry_boxes_ij.boxes[:, 1, None] + 0.5/kH + 1e-6
+                right_mask_2 = grid_x < qry_boxes_ij.boxes[:, 2, None] - 0.5/kW - 1e-6
+                bot_mask_2 = grid_y < qry_boxes_ij.boxes[:, 3, None] - 0.5/kH - 1e-6
 
                 key_mask = left_mask_0 & top_mask_0 & right_mask_0 & bot_mask_0
                 local_qry_ids, key_ids = torch.nonzero(key_mask, as_tuple=True)
