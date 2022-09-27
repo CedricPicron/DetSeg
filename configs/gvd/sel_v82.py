@@ -231,7 +231,7 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            key_coa_cfg=[
+            coa_key_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
@@ -247,10 +247,22 @@ model = dict(
                 type='SinePosEncoder2d',
                 feat_size=256,
             ),
-            cat_coa_cfg=[
+            coa_in_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=512,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
+            coa_out_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
                     out_features=256,
                     bias=True,
                 ),
@@ -319,7 +331,7 @@ model = dict(
                     out_shape=(-1, 256),
                 ),
             ],
-            key_fine_cfg=[
+            fine_key_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
@@ -331,10 +343,34 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            cat_fine_cfg=[
+            fine_core_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=512,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
+            fine_in_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
+            fine_out_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
                     out_features=256,
                     bias=True,
                 ),
