@@ -1263,7 +1263,7 @@ class TopDownSegHead(nn.Module):
         seg_feats = self.coa_in(seg_feats) if self.coa_in is not None else seg_feats
 
         if self.coa_conv is not None:
-            seg_feats = self.coa_conv(seg_feats, core_mask, adj_ids)
+            seg_feats = self.coa_conv(seg_feats, conv_mask=core_mask, adj_ids=adj_ids)
 
         seg_feats = self.coa_out(seg_feats) if self.coa_out is not None else seg_feats
 
@@ -1411,7 +1411,7 @@ class TopDownSegHead(nn.Module):
             seg_feats[core_mask] += core_feats
 
             if self.fine_conv is not None:
-                seg_feats = self.fine_conv(seg_feats, core_mask, adj_ids)
+                seg_feats = self.fine_conv(seg_feats, conv_mask=core_mask, adj_ids=adj_ids)
 
             seg_feats = self.fine_out(seg_feats) if self.fine_out is not None else seg_feats
 
