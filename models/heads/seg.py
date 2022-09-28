@@ -1118,12 +1118,13 @@ class TopDownSegHead(nn.Module):
 
                 # Get query indices of interest
                 qry_ids_ij = torch.nonzero(batch_masks[i] & map_masks[j])[:, 0]
+                num_qrys_ij = len(qry_ids_ij)
 
-                if len(qry_ids_ij) == 0:
+                if num_qrys_ij == 0:
                     continue
 
                 # Get query boxes
-                qry_boxes_ij = qry_boxes[qry_ids_ij].to_format('xyxy')
+                qry_boxes_ij = qry_boxes[qry_ids_ij].to_format('xyxy').boxes
 
                 # Get padded key features in desired format
                 key_feat_map = key_feat_maps[j][i]
@@ -1132,28 +1133,61 @@ class TopDownSegHead(nn.Module):
                 key_feat_map = F.pad(key_feat_map, (1, 1, 1, 1), mode='constant', value=0.0)
                 key_feats = key_feat_map.flatten(1).t().contiguous()
 
-                # Get key and local query indices
+                # Get various masks
                 pts_x = torch.linspace(-0.5/kW, 1+0.5/kW, steps=kW+2, device=device)
                 pts_y = torch.linspace(-0.5/kH, 1+0.5/kH, steps=kH+2, device=device)
 
-                grid_x = pts_x[None, None, :].expand(-1, kH+2, -1).flatten(1)
-                grid_y = pts_y[None, :, None].expand(-1, -1, kW+2).flatten(1)
+                grid_x = pts_x[None, None, :].expand(-1, kH+2, -1)
+                grid_y = pts_y[None, :, None].expand(-1, -1, kW+2)
 
-                left_mask_0 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 1.5/kW + 1e-6
-                top_mask_0 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 1.5/kH + 1e-6
-                right_mask_0 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 1.5/kW - 1e-6
-                bot_mask_0 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 1.5/kH - 1e-6
+                left_mask_0 = grid_x > qry_boxes_ij[:, 0, None, None] - 1.5/kW
+                top_mask_0 = grid_y > qry_boxes_ij[:, 1, None, None] - 1.5/kH
+                right_mask_0 = grid_x < qry_boxes_ij[:, 2, None, None] + 1.5/kW
+                bot_mask_0 = grid_y < qry_boxes_ij[:, 3, None, None] + 1.5/kH
 
-                left_mask_1 = grid_x > qry_boxes_ij.boxes[:, 0, None] - 0.5/kW + 1e-6
-                top_mask_1 = grid_y > qry_boxes_ij.boxes[:, 1, None] - 0.5/kH + 1e-6
-                right_mask_1 = grid_x < qry_boxes_ij.boxes[:, 2, None] + 0.5/kW - 1e-6
-                bot_mask_1 = grid_y < qry_boxes_ij.boxes[:, 3, None] + 0.5/kH - 1e-6
+                left_mask_1 = left_mask_0.clone()
+                top_mask_1 = top_mask_0.clone()
+                right_mask_1 = right_mask_0.clone()
+                bot_mask_1 = bot_mask_0.clone()
 
-                left_mask_2 = grid_x > qry_boxes_ij.boxes[:, 0, None] + 0.5/kW + 1e-6
-                top_mask_2 = grid_y > qry_boxes_ij.boxes[:, 1, None] + 0.5/kH + 1e-6
-                right_mask_2 = grid_x < qry_boxes_ij.boxes[:, 2, None] - 0.5/kW - 1e-6
-                bot_mask_2 = grid_y < qry_boxes_ij.boxes[:, 3, None] - 0.5/kH - 1e-6
+                qry_ids = torch.arange(num_qrys_ij, device=device)
+                left_ids = (pts_x[None, :] > qry_boxes_ij[:, 0, None] - 1.5/kW).int().argmax(dim=1)
+                top_ids = (pts_y[None, :] > qry_boxes_ij[:, 1, None] - 1.5/kH).int().argmax(dim=1)
+                right_ids = (pts_x[None, :] < qry_boxes_ij[:, 2, None] + 1.5/kW).int().argmin(dim=1) - 1
+                bot_ids = (pts_y[None, :] < qry_boxes_ij[:, 3, None] + 1.5/kH).int().argmin(dim=1) - 1
 
+                left_mask_1[qry_ids, :, left_ids] = False
+                top_mask_1[qry_ids, top_ids, :] = False
+                right_mask_1[qry_ids, :, right_ids] = False
+                bot_mask_1[qry_ids, bot_ids, :] = False
+
+                left_mask_2 = left_mask_1.clone()
+                top_mask_2 = top_mask_1.clone()
+                right_mask_2 = right_mask_1.clone()
+                bot_mask_2 = bot_mask_1.clone()
+
+                left_mask_2[qry_ids, :, left_ids+1] = False
+                top_mask_2[qry_ids, top_ids+1, :] = False
+                right_mask_2[qry_ids, :, right_ids-1] = False
+                bot_mask_2[qry_ids, bot_ids-1, :] = False
+
+                left_mask_0 = left_mask_0.flatten(1)
+                left_mask_1 = left_mask_1.flatten(1)
+                left_mask_2 = left_mask_2.flatten(1)
+
+                top_mask_0 = top_mask_0.flatten(1)
+                top_mask_1 = top_mask_1.flatten(1)
+                top_mask_2 = top_mask_2.flatten(1)
+
+                right_mask_0 = right_mask_0.flatten(1)
+                right_mask_1 = right_mask_1.flatten(1)
+                right_mask_2 = right_mask_2.flatten(1)
+
+                bot_mask_0 = bot_mask_0.flatten(1)
+                bot_mask_1 = bot_mask_1.flatten(1)
+                bot_mask_2 = bot_mask_2.flatten(1)
+
+                # Get key and local query indices
                 key_mask = left_mask_0 & top_mask_0 & right_mask_0 & bot_mask_0
                 local_qry_ids, key_ids = torch.nonzero(key_mask, as_tuple=True)
                 num_keys = len(key_ids)
