@@ -5,6 +5,30 @@ Collection of functions related to convolutions.
 import torch
 import torch.nn.functional as F
 
+from models.functional.autograd import AdjConv2d
+
+
+def adj_conv2d(in_feats, weight, bias, adj_ids):
+    """
+    Function implementing the 2D adjacency convolution operation.
+
+    This custom implementation does not keep the intermediate data structure in memory.
+
+    Args:
+        in_feats (FloatTensor): Input features of shape [num_feats, in_channels].
+        weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
+        bias (FloatTensor): Tensor with convolution biases of shape [out_channels].
+        adj_ids (LongTensor): Adjacency indices of convolution features of shape [num_conv_feats, kH * kW].
+
+    Returns:
+        out_feats (FloatTensor): Output convolution features of shape [num_conv_feats, out_channels].
+    """
+
+    # Apply custom AdjConv2d autograd function
+    out_feats = AdjConv2d.apply(in_feats, weight, bias, adj_ids)
+
+    return out_feats
+
 
 def conv_transpose2d(input, weight, base_map_size=None, stride=1, padding=0, dilation=1, max_counter=100, **kwargs):
     """
