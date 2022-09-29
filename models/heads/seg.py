@@ -1333,26 +1333,25 @@ class TopDownSegHead(nn.Module):
             # Update adjacency indices
             adj_ids = adj_ids[core_refine_mask]
 
-            adj_refine_mask = refine_mask[adj_ids]
-            adj_refine_mask = adj_refine_mask[:, None, :].expand(-1, 4, -1)
-
-            shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
-            adj_ids += shifts[adj_ids]
-
             ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
                                 [1, 1, 2, 4, 4, 5, 4, 4, 5],
                                 [3, 4, 4, 3, 4, 4, 6, 7, 7],
                                 [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
+
+            adj_ids = adj_ids[:, ids]
+            shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
+            shifts = shifts[adj_ids]
 
             offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
                                  [1, 0, 1, 3, 2, 3, 1, 0, 1],
                                  [2, 3, 2, 0, 1, 0, 2, 3, 2],
                                  [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
 
+            adj_refine_mask = refine_mask[adj_ids]
             offs = offs[None, :, :].expand_as(adj_refine_mask).clone()
             offs[~adj_refine_mask] = 0
 
-            adj_ids = adj_ids[:, ids] - offs
+            adj_ids = adj_ids + shifts - offs
             adj_ids = adj_ids.flatten(0, 1)
             used_ids, adj_ids = adj_ids.unique(sorted=True, return_inverse=True)
 
