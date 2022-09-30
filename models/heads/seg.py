@@ -623,14 +623,17 @@ class TopDownSegHead(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         seg_loss (nn.Module): Module computing the segmentation loss.
+        seg_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the segmentation loss weights.
         ref_loss (nn.Module): Module computing the refinement loss.
+        ref_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the refinement loss weights.
     """
 
     def __init__(self, seg_cfg, ref_cfg, map_offset, key_min_id, key_max_id, refine_iters, refines_per_iter, mask_thr,
-                 metadata, seg_loss_cfg, ref_loss_cfg, qry_cfg=None, key_2d_cfg=None, coa_key_cfg=None,
-                 pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None, coa_out_cfg=None, td_cfg=None,
-                 fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None, fine_conv_cfg=None, fine_out_cfg=None,
-                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+                 metadata, seg_loss_cfg, seg_loss_weights, ref_loss_cfg, ref_loss_weights, qry_cfg=None,
+                 key_2d_cfg=None, coa_key_cfg=None, pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None,
+                 coa_out_cfg=None, td_cfg=None, fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None,
+                 fine_conv_cfg=None, fine_out_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
+                 **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -645,7 +648,9 @@ class TopDownSegHead(nn.Module):
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
+            seg_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the segmentation loss weights.
             ref_loss_cfg (Dict): Configuration dictionary specifying the refinement loss module.
+            ref_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the refinement loss weights.
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             key_2d_cfg (Dict): Configuration dictionary specifying the key 2D module (default=None).
             coa_key_cfg (Dict): Configuration dictionary specifying the coarse key module (default=None.)
@@ -707,6 +712,8 @@ class TopDownSegHead(nn.Module):
         self.max_segs = max_segs
         self.mask_thr = mask_thr
         self.metadata = metadata
+        self.seg_loss_weights = seg_loss_weights
+        self.ref_loss_weights = ref_loss_weights
 
     @torch.no_grad()
     def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -1608,21 +1615,18 @@ class TopDownSegHead(nn.Module):
         ref_targets = (~seg_mask).float()
 
         # Get segmentation loss
-        inv_ids, counts = torch.unique(qry_ids[seg_mask], sorted=False, return_inverse=True, return_counts=True)[1:]
-        seg_weights = (1/counts)[inv_ids]
-
         seg_masks = seg_mask.split(num_stage_preds)
         seg_num_stage_preds = [seg_mask.sum().item() for seg_mask in seg_masks]
 
         seg_logits_list = seg_logits.split(seg_num_stage_preds)
         seg_targets_list = seg_targets.split(seg_num_stage_preds)
-        seg_weights_list = seg_weights.split(seg_num_stage_preds)
 
-        seg_zip = zip(seg_logits_list, seg_targets_list, seg_weights_list)
+        seg_zip = zip(seg_logits_list, seg_targets_list)
         seg_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
-        for i, (seg_logits_i, seg_targets_i, seg_weights_i) in enumerate(seg_zip):
-            seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i, weight=seg_weights_i)
+        for i, (seg_logits_i, seg_targets_i) in enumerate(seg_zip):
+            seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
+            seg_loss_i *= self.seg_loss_weights[i] * num_matches
             seg_loss += seg_loss_i
 
             key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
@@ -1632,18 +1636,15 @@ class TopDownSegHead(nn.Module):
         loss_dict[key_name] = seg_loss
 
         # Get refinement loss
-        inv_ids, counts = torch.unique(qry_ids, sorted=False, return_inverse=True, return_counts=True)[1:]
-        ref_weights = (1/counts)[inv_ids]
-
         ref_logits_list = ref_logits.split(num_stage_preds)
         ref_targets_list = ref_targets.split(num_stage_preds)
-        ref_weights_list = ref_weights.split(num_stage_preds)
 
-        ref_zip = zip(ref_logits_list, ref_targets_list, ref_weights_list)
+        ref_zip = zip(ref_logits_list, ref_targets_list)
         ref_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
-        for i, (ref_logits_i, ref_targets_i, ref_weights_i) in enumerate(ref_zip):
-            ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i, weight=ref_weights_i)
+        for i, (ref_logits_i, ref_targets_i) in enumerate(ref_zip):
+            ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i)
+            ref_loss_i *= self.ref_loss_weights[i] * num_matches
             ref_loss += ref_loss_i
 
             key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
