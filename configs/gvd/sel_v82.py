@@ -293,28 +293,6 @@ model = dict(
                     out_shape=(-1,),
                 ),
             ],
-            ref_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=1,
-                    bias=True,
-                ),
-                dict(
-                    type='View',
-                    out_shape=(-1,),
-                ),
-            ],
             td_cfg=[
                 dict(
                     type='nn.Linear',
@@ -383,8 +361,9 @@ model = dict(
             key_min_id=3,
             key_max_id=7,
             refine_iters=3,
-            refine_grid_size=2,
-            refines_per_iter=10000,
+            refine_bnd=(False, True, True),
+            train_bnd_width=2,
+            inf_bnd_width=1,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
@@ -401,13 +380,6 @@ model = dict(
                 loss_weight=1.0,
             ),
             seg_loss_weights=(0.25, 0.375, 0.375, 0.5),
-            ref_loss_cfg=dict(
-                type='mmdet.CrossEntropyLoss',
-                use_sigmoid=True,
-                reduction='mean',
-                loss_weight=1.0,
-            ),
-            ref_loss_weights=(0.25, 0.25, 0.25, 0.25),
         ),
     ],
     head_apply_ids=[6],

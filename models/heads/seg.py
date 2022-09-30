@@ -597,7 +597,6 @@ class TopDownSegHead(nn.Module):
         coa_out (nn.Module): Optional coarse output projection module updating the segmentation features.
 
         seg (nn.Module): Module computing the segmentation logits from the segmentation features.
-        ref (nn.Module): Module computing the refinement logits from the segmentation features.
 
         td (nn.Module): Optional module computing the top-down features from the segmentation features.
         fine_key (nn.Module): Optional module computing the fine key features.
@@ -610,7 +609,9 @@ class TopDownSegHead(nn.Module):
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         refine_iters (int): Integer containing the number of refinement iterations.
-        refines_per_iter (int): Integer containing the number of refinements per refinement iteration.
+        refine_bnd (Tuple): Tuple of size [refine_iters] determining whether to refine only in boundary regions.
+        train_bnd_width (int): Integer containing the training boundary width size.
+        inf_bnd_width (int): Integer containing the inference boundary width size.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -624,33 +625,29 @@ class TopDownSegHead(nn.Module):
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         seg_loss (nn.Module): Module computing the segmentation loss.
         seg_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the segmentation loss weights.
-        ref_loss (nn.Module): Module computing the refinement loss.
-        ref_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the refinement loss weights.
     """
 
-    def __init__(self, seg_cfg, ref_cfg, map_offset, key_min_id, key_max_id, refine_iters, refines_per_iter, mask_thr,
-                 metadata, seg_loss_cfg, seg_loss_weights, ref_loss_cfg, ref_loss_weights, qry_cfg=None,
-                 key_2d_cfg=None, coa_key_cfg=None, pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None,
-                 coa_out_cfg=None, td_cfg=None, fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None,
-                 fine_conv_cfg=None, fine_out_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
-                 **kwargs):
+    def __init__(self, seg_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_bnd, train_bnd_width,
+                 inf_bnd_width, mask_thr, metadata, seg_loss_cfg, seg_loss_weights, qry_cfg=None, key_2d_cfg=None,
+                 coa_key_cfg=None, pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None, coa_out_cfg=None, td_cfg=None,
+                 fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None, fine_conv_cfg=None, fine_out_cfg=None,
+                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
         Args:
             seg_cfg (Dict): Configuration dictionary specifying the segmentation module.
-            ref_cfg (Dict): Configuration dictionary specifying the refinement module.
             map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
             key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             refine_iters (int): Integer containing the number of refinement iterations.
-            refines_per_iter (int): Integer containing the number of refinements per refinement iteration.
+            refine_bnd (Tuple): Tuple of size [refine_iters] determining whether to refine only in boundary regions.
+            train_bnd_width (int): Integer containing the training boundary width size.
+            inf_bnd_width (int): Integer containing the inference boundary width size.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
             seg_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the segmentation loss weights.
-            ref_loss_cfg (Dict): Configuration dictionary specifying the refinement loss module.
-            ref_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the refinement loss weights.
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             key_2d_cfg (Dict): Configuration dictionary specifying the key 2D module (default=None).
             coa_key_cfg (Dict): Configuration dictionary specifying the coarse key module (default=None.)
@@ -674,7 +671,7 @@ class TopDownSegHead(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build various modules used to obtain segmentation and refinement logits from inputs
+        # Build various modules used to obtain segmentation logits from inputs
         self.qry = build_model(qry_cfg) if qry_cfg is not None else None
         self.key_2d = build_model(key_2d_cfg) if key_2d_cfg is not None else None
 
@@ -685,7 +682,6 @@ class TopDownSegHead(nn.Module):
         self.coa_out = build_model(coa_out_cfg) if coa_out_cfg is not None else None
 
         self.seg = build_model(seg_cfg)
-        self.ref = build_model(ref_cfg)
 
         self.td = build_model(td_cfg) if td_cfg is not None else None
         self.fine_key = build_model(fine_key_cfg) if fine_key_cfg is not None else None
@@ -697,23 +693,23 @@ class TopDownSegHead(nn.Module):
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
-        # Build segmentation and refinement loss modules
+        # Build segmentation loss module
         self.seg_loss = build_model(seg_loss_cfg)
-        self.ref_loss = build_model(ref_loss_cfg)
 
         # Set remaining attributes
         self.map_offset = map_offset
         self.key_min_id = key_min_id
         self.key_max_id = key_max_id
         self.refine_iters = refine_iters
-        self.refines_per_iter = refines_per_iter
+        self.refine_bnd = refine_bnd
+        self.train_bnd_width = train_bnd_width
+        self.inf_bnd_width = inf_bnd_width
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
         self.mask_thr = mask_thr
         self.metadata = metadata
         self.seg_loss_weights = seg_loss_weights
-        self.ref_loss_weights = ref_loss_weights
 
     @torch.no_grad()
     def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -822,6 +818,7 @@ class TopDownSegHead(nn.Module):
 
             # Compute segmentation predictions for desired queries
             forward_pred_kwargs = {'cum_feats_batch': cum_feats_batch, 'seg_qry_ids': seg_qry_ids}
+            forward_pred_kwargs['bnd_width'] = self.inf_bnd_width
             self.forward_pred(qry_feats, storage_dict, **forward_pred_kwargs, **kwargs)
 
             # Retrieve various items related to segmentation predictions from storage dictionary
@@ -1011,7 +1008,7 @@ class TopDownSegHead(nn.Module):
         return images_dict
 
     def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, seg_qry_ids=None,
-                     **kwargs):
+                     bnd_width=1, **kwargs):
         """
         Forward prediction method of the TopDownSegHead module.
 
@@ -1027,6 +1024,7 @@ class TopDownSegHead(nn.Module):
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             seg_qry_ids (Dict): Indices determining for which queries to compute segmetations (default=None).
+            bnd_width (int): Integer containing the boundary width used during refinement (default=1).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -1035,9 +1033,8 @@ class TopDownSegHead(nn.Module):
                 - seg_xy (FloatTensor): normalized key locations of predictions of shape [num_preds, 2];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
                 - map_ids (LongTensor): map indices of predictions of shape [num_preds];
-                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
+                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id+1];
                 - seg_logits (FloatTensor): segmentation logits of shape [num_preds];
-                - ref_logits (FloatTensor): refinement logits of shape [num_preds];
                 - num_stage_preds (List): list with number of predictions per stage of size [self.refine_iters+1];
                 - refined_mask (BoolTensor): mask indicating refined predictions of shape [num_preds].
 
@@ -1278,10 +1275,13 @@ class TopDownSegHead(nn.Module):
         qry_ids = qry_ids[core_mask]
         seg_xy = seg_xy[core_mask]
 
-        # Get segmentation and refinement logits
+        # Get segmentation logits
         core_seg_feats = seg_feats[core_mask]
         seg_logits = self.seg(core_seg_feats)
-        ref_logits = self.ref(core_seg_feats)
+
+        # Get prediction mask
+        pred_mask = core_mask.clone()
+        pred_mask[core_mask] = seg_logits > 0
 
         # Store desired items in lists
         qry_ids_list = [qry_ids]
@@ -1289,9 +1289,19 @@ class TopDownSegHead(nn.Module):
         batch_ids_list = [batch_ids]
         map_ids_list = [map_ids]
         seg_logits_list = [seg_logits]
-        ref_logits_list = [ref_logits]
         num_stage_preds = [len(qry_ids)]
         refined_mask_list = []
+
+        # Get ids and base_offs tensors used during update of adjacency indices
+        ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
+                            [1, 1, 2, 4, 4, 5, 4, 4, 5],
+                            [3, 4, 4, 3, 4, 4, 6, 7, 7],
+                            [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
+
+        base_offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
+                                  [1, 0, 1, 3, 2, 3, 1, 0, 1],
+                                  [2, 3, 2, 0, 1, 0, 2, 3, 2],
+                                  [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
 
         # Get grid offsets
         grid_offsets = torch.arange(2, device=device) - 0.5
@@ -1326,12 +1336,16 @@ class TopDownSegHead(nn.Module):
             # Get refine mask
             core_refine_mask = map_ids > 0
 
-            if core_refine_mask.sum().item() > self.refines_per_iter:
-                refine_ids = torch.topk(ref_logits[core_refine_mask], self.refines_per_iter, sorted=False)[1]
-                refine_ids = core_refine_mask.nonzero()[refine_ids, 0]
+            if self.refine_bnd[i]:
+                core_pred_bnd = pred_mask[adj_ids].sum(dim=1)
+                core_pred_bnd = (core_pred_bnd > 0) & (core_pred_bnd < 9)
 
-                core_refine_mask = torch.zeros_like(core_refine_mask)
-                core_refine_mask[refine_ids] = True
+                for j in range(bnd_width-1):
+                    pred_bnd = core_mask.clone()
+                    pred_bnd[core_mask] = core_pred_bnd
+                    core_pred_bnd = pred_bnd[adj_ids].any(dim=1)
+
+                core_refine_mask = core_refine_mask & core_pred_bnd
 
             refine_mask = core_mask.clone()
             refine_mask[core_mask] = core_refine_mask
@@ -1339,23 +1353,13 @@ class TopDownSegHead(nn.Module):
 
             # Update adjacency indices
             adj_ids = adj_ids[core_refine_mask]
-
-            ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
-                                [1, 1, 2, 4, 4, 5, 4, 4, 5],
-                                [3, 4, 4, 3, 4, 4, 6, 7, 7],
-                                [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
-
             adj_ids = adj_ids[:, ids]
+
             shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
             shifts = shifts[adj_ids]
 
-            offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
-                                 [1, 0, 1, 3, 2, 3, 1, 0, 1],
-                                 [2, 3, 2, 0, 1, 0, 2, 3, 2],
-                                 [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
-
             adj_refine_mask = refine_mask[adj_ids]
-            offs = offs[None, :, :].expand_as(adj_refine_mask).clone()
+            offs = base_offs[None, :, :].expand_as(adj_refine_mask).clone()
             offs[~adj_refine_mask] = 0
 
             adj_ids = adj_ids + shifts - offs
@@ -1421,19 +1425,22 @@ class TopDownSegHead(nn.Module):
 
             seg_feats = self.fine_out(seg_feats) if self.fine_out is not None else seg_feats
 
-            # Get segmentation and refinement logits
+            # Get segmentation logits
             core_seg_feats = seg_feats[core_mask]
             seg_logits = self.seg(core_seg_feats)
-            ref_logits = self.ref(core_seg_feats)
-
             seg_logits_list.append(seg_logits)
-            ref_logits_list.append(ref_logits)
+
+            # Update prediction mask if needed
+            if i < self.refine_iters-1:
+                pred_mask = pred_mask.repeat_interleave(repeats, dim=0)
+                pred_mask = pred_mask[used_ids]
+                pred_mask[core_mask] = seg_logits > 0
 
             # Save number of predictions for this refinement stage
             num_stage_preds.append(len(qry_ids))
 
         # Get final refine mask
-        core_refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
+        core_refine_mask = torch.zeros_like(seg_logits, dtype=torch.bool)
         refined_mask_list.append(core_refine_mask)
 
         # Concatenate entries from different refinement iterations
@@ -1442,7 +1449,6 @@ class TopDownSegHead(nn.Module):
         batch_ids = torch.cat(batch_ids_list, dim=0)
         map_ids = torch.cat(map_ids_list, dim=0)
         seg_logits = torch.cat(seg_logits_list, dim=0)
-        ref_logits = torch.cat(ref_logits_list, dim=0)
         refined_mask = torch.cat(refined_mask_list, dim=0)
 
         # Store desired items in storage dictionary
@@ -1452,7 +1458,6 @@ class TopDownSegHead(nn.Module):
         storage_dict['map_ids'] = map_ids
         storage_dict['map_shapes'] = map_shapes
         storage_dict['seg_logits'] = seg_logits
-        storage_dict['ref_logits'] = ref_logits
         storage_dict['num_stage_preds'] = num_stage_preds
         storage_dict['refined_mask'] = refined_mask
 
@@ -1479,16 +1484,12 @@ class TopDownSegHead(nn.Module):
 
         Returns:
             loss_dict (Dict): Loss dictionary containing following additional keys:
-                - seg_loss (FloatTensor): segmentation loss over all stages of shape [];
-                - ref_loss (FloatTensor): refinement loss over all stages of shape [].
+                - seg_loss (FloatTensor): segmentation loss over all stages of shape [].
 
             analysis_dict (Dict): Analysis dictionary containing following additional keys (if not None):
                 - seg_loss_{i} (FloatTensor): segmentation loss of stage {i} of shape [];
-                - ref_loss_{i} (FloatTensor): refinement loss of stage {i} of shape [];
                 - seg_acc_{i} (FloatTensor): segmentation accuracy of stage {i} of shape [];
-                - seg_acc (FloatTensor): segmentation accuracy over all stages of shape [];
-                - ref_acc_{i} (FloatTensor): refinement accuracy of stage {i} of shape [];
-                - ref_acc (FloatTensor): refinement accuracy over all stages of shape [].
+                - seg_acc (FloatTensor): segmentation accuracy over all stages of shape [].
 
         Raises:
             ValueError: Error when a single query is matched with multiple targets.
@@ -1521,20 +1522,8 @@ class TopDownSegHead(nn.Module):
             key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
             loss_dict[key_name] = seg_loss
 
-            # Get refinement loss
-            ref_loss = 0.0 * qry_feats.sum()
-
-            for i in range(self.refine_iters+1):
-                key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
-                analysis_dict[key_name] = ref_loss.detach()
-
-            key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
-            loss_dict[key_name] = ref_loss
-
-            # Get segmentation and refinement accuracies
+            # Get segmentation accuracies
             with torch.no_grad():
-
-                # Get segmentation accuracies
                 seg_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
                 seg_acc = torch.tensor(seg_acc, dtype=seg_loss.dtype, device=device)
 
@@ -1544,17 +1533,6 @@ class TopDownSegHead(nn.Module):
 
                 key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
                 analysis_dict[key_name] = 100 * seg_acc
-
-                # Get refinement accuracies
-                ref_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
-                ref_acc = torch.tensor(ref_acc, dtype=ref_loss.dtype, device=device)
-
-                for i in range(self.refine_iters+1):
-                    key_name = f'ref_acc_{id}_{i}' if id is not None else f'ref_acc_{i}'
-                    analysis_dict[key_name] = 100 * ref_acc
-
-                key_name = f'ref_acc_{id}' if id is not None else 'ref_acc'
-                analysis_dict[key_name] = 100 * ref_acc
 
             return loss_dict, analysis_dict
 
@@ -1566,7 +1544,8 @@ class TopDownSegHead(nn.Module):
             raise ValueError(error_msg)
 
         # Compute segmentation predictions for desired queries
-        self.forward_pred(qry_feats, storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
+        forward_pred_kwargs = {'seg_qry_ids': matched_qry_ids, 'bnd_width': self.train_bnd_width}
+        self.forward_pred(qry_feats, storage_dict, **forward_pred_kwargs, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
         qry_ids = storage_dict['qry_ids']
@@ -1574,7 +1553,6 @@ class TopDownSegHead(nn.Module):
         map_ids = storage_dict['map_ids']
         map_shapes = storage_dict['map_shapes']
         seg_logits = storage_dict['seg_logits']
-        ref_logits = storage_dict['ref_logits']
         num_stage_preds = storage_dict['num_stage_preds']
 
         # Update matched query indices
@@ -1592,7 +1570,7 @@ class TopDownSegHead(nn.Module):
         tgt_seg_vals_list = [(tgt_maps > 0).byte() + (tgt_maps >= 1.0).byte() for tgt_maps in tgt_maps_list]
         tgt_seg_vals = torch.cat([tgt_seg_vals_i.flatten(1) for tgt_seg_vals_i in tgt_seg_vals_list], dim=1)
 
-        # Get segmentation and refinement logits with corresponding targets
+        # Get segmentation logits with corresponding targets
         map_sizes = [torch.tensor([mW, mH], device=device) for mH, mW in map_shapes]
         map_sizes = torch.stack(map_sizes, dim=0)
 
@@ -1612,7 +1590,6 @@ class TopDownSegHead(nn.Module):
 
         seg_logits = seg_logits[seg_mask]
         seg_targets = targets[seg_mask].float() / 2
-        ref_targets = (~seg_mask).float()
 
         # Get segmentation loss
         seg_masks = seg_mask.split(num_stage_preds)
@@ -1625,9 +1602,14 @@ class TopDownSegHead(nn.Module):
         seg_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         for i, (seg_logits_i, seg_targets_i) in enumerate(seg_zip):
-            seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
-            seg_loss_i *= self.seg_loss_weights[i] * num_matches
-            seg_loss += seg_loss_i
+
+            if len(seg_logits_i) > 0:
+                seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
+                seg_loss_i *= self.seg_loss_weights[i] * num_matches
+                seg_loss += seg_loss_i
+
+            else:
+                seg_loss_i = torch.tensor(0.0, device=device)
 
             key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
             analysis_dict[key_name] = seg_loss_i.detach()
@@ -1635,28 +1617,8 @@ class TopDownSegHead(nn.Module):
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
 
-        # Get refinement loss
-        ref_logits_list = ref_logits.split(num_stage_preds)
-        ref_targets_list = ref_targets.split(num_stage_preds)
-
-        ref_zip = zip(ref_logits_list, ref_targets_list)
-        ref_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
-
-        for i, (ref_logits_i, ref_targets_i) in enumerate(ref_zip):
-            ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i)
-            ref_loss_i *= self.ref_loss_weights[i] * num_matches
-            ref_loss += ref_loss_i
-
-            key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
-            analysis_dict[key_name] = ref_loss_i.detach()
-
-        key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
-        loss_dict[key_name] = ref_loss
-
-        # Get segmentation and refinement accuracies
+        # Get segmentation accuracies
         with torch.no_grad():
-
-            # Get segmentation accuracies
             seg_preds = seg_logits > 0
             seg_targets = seg_targets.bool()
 
@@ -1664,7 +1626,11 @@ class TopDownSegHead(nn.Module):
             seg_targets_list = seg_targets.split(seg_num_stage_preds)
 
             for i, (seg_preds_i, seg_targets_i) in enumerate(zip(seg_preds_list, seg_targets_list)):
-                seg_acc_i = (seg_preds_i == seg_targets_i).sum() / len(seg_preds_i)
+
+                if len(seg_preds_i) > 0:
+                    seg_acc_i = (seg_preds_i == seg_targets_i).sum() / len(seg_preds_i)
+                else:
+                    seg_acc_i = torch.tensor(0.0, device=device)
 
                 key_name = f'seg_acc_{id}_{i}' if id is not None else f'seg_acc_{i}'
                 analysis_dict[key_name] = 100 * seg_acc_i
@@ -1672,36 +1638,6 @@ class TopDownSegHead(nn.Module):
             seg_acc = (seg_preds == seg_targets).sum() / len(seg_preds)
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc
-
-            # Get refinement accuracies
-            ref_preds = ref_logits > 0
-            ref_targets = ref_targets.bool()
-
-            ref_targets_list = ref_targets.split(num_stage_preds)
-            ref_num_stage_preds = [ref_targets_i.sum().item() for ref_targets_i in ref_targets_list]
-
-            ref_preds = ref_preds[ref_targets]
-            ref_targets = ref_targets[ref_targets]
-
-            ref_preds_list = ref_preds.split(ref_num_stage_preds)
-            ref_targets_list = ref_targets.split(ref_num_stage_preds)
-
-            for i, (ref_preds_i, ref_targets_i) in enumerate(zip(ref_preds_list, ref_targets_list)):
-                if len(ref_preds_i) > 0:
-                    ref_acc_i = (ref_preds_i == ref_targets_i).sum() / len(ref_preds_i)
-                else:
-                    ref_acc_i = torch.tensor(1.0, dtype=torch.float, device=device)
-
-                key_name = f'ref_acc_{id}_{i}' if id is not None else f'ref_acc_{i}'
-                analysis_dict[key_name] = 100 * ref_acc_i
-
-            if len(ref_preds) > 0:
-                ref_acc = (ref_preds == ref_targets).sum() / len(ref_preds)
-            else:
-                ref_acc = torch.tensor(1.0, dtype=torch.float, device=device)
-
-            key_name = f'ref_acc_{id}' if id is not None else 'ref_acc'
-            analysis_dict[key_name] = 100 * ref_acc
 
         return loss_dict, analysis_dict
 
