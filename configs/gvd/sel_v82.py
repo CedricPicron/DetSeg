@@ -380,6 +380,7 @@ model = dict(
             key_max_id=7,
             refine_iters=3,
             refine_bnd=(False, True, True),
+            with_tgt_bnd=False,
             train_bnd_width=2,
             inf_bnd_width=1,
             get_segs=True,

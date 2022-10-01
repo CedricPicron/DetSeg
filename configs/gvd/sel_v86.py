@@ -259,18 +259,6 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            coa_conv_cfg=[
-                dict(
-                    type='AdjacencyConv2d',
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=3,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
             coa_out_cfg=[
                 dict(
                     type='nn.Linear',
@@ -372,21 +360,6 @@ model = dict(
                     ),
                 ] for i in range(3)],
             ),
-            fine_conv_cfg=dict(
-                type='ModuleList',
-                module_cfgs=[[
-                    dict(
-                        type='AdjacencyConv2d',
-                        in_channels=2**(7-i),
-                        out_channels=2**(7-i),
-                        kernel_size=3,
-                    ),
-                    dict(
-                        type='nn.ReLU',
-                        inplace=True,
-                    ),
-                ] for i in range(3)],
-            ),
             fine_out_cfg=dict(
                 type='ModuleList',
                 module_cfgs=[[
@@ -407,7 +380,7 @@ model = dict(
             key_max_id=7,
             refine_iters=3,
             refine_bnd=(False, True, True),
-            with_tgt_bnd=False,
+            with_tgt_bnd=True,
             train_bnd_width=2,
             inf_bnd_width=1,
             get_segs=True,

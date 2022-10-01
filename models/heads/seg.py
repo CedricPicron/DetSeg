@@ -610,6 +610,7 @@ class TopDownSegHead(nn.Module):
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         refine_iters (int): Integer containing the number of refinement iterations.
         refine_bnd (Tuple): Tuple of size [refine_iters] determining whether to refine only in boundary regions.
+        with_tgt_bnd (bool): Boolean indicating whether to also refine in target boundary regions.
         train_bnd_width (int): Integer containing the training boundary width size.
         inf_bnd_width (int): Integer containing the inference boundary width size.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
@@ -627,11 +628,12 @@ class TopDownSegHead(nn.Module):
         seg_loss_weights (Tuple): Tuple of size [refine_iters+1] containing the segmentation loss weights.
     """
 
-    def __init__(self, seg_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_bnd, train_bnd_width,
-                 inf_bnd_width, mask_thr, metadata, seg_loss_cfg, seg_loss_weights, qry_cfg=None, key_2d_cfg=None,
-                 coa_key_cfg=None, pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None, coa_out_cfg=None, td_cfg=None,
-                 fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None, fine_conv_cfg=None, fine_out_cfg=None,
-                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+    def __init__(self, seg_cfg, map_offset, key_min_id, key_max_id, refine_iters, refine_bnd, with_tgt_bnd,
+                 train_bnd_width, inf_bnd_width, mask_thr, metadata, seg_loss_cfg, seg_loss_weights, qry_cfg=None,
+                 key_2d_cfg=None, coa_key_cfg=None, pos_enc_cfg=None, coa_in_cfg=None, coa_conv_cfg=None,
+                 coa_out_cfg=None, td_cfg=None, fine_key_cfg=None, fine_core_cfg=None, fine_in_cfg=None,
+                 fine_conv_cfg=None, fine_out_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
+                 **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -642,6 +644,7 @@ class TopDownSegHead(nn.Module):
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             refine_iters (int): Integer containing the number of refinement iterations.
             refine_bnd (Tuple): Tuple of size [refine_iters] determining whether to refine only in boundary regions.
+            with_tgt_bnd (bool): Boolean indicating whether to also refine in target boundary regions.
             train_bnd_width (int): Integer containing the training boundary width size.
             inf_bnd_width (int): Integer containing the inference boundary width size.
             mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
@@ -702,6 +705,7 @@ class TopDownSegHead(nn.Module):
         self.key_max_id = key_max_id
         self.refine_iters = refine_iters
         self.refine_bnd = refine_bnd
+        self.with_tgt_bnd = with_tgt_bnd
         self.train_bnd_width = train_bnd_width
         self.inf_bnd_width = inf_bnd_width
         self.get_segs = get_segs
@@ -1008,7 +1012,7 @@ class TopDownSegHead(nn.Module):
         return images_dict
 
     def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, seg_qry_ids=None,
-                     bnd_width=1, **kwargs):
+                     seg_tgt_ids=None, tgt_masks=None, bnd_width=1, **kwargs):
         """
         Forward prediction method of the TopDownSegHead module.
 
@@ -1023,7 +1027,9 @@ class TopDownSegHead(nn.Module):
 
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            seg_qry_ids (Dict): Indices determining for which queries to compute segmetations (default=None).
+            seg_qry_ids (LongTensor): Indices of queries to get segmentations of shape [num_seg_qrys] (default=None).
+            seg_tgt_ids (LongTensor): Indices of targets matched with queries of shape [num_seg_qrys] (default=None).
+            tgt_masks (BoolTensor): Target segmentation masks of shape [num_targets, iH, iW] (default=None).
             bnd_width (int): Integer containing the boundary width used during refinement (default=1).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
@@ -1283,6 +1289,19 @@ class TopDownSegHead(nn.Module):
         pred_mask = core_mask.clone()
         pred_mask[core_mask] = seg_logits > 0
 
+        # Get target mask if needed
+        with_tgt_bnd = self.with_tgt_bnd and seg_tgt_ids is not None
+
+        if with_tgt_bnd:
+            iH, iW = tgt_masks.size()[1:]
+
+            tgt_ids = seg_tgt_ids[qry_ids]
+            y_ids = (seg_xy[:, 1] * iH).long()
+            x_ids = (seg_xy[:, 0] * iW).long()
+
+            tgt_mask = core_mask.clone()
+            tgt_mask[core_mask] = tgt_masks[tgt_ids, y_ids, x_ids]
+
         # Store desired items in lists
         qry_ids_list = [qry_ids]
         seg_xy_list = [seg_xy]
@@ -1338,15 +1357,16 @@ class TopDownSegHead(nn.Module):
             core_refine_mask = map_ids > 0
 
             if self.refine_bnd[i]:
-                core_pred_bnd = pred_mask[adj_ids].sum(dim=1)
-                core_pred_bnd = (core_pred_bnd > 0) & (core_pred_bnd < 9)
+                base_mask = pred_mask | tgt_mask if with_tgt_bnd else pred_mask
+                core_bnd_mask = base_mask[adj_ids].sum(dim=1)
+                core_bnd_mask = (core_bnd_mask > 0) & (core_bnd_mask < 9)
 
                 for j in range(bnd_width-1):
-                    pred_bnd = core_mask.clone()
-                    pred_bnd[core_mask] = core_pred_bnd
-                    core_pred_bnd = pred_bnd[adj_ids].any(dim=1)
+                    bnd_mask = core_mask.clone()
+                    bnd_mask[core_mask] = core_bnd_mask
+                    core_bnd_mask = bnd_mask[adj_ids].any(dim=1)
 
-                core_refine_mask = core_refine_mask & core_pred_bnd
+                core_refine_mask = core_refine_mask & core_bnd_mask
 
             refine_mask = core_mask.clone()
             refine_mask[core_mask] = core_refine_mask
@@ -1436,6 +1456,16 @@ class TopDownSegHead(nn.Module):
                 pred_mask = pred_mask.repeat_interleave(repeats, dim=0)
                 pred_mask = pred_mask[used_ids]
                 pred_mask[core_mask] = seg_logits > 0
+
+            # Update target mask if needed
+            if with_tgt_bnd and i < self.refine_iters-1:
+                tgt_ids = seg_tgt_ids[qry_ids]
+                y_ids = (seg_xy[:, 1] * iH).long()
+                x_ids = (seg_xy[:, 0] * iW).long()
+
+                tgt_mask = tgt_mask.repeat_interleave(repeats, dim=0)
+                tgt_mask = tgt_mask[used_ids]
+                tgt_mask[core_mask] = tgt_masks[tgt_ids, y_ids, x_ids]
 
             # Save number of predictions for this refinement stage
             num_stage_preds.append(len(qry_ids))
@@ -1545,7 +1575,9 @@ class TopDownSegHead(nn.Module):
             raise ValueError(error_msg)
 
         # Compute segmentation predictions for desired queries
-        forward_pred_kwargs = {'seg_qry_ids': matched_qry_ids, 'bnd_width': self.train_bnd_width}
+        tgt_masks = tgt_dict['masks']
+        forward_pred_kwargs = {'seg_qry_ids': matched_qry_ids, 'seg_tgt_ids': matched_tgt_ids, 'tgt_masks': tgt_masks}
+        forward_pred_kwargs['bnd_width'] = self.train_bnd_width
         self.forward_pred(qry_feats, storage_dict, **forward_pred_kwargs, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
@@ -1560,7 +1592,6 @@ class TopDownSegHead(nn.Module):
         matched_qry_ids = torch.arange(num_matches, device=device)
 
         # Get target segmentation values
-        tgt_masks = tgt_dict['masks']
         tgt_maps = tgt_masks[:, None, :, :].float()
         tgt_maps_list = [tgt_maps]
 
