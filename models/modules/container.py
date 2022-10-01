@@ -10,6 +10,29 @@ from models.build import build_model, MODELS
 
 
 @MODELS.register_module()
+class ModuleList(nn.ModuleList):
+    """
+    Class implementing the ModuleList module.
+
+    Alters the nn.ModuleList __init__ method by building sub-modules from their provided configuration dictionaries.
+    """
+
+    def __init__(self, module_cfgs=None):
+        """
+        Initializes the ModuleList module.
+
+        Args:
+            module_cfgs (List): List [num_modules] containing the configuration dictionaries for each sub-module.
+        """
+
+        # Build sub-modules
+        modules = [build_model(module_cfg) for module_cfg in module_cfgs] if module_cfgs is not None else None
+
+        # Continue with __init__ method from nn.ModuleList
+        super().__init__(modules=modules)
+
+
+@MODELS.register_module()
 class ModuleSelector(nn.Module):
     """
     Class implementing the ModuleSelector module.

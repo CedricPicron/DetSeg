@@ -1277,7 +1277,7 @@ class TopDownSegHead(nn.Module):
 
         # Get segmentation logits
         core_seg_feats = seg_feats[core_mask]
-        seg_logits = self.seg(core_seg_feats)
+        seg_logits = self.seg[0](core_seg_feats)
 
         # Get prediction mask
         pred_mask = core_mask.clone()
@@ -1308,9 +1308,10 @@ class TopDownSegHead(nn.Module):
         grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
         grid_offsets = torch.stack(grid_offsets, dim=2).flatten(0, 1)
 
-        # Get concatenated key features
+        # Get concatenated key features and key feature size
         cat_key_feats = [key_feat_map.flatten(2).permute(0, 2, 1) for key_feat_map in key_feat_maps]
         cat_key_feats = torch.cat(cat_key_feats, dim=1)
+        key_feat_size = cat_key_feats.size(dim=2)
 
         # Get map shapes, sizes and offsets
         base_map_size = images.size(mode='with_padding')
@@ -1406,28 +1407,28 @@ class TopDownSegHead(nn.Module):
             feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
             core_feats = seg_feats[refine_mask]
-            core_feats = self.td(core_feats) if self.td is not None else core_feats.repeat_interleave(4, dim=0)
+            core_feats = self.td[i](core_feats) if self.td is not None else core_feats.repeat_interleave(4, dim=0)
 
             select_mask = map_ids >= self.key_min_id
-            key_feats = torch.zeros_like(core_feats)
+            key_feats = core_feats.new_zeros([len(core_feats), key_feat_size])
             key_feats[select_mask] = cat_key_feats[batch_ids[select_mask], feat_ids[select_mask], :]
-            key_feats = self.fine_key(key_feats) if self.fine_key is not None else key_feats
+            key_feats = self.fine_key[i](key_feats) if self.fine_key is not None else key_feats
 
             core_feats = torch.cat([core_feats, key_feats], dim=1)
-            core_feats = self.fine_core(core_feats) if self.fine_core is not None else core_feats
+            core_feats = self.fine_core[i](core_feats) if self.fine_core is not None else core_feats
 
-            seg_feats = self.fine_in(seg_feats) if self.fine_in is not None else seg_feats
+            seg_feats = self.fine_in[i](seg_feats) if self.fine_in is not None else seg_feats
             seg_feats = seg_feats.repeat_interleave(repeats, dim=0)[used_ids]
             seg_feats[core_mask] += core_feats
 
             if self.fine_conv is not None:
-                seg_feats = self.fine_conv(seg_feats, conv_mask=core_mask, adj_ids=adj_ids)
+                seg_feats = self.fine_conv[i](seg_feats, conv_mask=core_mask, adj_ids=adj_ids)
 
-            seg_feats = self.fine_out(seg_feats) if self.fine_out is not None else seg_feats
+            seg_feats = self.fine_out[i](seg_feats) if self.fine_out is not None else seg_feats
 
             # Get segmentation logits
             core_seg_feats = seg_feats[core_mask]
-            seg_logits = self.seg(core_seg_feats)
+            seg_logits = self.seg[i+1](core_seg_feats)
             seg_logits_list.append(seg_logits)
 
             # Update prediction mask if needed
