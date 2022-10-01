@@ -383,7 +383,6 @@ model = dict(
             key_min_id=3,
             key_max_id=7,
             refine_iters=3,
-            refine_grid_size=2,
             refines_per_iter=10000,
             get_segs=True,
             dup_attrs=dict(
