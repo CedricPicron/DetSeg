@@ -1035,7 +1035,7 @@ class TopDownSegHead(nn.Module):
                 - seg_xy (FloatTensor): normalized key locations of predictions of shape [num_preds, 2];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
                 - map_ids (LongTensor): map indices of predictions of shape [num_preds];
-                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id + 1];
+                - map_shapes (List): list with map shapes in (height, width) format of size [self.key_max_id+1];
                 - seg_logits (FloatTensor): segmentation logits of shape [num_preds];
                 - ref_logits (FloatTensor): refinement logits of shape [num_preds];
                 - num_stage_preds (List): list with number of predictions per stage of size [self.refine_iters+1];
@@ -1293,6 +1293,17 @@ class TopDownSegHead(nn.Module):
         num_stage_preds = [len(qry_ids)]
         refined_mask_list = []
 
+        # Get ids and base_offs tensors used during update of adjacency indices
+        ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
+                            [1, 1, 2, 4, 4, 5, 4, 4, 5],
+                            [3, 4, 4, 3, 4, 4, 6, 7, 7],
+                            [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
+
+        base_offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
+                                  [1, 0, 1, 3, 2, 3, 1, 0, 1],
+                                  [2, 3, 2, 0, 1, 0, 2, 3, 2],
+                                  [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
+
         # Get grid offsets
         grid_offsets = torch.arange(2, device=device) - 0.5
         grid_offsets = torch.meshgrid(grid_offsets, grid_offsets, indexing='xy')
@@ -1339,23 +1350,13 @@ class TopDownSegHead(nn.Module):
 
             # Update adjacency indices
             adj_ids = adj_ids[core_refine_mask]
-
-            ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
-                                [1, 1, 2, 4, 4, 5, 4, 4, 5],
-                                [3, 4, 4, 3, 4, 4, 6, 7, 7],
-                                [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
-
             adj_ids = adj_ids[:, ids]
+
             shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
             shifts = shifts[adj_ids]
 
-            offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
-                                 [1, 0, 1, 3, 2, 3, 1, 0, 1],
-                                 [2, 3, 2, 0, 1, 0, 2, 3, 2],
-                                 [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
-
             adj_refine_mask = refine_mask[adj_ids]
-            offs = offs[None, :, :].expand_as(adj_refine_mask).clone()
+            offs = base_offs[None, :, :].expand_as(adj_refine_mask).clone()
             offs[~adj_refine_mask] = 0
 
             adj_ids = adj_ids + shifts - offs
