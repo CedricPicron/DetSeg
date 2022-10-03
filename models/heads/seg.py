@@ -1626,9 +1626,14 @@ class TopDownSegHead(nn.Module):
         seg_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         for i, (seg_logits_i, seg_targets_i) in enumerate(seg_zip):
-            seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
-            seg_loss_i *= self.seg_loss_weights[i] * num_matches
-            seg_loss += seg_loss_i
+
+            if len(seg_logits_i) > 0:
+                seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
+                seg_loss_i *= self.seg_loss_weights[i] * num_matches
+                seg_loss += seg_loss_i
+
+            else:
+                seg_loss_i = torch.tensor(0.0, device=device)
 
             key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
             analysis_dict[key_name] = seg_loss_i.detach()
@@ -1644,9 +1649,14 @@ class TopDownSegHead(nn.Module):
         ref_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         for i, (ref_logits_i, ref_targets_i) in enumerate(ref_zip):
-            ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i)
-            ref_loss_i *= self.ref_loss_weights[i] * num_matches
-            ref_loss += ref_loss_i
+
+            if len(ref_logits_i) > 0:
+                ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i)
+                ref_loss_i *= self.ref_loss_weights[i] * num_matches
+                ref_loss += ref_loss_i
+
+            else:
+                ref_loss_i = torch.tensor(0.0, device=device)
 
             key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
             analysis_dict[key_name] = ref_loss_i.detach()
@@ -1665,12 +1675,19 @@ class TopDownSegHead(nn.Module):
             seg_targets_list = seg_targets.split(seg_num_stage_preds)
 
             for i, (seg_preds_i, seg_targets_i) in enumerate(zip(seg_preds_list, seg_targets_list)):
-                seg_acc_i = (seg_preds_i == seg_targets_i).sum() / len(seg_preds_i)
+                if len(seg_preds_i) > 0:
+                    seg_acc_i = (seg_preds_i == seg_targets_i).sum() / len(seg_preds_i)
+                else:
+                    seg_acc_i = torch.tensor(1.0, dtype=torch.float, device=device)
 
                 key_name = f'seg_acc_{id}_{i}' if id is not None else f'seg_acc_{i}'
                 analysis_dict[key_name] = 100 * seg_acc_i
 
-            seg_acc = (seg_preds == seg_targets).sum() / len(seg_preds)
+            if len(seg_preds) > 0:
+                seg_acc = (seg_preds == seg_targets).sum() / len(seg_preds)
+            else:
+                seg_acc = torch.tensor(1.0, dtype=torch.float, device=device)
+
             key_name = f'seg_acc_{id}' if id is not None else 'seg_acc'
             analysis_dict[key_name] = 100 * seg_acc
 
