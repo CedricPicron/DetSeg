@@ -1638,6 +1638,12 @@ class TopDownSegHead(nn.Module):
             key_name = f'seg_loss_{id}_{i}' if id is not None else f'seg_loss_{i}'
             analysis_dict[key_name] = seg_loss_i.detach()
 
+            if seg_loss_i.isnan().item():
+                print(len(seg_logits_i), seg_logits_i.shape, seg_targets_i.shape)
+                print(seg_logits_i.isnan().any().item(), seg_targets_i.isnan().any().item())
+                print(seg_logits_i.min().item(), seg_logits_i.max().item())
+                print(seg_targets_i.min().item(), seg_targets_i.max().item())
+
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
 
@@ -1660,6 +1666,12 @@ class TopDownSegHead(nn.Module):
 
             key_name = f'ref_loss_{id}_{i}' if id is not None else f'ref_loss_{i}'
             analysis_dict[key_name] = ref_loss_i.detach()
+
+            if ref_loss_i.isnan().item():
+                print(len(ref_logits_i), ref_logits_i.shape, ref_targets_i.shape)
+                print(ref_logits_i.isnan().any().item(), ref_targets_i.isnan().any().item())
+                print(ref_logits_i.min().item(), ref_logits_i.max().item())
+                print(ref_targets_i.min().item(), ref_targets_i.max().item())
 
         key_name = f'ref_loss_{id}' if id is not None else 'ref_loss'
         loss_dict[key_name] = ref_loss
