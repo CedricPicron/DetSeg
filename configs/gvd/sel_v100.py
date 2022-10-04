@@ -403,7 +403,7 @@ model = dict(
                 ] for i in range(3)],
             ),
             map_offset=1,
-            key_min_id=3,
+            key_min_id=2,
             key_max_id=7,
             refine_iters=3,
             refine_bnd=(False, True, True),
