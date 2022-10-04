@@ -404,7 +404,7 @@ model = dict(
                 ),
             ],
             map_offset=1,
-            key_min_id=3,
+            key_min_id=2,
             key_max_id=7,
             refine_iters=3,
             refines_per_iter=10000,
