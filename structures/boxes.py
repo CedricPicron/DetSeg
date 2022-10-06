@@ -164,7 +164,7 @@ class Boxes(object):
 
         return cat_boxes
 
-    def clip(self, clip_region):
+    def clip(self, clip_region, eps=0.0):
         """
         Clips bounding boxes to be within the given clip region.
 
@@ -172,6 +172,8 @@ class Boxes(object):
             clip_region (Tuple): Following two input formats are supported:
                 1) tuple of size [2] containing the (right, bottom) clip boundaries;
                 2) tuple of size [4] containing the (left, top, right, bottom) clip boundaries.
+
+            eps (float): Value altering some boundaries to avoid ill-defined boxes after clipping (default=0.0).
 
         Returns:
             self (Boxes): Updated Boxes structure with clipped bounding boxes.
@@ -188,10 +190,10 @@ class Boxes(object):
             self.to_format('xyxy')
 
         # Clip boxes according to its boundaries
-        self.boxes[:, 0].clamp_(min=clip_region[0], max=clip_region[2])
-        self.boxes[:, 1].clamp_(min=clip_region[1], max=clip_region[3])
-        self.boxes[:, 2].clamp_(min=clip_region[0], max=clip_region[2])
-        self.boxes[:, 3].clamp_(min=clip_region[1], max=clip_region[3])
+        self.boxes[:, 0].clamp_(min=clip_region[0], max=clip_region[2]-eps)
+        self.boxes[:, 1].clamp_(min=clip_region[1], max=clip_region[3]-eps)
+        self.boxes[:, 2].clamp_(min=clip_region[0]+eps, max=clip_region[2])
+        self.boxes[:, 3].clamp_(min=clip_region[1]+eps, max=clip_region[3])
 
         # Convert boxes back if needed
         if in_format != 'xyxy':
