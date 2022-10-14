@@ -219,7 +219,7 @@ model = dict(
         ),
         dict(
             type='TopDownSegHead',
-            qry_cfg=[[
+            qry_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
@@ -230,8 +230,8 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
-            ] for _ in range(2)],
-            coa_key_cfg=[[
+            ],
+            key_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
@@ -242,12 +242,12 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
-            ] for _ in range(2)],
+            ],
             pos_enc_cfg=dict(
                 type='SinePosEncoder2d',
                 feat_size=256,
             ),
-            coa_in_cfg=[
+            fuse_qry_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=512,
@@ -258,31 +258,55 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
-            ],
-            coa_conv_cfg=[
-                dict(
-                    type='AdjacencyConv2d',
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=3,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
-            coa_out_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
                     out_features=256,
                     bias=True,
                 ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
             ],
+            proc_cfg=[[
+                dict(
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='nn.LayerNorm',
+                            normalized_shape=256,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='AdjacencyConv2d',
+                            in_channels=256,
+                            out_channels=256,
+                            kernel_size=3,
+                        ),
+                    ],
+                ),
+                dict(
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='nn.Linear',
+                            in_features=256,
+                            out_features=1024,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=1024,
+                            out_features=256,
+                            bias=True,
+                        ),
+                    ],
+                ),
+            ] for _ in range(1)],
             seg_cfg=[
                 dict(
                     type='nn.Linear',
@@ -327,7 +351,7 @@ model = dict(
                     out_shape=(-1,),
                 ),
             ],
-            td_cfg=[
+            fuse_td_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
@@ -342,20 +366,14 @@ model = dict(
                     type='View',
                     out_shape=(-1, 256),
                 ),
-            ],
-            fine_key_cfg=[[
                 dict(
                     type='nn.Linear',
                     in_features=256,
                     out_features=256,
                     bias=True,
                 ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ] for _ in range(2)],
-            fine_core_cfg=[
+            ],
+            fuse_key_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=512,
@@ -366,47 +384,17 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
-            ],
-            fine_in_cfg=[
                 dict(
                     type='nn.Linear',
                     in_features=256,
                     out_features=256,
                     bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
-            fine_conv_cfg=[
-                dict(
-                    type='AdjacencyConv2d',
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=3,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
-            fine_out_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
                 ),
             ],
             map_offset=1,
             key_min_id=2,
             key_max_id=7,
-            refine_iters=3,
+            seg_iters=4,
             refines_per_iter=10000,
             get_segs=True,
             dup_attrs=dict(
