@@ -1314,7 +1314,7 @@ class TopDownSegHead(nn.Module):
         for i in range(self.seg_iters):
 
             # Process segmentation features
-            seg_feats = self.proc(seg_feats, conv_mask=core_mask, adj_ids=adj_ids)
+            seg_feats = self.proc(seg_feats, mask=core_mask, adj_ids=adj_ids)
 
             # Get segmentation and refinement logits
             core_seg_feats = seg_feats[core_mask]

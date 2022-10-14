@@ -291,7 +291,7 @@ model = dict(
                     type='SkipConnection',
                     res_cfg=[
                         dict(
-                            type='nn.Linear',
+                            type='MaskedLinear',
                             in_features=256,
                             out_features=1024,
                             bias=True,
@@ -301,7 +301,7 @@ model = dict(
                             inplace=True,
                         ),
                         dict(
-                            type='nn.Linear',
+                            type='MaskedLinear',
                             in_features=1024,
                             out_features=256,
                             bias=True,

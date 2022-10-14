@@ -19,7 +19,6 @@ class AdjacencyConv2d(nn.Module):
     Attributes:
         conv_weight (Parameter): Parameter with convolution weights of shape [out_channels, kH * kW * in_channels].
         conv_bias (Parameter): Parameter with convolution biases of shape [out_channels].
-        lin (nn.Linear): Linear module applied on auxiliary features only.
     """
 
     def __init__(self, in_channels, out_channels, kernel_size):
@@ -42,16 +41,13 @@ class AdjacencyConv2d(nn.Module):
         self.register_parameter('conv_weight', Parameter(conv_weight))
         self.register_parameter('conv_bias', Parameter(conv_module.bias))
 
-        # Initialize linear module
-        self.lin = nn.Linear(in_channels, out_channels, bias=True)
-
-    def forward(self, in_feats, conv_mask, adj_ids, **kwargs):
+    def forward(self, in_feats, mask, adj_ids, **kwargs):
         """
         Forward method of the AdjacencyConv2d module.
 
         Args:
             in_feats (FloatTensor): Input features of shape [num_feats, in_channels].
-            conv_mask (BoolTensor): Mask indicating for which features to apply convolution of shape [num_feats].
+            mask (BoolTensor): Mask indicating for which features to apply convolution of shape [num_feats].
             adj_ids (LongTensor): Adjacency indices of convolution features of shape [num_conv_feats, kH * kW].
             kwargs (Dict): Dictionary of unused keyword arguments.
 
@@ -59,17 +55,13 @@ class AdjacencyConv2d(nn.Module):
             out_feats (FloatTensor): Output features of shape [num_feats, out_channels].
         """
 
-        # Initialize empty tensor for output features
+        # Initialize tensor with zeros for output features
         num_feats = len(in_feats)
         out_channels = len(self.conv_bias)
-        out_feats = in_feats.new_empty([num_feats, out_channels])
+        out_feats = in_feats.new_zeros([num_feats, out_channels])
 
         # Apply convolution on convolution features
-        out_feats[conv_mask] = adj_conv2d(in_feats, self.conv_weight, self.conv_bias, adj_ids)
-
-        # Apply linear module on auxiliary features
-        aux_mask = ~conv_mask
-        out_feats[aux_mask] = self.lin(in_feats[aux_mask])
+        out_feats[mask] = adj_conv2d(in_feats, self.conv_weight, self.conv_bias, adj_ids)
 
         return out_feats
 
