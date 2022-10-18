@@ -271,8 +271,8 @@ model = dict(
                     res_cfg=[
                         dict(
                             type='nn.Linear',
-                            in_features=256,
-                            out_features=256,
+                            in_features=2**(8-i),
+                            out_features=2**(8-i),
                             bias=True,
                         ),
                         dict(
@@ -281,8 +281,8 @@ model = dict(
                         ),
                         dict(
                             type='AdjacencyConv2d',
-                            in_channels=256,
-                            out_channels=256,
+                            in_channels=2**(8-i),
+                            out_channels=2**(8-i),
                             kernel_size=3,
                         ),
                     ],
@@ -292,8 +292,8 @@ model = dict(
                     res_cfg=[
                         dict(
                             type='MaskedLinear',
-                            in_features=256,
-                            out_features=1024,
+                            in_features=2**(8-i),
+                            out_features=2**(10-i),
                             bias=True,
                         ),
                         dict(
@@ -302,18 +302,18 @@ model = dict(
                         ),
                         dict(
                             type='MaskedLinear',
-                            in_features=1024,
-                            out_features=256,
+                            in_features=2**(10-i),
+                            out_features=2**(8-i),
                             bias=True,
                         ),
                     ],
                 ),
-            ] for _ in range(1)],
-            seg_cfg=[
+            ] for i in range(4)],
+            seg_cfg=[[
                 dict(
                     type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
                     bias=True,
                 ),
                 dict(
@@ -322,7 +322,7 @@ model = dict(
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=256,
+                    in_features=2**(8-i),
                     out_features=1,
                     bias=True,
                 ),
@@ -330,12 +330,12 @@ model = dict(
                     type='View',
                     out_shape=(-1,),
                 ),
-            ],
-            ref_cfg=[
+            ] for i in range(4)],
+            ref_cfg=[[
                 dict(
                     type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
                     bias=True,
                 ),
                 dict(
@@ -344,7 +344,7 @@ model = dict(
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=256,
+                    in_features=2**(8-i),
                     out_features=1,
                     bias=True,
                 ),
@@ -352,12 +352,12 @@ model = dict(
                     type='View',
                     out_shape=(-1,),
                 ),
-            ],
-            fuse_td_cfg=[
+            ] for i in range(4)],
+            fuse_td_cfg=[[
                 dict(
                     type='nn.Linear',
-                    in_features=256,
-                    out_features=1024,
+                    in_features=2**(8-i),
+                    out_features=2**(10-i),
                     bias=True,
                 ),
                 dict(
@@ -366,20 +366,20 @@ model = dict(
                 ),
                 dict(
                     type='View',
-                    out_shape=(-1, 256),
+                    out_shape=(-1, 2**(8-i)),
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
                     bias=True,
                 ),
-            ],
-            fuse_key_cfg=[
+            ] for i in range(3)],
+            fuse_key_cfg=[[
                 dict(
                     type='nn.Linear',
-                    in_features=512,
-                    out_features=256,
+                    in_features=256 + 2**(8-i),
+                    out_features=2**(8-i),
                     bias=True,
                 ),
                 dict(
@@ -388,11 +388,23 @@ model = dict(
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
                     bias=True,
                 ),
-            ],
+            ] for i in range(3)],
+            trans_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(7-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ] for i in range(3)],
             map_offset=1,
             key_min_id=2,
             key_max_id=7,

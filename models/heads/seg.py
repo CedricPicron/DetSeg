@@ -594,12 +594,13 @@ class TopDownSegHead(nn.Module):
         pos_enc (nn.Module): Optional module adding position features to the initial segmentation features.
         fuse_qry (nn.Module): Optional module fusing the query features with the initial segmentation features.
 
-        proc (nn.Module): Module processing the segmentation features.
-        seg (nn.Module): Module computing the segmentation logits from the segmentation features.
-        ref (nn.Module): Module computing the refinement logits from the segmentation features.
+        proc (nn.ModuleList): List [seg_iters] of modules processing the segmentation features.
+        seg (nn.ModuleList): List [seg_iters] of modules computing segmentation logits from segmentation features.
+        ref (nn.ModuleList): List [seg_iters] of modules computing refinement logits from segmentation features.
 
-        fuse_td (nn.Module): Module fusing the top-down features with the segmentation features.
-        fuse_key (nn.Module): Module fusing the selected key features with the segmentation features.
+        fuse_td (nn.ModuleList): List [seg_iters-1] of modules fusing top-down features with segmentation features.
+        fuse_key (nn.ModuleList): List [seg_iters-1] of modules fusing key features with segmentation features.
+        trans (nn.ModuleList): List [seg_iters-1] of modules transitioning segmentation features to new feature space.
 
         map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
@@ -623,10 +624,10 @@ class TopDownSegHead(nn.Module):
         ref_loss_weights (Tuple): Tuple of size [seg_iters] containing the refinement loss weights.
     """
 
-    def __init__(self, proc_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, map_offset, key_min_id, key_max_id,
-                 seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg, seg_loss_weights, ref_loss_cfg,
-                 ref_loss_weights, qry_cfg=None, key_2d_cfg=None, key_cfg=None, pos_enc_cfg=None, fuse_qry_cfg=None,
-                 get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
+    def __init__(self, proc_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, map_offset, key_min_id,
+                 key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg, seg_loss_weights,
+                 ref_loss_cfg, ref_loss_weights, qry_cfg=None, key_2d_cfg=None, key_cfg=None, pos_enc_cfg=None,
+                 fuse_qry_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -636,6 +637,7 @@ class TopDownSegHead(nn.Module):
             ref_cfg (Dict): Configuration dictionary specifying the refinement module.
             fuse_td_cfg (Dict): Configuration dictionary specifying the fuse top-down module.
             fuse_key_cfg (Dict): Configuration dictionary specifying the fuse key module.
+            trans_cfg (Dict): Configuration dictionary specifying the transition module.
             map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
             key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
@@ -670,12 +672,13 @@ class TopDownSegHead(nn.Module):
         self.pos_enc = build_model(pos_enc_cfg) if pos_enc_cfg is not None else None
         self.fuse_qry = build_model(fuse_qry_cfg) if fuse_qry_cfg is not None else None
 
-        self.proc = build_model(proc_cfg)
-        self.seg = build_model(seg_cfg)
-        self.ref = build_model(ref_cfg)
+        self.proc = nn.ModuleList([build_model(cfg_i) for cfg_i in proc_cfg])
+        self.seg = nn.ModuleList([build_model(cfg_i) for cfg_i in seg_cfg])
+        self.ref = nn.ModuleList([build_model(cfg_i) for cfg_i in ref_cfg])
 
-        self.fuse_td = build_model(fuse_td_cfg)
-        self.fuse_key = build_model(fuse_key_cfg)
+        self.fuse_td = nn.ModuleList([build_model(cfg_i) for cfg_i in fuse_td_cfg])
+        self.fuse_key = nn.ModuleList([build_model(cfg_i) for cfg_i in fuse_key_cfg])
+        self.trans = nn.ModuleList([build_model(cfg_i) for cfg_i in trans_cfg])
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -1314,12 +1317,12 @@ class TopDownSegHead(nn.Module):
         for i in range(self.seg_iters):
 
             # Process segmentation features
-            seg_feats = self.proc(seg_feats, mask=core_mask, adj_ids=adj_ids)
+            seg_feats = self.proc[i](seg_feats, mask=core_mask, adj_ids=adj_ids)
 
             # Get segmentation and refinement logits
             core_seg_feats = seg_feats[core_mask]
-            seg_logits = self.seg(core_seg_feats)
-            ref_logits = self.ref(core_seg_feats)
+            seg_logits = self.seg[i](core_seg_feats)
+            ref_logits = self.ref[i](core_seg_feats)
 
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
@@ -1398,7 +1401,7 @@ class TopDownSegHead(nn.Module):
                 feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
                 feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
-                fuse_td_feats = self.fuse_td(seg_feats[refine_mask])
+                fuse_td_feats = self.fuse_td[i](seg_feats[refine_mask])
                 seg_feats = seg_feats.repeat_interleave(repeats, dim=0)[used_ids]
                 seg_feats[core_mask] += fuse_td_feats
 
@@ -1408,7 +1411,10 @@ class TopDownSegHead(nn.Module):
                 key_feats[select_mask] = cat_key_feats[batch_ids[select_mask], feat_ids[select_mask], :]
 
                 fuse_key_feats = torch.cat([seg_feats[core_mask], key_feats], dim=1)
-                seg_feats[core_mask] += self.fuse_key(fuse_key_feats)
+                seg_feats[core_mask] += self.fuse_key[i](fuse_key_feats)
+
+                # Transition segmentation features
+                seg_feats = self.trans[i](seg_feats)
 
         # Get final refine mask
         core_refine_mask = torch.zeros_like(ref_logits, dtype=torch.bool)
