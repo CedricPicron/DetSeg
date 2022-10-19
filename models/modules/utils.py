@@ -3,6 +3,7 @@ Collection of utility modules.
 """
 
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from models.build import build_model, MODELS
 
@@ -93,12 +94,74 @@ class BottomUp(nn.Module):
 
 
 @MODELS.register_module()
+class Checkpoint(nn.Module):
+    """
+    Class implementing the Checkpoint module.
+
+    The Checkpoint module does not store intermediate tensors during the training forward pass of the underlying
+    module. These intermediate tensors are recomputed during the backward pass to obtain the desired gradients. The
+    Checkpoint module hence trades memory for additional computation during the backward pass.
+
+    Attributes:
+        module (nn.Module): Underlying module to be checkpointed.
+        preserve_rng_state (bool): Boolean indicating whether to keep RNG state for backward pass.
+        used_kwargs (Tuple): Tuple with names of keyword arguments used by underlying module (or None).
+    """
+
+    def __init__(self, module_cfg, preserve_rng_state=True, used_kwargs=None):
+        """
+        Initializes the Checkpoint module.
+
+        Args:
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+            preserve_rng_state (bool): Boolean indicating whether to keep RNG state for backward pass (default=True).
+            used_kwargs (Tuple): Tuple with names of keyword arguments used by underlying module (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg)
+
+        # Set remaining attributes
+        self.preserve_rng_state = preserve_rng_state
+        self.used_kwargs = used_kwargs
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Checkpoint module.
+
+        Args:
+            in_tensor (FloatTensor): Input tensor of arbitrary shape.
+            kwargs (Dict): Dictionary of keyword arguments (possibly) passed to the underlying module.
+
+        Returns:
+            out_tensor (FloatTensor): Output tensor of arbitrary shape.
+        """
+
+        # Get function
+        if self.used_kwargs is not None:
+            func_kwargs = {k: kwargs.get(k, None) for k in self.used_kwargs}
+        else:
+            func_kwargs = kwargs
+
+        def function(in_tensor):
+            return self.module(in_tensor, **func_kwargs)
+
+        # Get output tensor
+        out_tensor = checkpoint(function, in_tensor, preserve_rng_state=self.preserve_rng_state)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class GetApplyInsert(nn.Module):
     """
     Class implementing the GetApplyInsert module.
 
-    The ApplyAll module applies its underlying module to the selected input from the given input list, and inserts the
-    resulting output back into the given input list.
+    The GetApplyInsert module applies its underlying module to the selected input from the given input list, and
+    inserts theresulting output back into the given input list.
 
     Attributes:
         get_id (int): Index selecting the input for the underlying module from a given input list.

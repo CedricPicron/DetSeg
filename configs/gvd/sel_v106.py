@@ -288,25 +288,30 @@ model = dict(
                     ],
                 ),
                 dict(
-                    type='SkipConnection',
-                    res_cfg=[
-                        dict(
-                            type='nn.Linear',
-                            in_features=256,
-                            out_features=1024,
-                            bias=True,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                        dict(
-                            type='nn.Linear',
-                            in_features=1024,
-                            out_features=256,
-                            bias=True,
-                        ),
-                    ],
+                    type='Checkpoint',
+                    preserve_rng_state=False,
+                    used_kwargs=(),
+                    module_cfg=dict(
+                        type='SkipConnection',
+                        res_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=1024,
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=1024,
+                                out_features=256,
+                                bias=True,
+                            ),
+                        ],
+                    ),
                 ),
             ] for _ in range(3)],
             seg_cfg=[
