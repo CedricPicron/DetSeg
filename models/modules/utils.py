@@ -2,6 +2,7 @@
 Collection of utility modules.
 """
 
+import torch
 from torch import nn
 import torch.nn.functional as F
 
@@ -149,6 +150,35 @@ class GetApplyInsert(nn.Module):
         in_list.insert(self.insert_id, output)
 
         return in_list
+
+
+@MODELS.register_module()
+class MaskedLayerNorm(nn.LayerNorm):
+    """
+    Class implementing the MaskedLayerNorm module.
+
+    This module applies the LayerNorm operation only on the input features selected by the mask.
+    """
+
+    def forward(self, in_feats, mask):
+        """
+        Forward method of the MaskedLayerNorm module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, feat_size].
+            mask (BoolTensor): Mask indicating for which features to apply LayerNorm operation of shape [num_feats].
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, feat_size].
+        """
+
+        # Initialize tensor with zeros for output features
+        out_feats = torch.zeros_like(in_feats)
+
+        # Apply LayerNorm operation on input features selected by mask
+        out_feats[mask] = F.layer_norm(in_feats[mask], self.normalized_shape, self.weight, self.bias, self.eps)
+
+        return out_feats
 
 
 @MODELS.register_module()
