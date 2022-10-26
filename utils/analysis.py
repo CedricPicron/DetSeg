@@ -2,27 +2,33 @@
 Collection of analysis utilities.
 """
 import json
-import logging
-import warnings
 
-from detectron2.utils.analysis import flop_count_operators, _IGNORED_OPS
 import torch
 from torch.utils.benchmark import Timer
 
-add_ignore_ops = (
-    'aten::clone',
-    'aten::cumsum',
-    'aten::diff',
-    'aten::movedim',
-    'aten::prod',
-    'aten::repeat_interleave',
-    'aten::rsqrt',
-    'aten::sub_',
-    'aten::sum',
-    'aten::topk',
-)
+from utils.flops import FlopCountAnalysis, msda_flop_jit, roi_align_mmcv_flop_jit
 
-_IGNORED_OPS.update(add_ignore_ops)
+EXTRA_OPS = {
+    'aten::abs': None,
+    'aten::affine_grid_generator': None,
+    'aten::avg_pool2d': None,
+    'aten::clone': None,
+    'aten::cumsum': None,
+    'aten::diff': None,
+    'aten::flip': None,
+    'aten::le': None,
+    'aten::movedim': None,
+    'aten::ne': None,
+    'aten::prod': None,
+    'aten::repeat_interleave': None,
+    'aten::rsqrt': None,
+    'aten::scatter_': None,
+    'aten::sub_': None,
+    'aten::sum': None,
+    'aten::topk': None,
+    'prim::PythonOp.MSDeformAttnFunction': msda_flop_jit,
+    'prim::PythonOp.RoIAlignFunction': roi_align_mmcv_flop_jit,
+}
 
 
 def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=100, output_dir=None):
@@ -31,7 +37,7 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
 
     Args:
         model (nn.Module): Module containing the model to be analyzed.
-        dataloader (torch.utils.data.Dataloader): Dataloader used to obtain the FLOPS and FPS metrics.
+        dataloader (torch.utils.data.Dataloader): Dataloader used to obtain the FLOPs and FPS metrics.
         optimizer (torch.optim.Optimizer): Optimizer used during training to update the model parameters.
         max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
         num_samples (int): Integer containing the nubmer of batches sampled from both dataloaders (default=100).
@@ -100,18 +106,12 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
     model.eval()
     torch.cuda.reset_peak_memory_stats(device)
 
-    # Initialize average inference FLOPS and FPS variables
+    # Initialize average inference FLOPs and FPS variables
     avg_inf_flops = 0.0
     avg_inf_fps = 0.0
 
     # Iterate over dataloader
     for i, (images, _) in enumerate(dataloader, 1):
-
-        # Disable some logging and ignore warnings from second iteration onwards
-        if i == 2:
-            jit_analysis_logger = logging.getLogger('fvcore.nn.jit_analysis')
-            jit_analysis_logger.disabled = True
-            warnings.filterwarnings('ignore')
 
         # Place images on correct device
         images = images.to(device)
@@ -119,8 +119,15 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
         # Get tuple of model inputs
         inputs = (images,)
 
-        # Get inference FLOPS
-        inf_flops = sum(flop_count_operators(model, inputs).values())
+        # Get inference FLOPs
+        inf_flops = FlopCountAnalysis(model, inputs)
+        inf_flops.set_op_handle(**EXTRA_OPS)
+
+        inf_flops.unsupported_ops_warnings(i == 1)
+        inf_flops.uncalled_modules_warnings(i == 1)
+        inf_flops.tracer_warnings('no_tracer_warning') if i == 1 else inf_flops.tracer_warnings('none')
+
+        inf_flops = inf_flops.total() / 10**9
         avg_inf_flops += inf_flops / num_samples
 
         # Get inference FPS
@@ -130,19 +137,14 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
         inf_fps = 1 / timer.timeit(number=1).median
         avg_inf_fps += inf_fps / num_samples
 
-        # Print batch inference FLOPS and FPS
+        # Print batch inference FLOPs and FPS
         print_str = f"Analysis inference [{i:{num_digits}d}/{num_samples}]:  "
-        print_str += f"inf_flops: {inf_flops:.1f} GFLOPS  "
+        print_str += f"inf_flops: {inf_flops:.1f} GFLOPs  "
         print_str += f"inf_fps: {inf_fps:.2f} FPS"
         print(print_str)
 
         # Break when 'num_samples' batches are processed
         if i == num_samples:
-
-            if i >= 2:
-                jit_analysis_logger.disabled = False
-                warnings.filterwarnings('default')
-
             break
 
     # Get maximum memory utilization during inference
@@ -158,7 +160,7 @@ def analyze_model(model, dataloader, optimizer, max_grad_norm=-1, num_samples=10
     print(f"Average training FPS: {avg_train_fps:.2f} FPS")
     print(f"Maximum training GPU memory: {max_train_mem:.2f} GB\n")
 
-    print(f"Average inference FLOPS: {avg_inf_flops:.1f} GFLOPS")
+    print(f"Average inference FLOPs: {avg_inf_flops:.1f} GFLOPs")
     print(f"Average inference FPS: {avg_inf_fps:.2f} FPS")
     print(f"Maximum inference GPU memory: {max_inf_mem:.2f} GB\n")
 
