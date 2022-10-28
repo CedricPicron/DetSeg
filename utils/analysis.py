@@ -6,26 +6,36 @@ import json
 import torch
 from torch.utils.benchmark import Timer
 
-from utils.flops import FlopCountAnalysis, msda_flop_jit, roi_align_mmcv_flop_jit
+from utils.flops import FlopCountAnalysis, adj_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
 
 EXTRA_OPS = {
     'aten::abs': None,
     'aten::affine_grid_generator': None,
+    'aten::argmin': None,
     'aten::avg_pool2d': None,
     'aten::clone': None,
+    'aten::cos': None,
     'aten::cumsum': None,
     'aten::diff': None,
+    'aten::expand_as': None,
     'aten::flip': None,
     'aten::le': None,
+    'aten::linspace': None,
+    'aten::lt': None,
     'aten::movedim': None,
     'aten::ne': None,
     'aten::prod': None,
+    'aten::pow': None,
     'aten::repeat_interleave': None,
     'aten::rsqrt': None,
     'aten::scatter_': None,
+    'aten::sin': None,
     'aten::sub_': None,
     'aten::sum': None,
     'aten::topk': None,
+    'aten::_unique2': None,
+    'aten::where': None,
+    'prim::PythonOp.AdjConv2d': adj_conv2d_flop_jit,
     'prim::PythonOp.MSDeformAttnFunction': msda_flop_jit,
     'prim::PythonOp.RoIAlignFunction': roi_align_mmcv_flop_jit,
 }
