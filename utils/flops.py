@@ -17,6 +17,28 @@ from fvcore.nn.jit_handles import get_shape
 from torch.jit import TracerWarning
 
 
+def adj_conv2d_flop_jit(inputs, outputs):
+    """
+    Function counting the number of 2D adjacency convolution FLOPs.
+
+    Args:
+        inputs (List): List with inputs of the 2D adjacency convolution operation.
+        outputs (List): List with outputs of the 2D adjacency convolution operation.
+
+    Returns:
+        flops (Counter): Counter dictionary containing the number of 2D adjacency convolution FLOPs.
+    """
+
+    # Get weight from list with inputs
+    weight = inputs[1]
+
+    # Get number of 2D adjacency convolution FLOPs
+    flops = get_shape(weight)[1] * prod(get_shape(outputs[0]))
+    flops = Counter({'adj_conv2d': flops})
+
+    return flops
+
+
 def msda_flop_jit(inputs, outputs):
     """
     Function counting the number of MSDA (MultiScaleDeformableAttention) FLOPs.
