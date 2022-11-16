@@ -28,7 +28,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
     The module is based on the StandardRoIHead module from MMDetection.
 
     Attributes:
-        mask_qry (nn.Module): Optional module computing the mask query features.
+        qry (nn.Module): Optional module updating the query features.
+        fuse_qry (nn.Module): Optional module fusing the query features with the initial RoI features.
+
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -41,14 +43,15 @@ class StandardRoIHead(MMDetStandardRoIHead):
         matcher (nn.Module): Optional matcher module matching predictions with targets.
     """
 
-    def __init__(self, metadata, mask_qry_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
-                 **kwargs):
+    def __init__(self, metadata, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None, max_segs=None,
+                 matcher_cfg=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
         Args:
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-            mask_qry_cfg (Dict): Configuration dictionary specifying the mask query module (default=None).
+            qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
+            fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
@@ -59,8 +62,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
         # Initialize module using parent __init__ method
         MMDetStandardRoIHead.__init__(self, **kwargs)
 
-        # Build mask query module if needed
-        self.mask_qry = build_model(mask_qry_cfg) if mask_qry_cfg is not None else None
+        # Build query and fuse query modules
+        self.qry = build_model(qry_cfg) if qry_cfg is not None else None
+        self.fuse_qry = build_model(fuse_qry_cfg) if fuse_qry_cfg is not None else None
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -87,6 +91,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -189,16 +194,19 @@ class StandardRoIHead(MMDetStandardRoIHead):
             # Get prediction masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
-            mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
+            roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
-            if self.mask_qry is not None:
-                mask_qry_feats = self.mask_qry(qry_feats[feat_ids_i])
-                mask_logits_i = self.mask_head(mask_qry_feats, mask_key_feats)
+            if self.fuse_qry is not None:
+                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
+                qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
 
-            else:
-                mask_logits_i = self.mask_head(mask_key_feats)
-                mask_logits_i = mask_logits_i[range(len(mask_logits_i)), pred_labels_i]
-                mask_logits_i = mask_logits_i[:, None]
+                fuse_qry_feats_i = torch.cat([qry_feats_i, roi_feats_i], dim=1)
+                roi_feats_i = roi_feats_i + self.fuse_qry(fuse_qry_feats_i)
+
+            mask_logits_i = self.mask_head(roi_feats_i)
+            mask_logits_i = mask_logits_i[range(len(mask_logits_i)), pred_labels_i]
+            mask_logits_i = mask_logits_i[:, None]
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
@@ -448,24 +456,27 @@ class StandardRoIHead(MMDetStandardRoIHead):
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
         batch_ids = batch_ids[matched_qry_ids]
 
-        # Get RoI-boxes
+        # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
         roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         # Get mask logits
         roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
-        mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+        roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
 
-        if self.mask_qry is not None:
-            mask_qry_feats = self.mask_qry(qry_feats[matched_qry_ids])
-            mask_logits = self.mask_head(mask_qry_feats, mask_key_feats)
-            mask_logits = mask_logits[:, 0]
+        if self.fuse_qry is not None:
+            qry_feats = qry_feats[matched_qry_ids]
+            qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
+            qry_feats = qry_feats[:, :, None, None].expand_as(roi_feats)
 
-        else:
-            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-            mask_logits = self.mask_head(mask_key_feats)
-            mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
+            fuse_qry_feats = torch.cat([qry_feats, roi_feats], dim=1)
+            roi_feats = roi_feats + self.fuse_qry(fuse_qry_feats)
+
+        mask_logits = self.mask_head(roi_feats)
+
+        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+        mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
@@ -527,12 +538,12 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
     Attributes:
         point_head (nn.Module): Module implementing the point head.
 
-        train_attrs (Config): Dictionary containing following training attributes:
+        train_cfg (Config): Dictionary containing following training attributes:
             - num_points (int): number of points to sample during training;
             - oversample_ratio (float): value of oversample ratio used during training point sampling;
             - importance_sample_ratio (float): ratio of importance sampling used during training point sampling.
 
-        test_attrs (Config): Dictionary containing following test attributes:
+        test_cfg (Config): Dictionary containing following test attributes:
             - subdivision_steps (int): number of subdivision steps used during inference;
             - subdivision_num_points (int): number subdivision points per subdivision step during inference;
             - scale_factor (float): scale factor used during inference upsampling.
@@ -565,8 +576,8 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         self.point_head = build_model(point_head_cfg)
 
         # Set training and test attributes
-        self.train_attrs = Config(train_attrs)
-        self.test_attrs = Config(test_attrs)
+        self.train_cfg = Config(train_attrs)
+        self.test_cfg = Config(test_attrs)
 
     @torch.no_grad()
     def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
@@ -584,6 +595,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -686,25 +698,24 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             # Get prediction masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
-            mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
+            roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
-            if self.mask_qry is not None:
-                mask_qry_feats = self.mask_qry(qry_feats[feat_ids_i])
-                mask_logits_i = self.mask_head(mask_qry_feats, mask_key_feats)
+            if self.fuse_qry is not None:
+                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
+                qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
 
-            else:
-                mask_logits_i = self.mask_head(mask_key_feats)
+                fuse_qry_feats_i = torch.cat([qry_feats_i, roi_feats_i], dim=1)
+                roi_feats_i = roi_feats_i + self.fuse_qry(fuse_qry_feats_i)
 
-            self.test_cfg = self.test_attrs
+            mask_logits_i = self.mask_head(roi_feats_i)
             img_metas = [None for _ in range(batch_size)]
 
             point_test_args = (feat_maps, roi_boxes_i, pred_labels_i, mask_logits_i, img_metas)
             mask_logits_i = self._mask_point_forward_test(*point_test_args)
 
-            if self.mask_qry is None:
-                num_masks = len(mask_logits_i)
-                mask_logits_i = mask_logits_i[range(num_masks), pred_labels_i]
-                mask_logits_i = mask_logits_i[:, None]
+            mask_logits_i = mask_logits_i[range(len(mask_logits_i)), pred_labels_i]
+            mask_logits_i = mask_logits_i[:, None]
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
@@ -817,42 +828,46 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
         batch_ids = batch_ids[matched_qry_ids]
 
-        # Get RoI-boxes
+        # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
         roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         # Get mask logits
         roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
-        mask_key_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+        roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
 
-        if self.mask_qry is not None:
-            mask_qry_feats = self.mask_qry(qry_feats[matched_qry_ids])
-            mask_logits = self.mask_head(mask_qry_feats, mask_key_feats)
-            mask_logits_i = mask_logits[:, 0]
+        if self.fuse_qry is not None:
+            qry_feats = qry_feats[matched_qry_ids]
+            qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
+            qry_feats = qry_feats[:, :, None, None].expand_as(roi_feats)
 
-        else:
-            tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-            mask_logits = self.mask_head(mask_key_feats)
-            mask_logits_i = mask_logits[range(num_pos_matches), tgt_labels]
+            fuse_qry_feats = torch.cat([qry_feats, roi_feats], dim=1)
+            roi_feats = roi_feats + self.fuse_qry(fuse_qry_feats)
+
+        mask_logits = self.mask_head(roi_feats)
+
+        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+        cls_mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
         tgt_masks = BitmapMasks(tgt_masks, *tgt_masks.shape[-2:])
 
-        mask_size = tuple(mask_logits_i.size()[-2:])
+        mask_size = tuple(mask_logits.size()[-2:])
         mask_tgt_cfg = Config({'mask_size': mask_size})
         mask_targets = mask_target_single(roi_boxes[:, 1:], matched_tgt_ids, tgt_masks, mask_tgt_cfg)
 
         # Get mask loss
-        mask_loss = self.mask_head.loss_mask(mask_logits_i, mask_targets)
+        mask_loss = self.mask_head.loss_mask(cls_mask_logits, mask_targets)
         mask_loss = mask_loss / (mask_size[0] * mask_size[1])
 
         key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
         loss_dict[key_name] = mask_loss
 
         # Get point logits
-        roi_pts = self.point_head.get_roi_rel_points_train(mask_logits, tgt_labels, self.train_attrs)
+        tgt_labels = tgt_dict['labels'][matched_tgt_ids]
+        roi_pts = self.point_head.get_roi_rel_points_train(mask_logits, tgt_labels, self.train_cfg)
 
         feat_maps = storage_dict['feat_maps']
         img_metas = [None for _ in range(len(feat_maps[0]))]
@@ -860,19 +875,15 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         coarse_feats = point_sample(mask_logits, roi_pts)
         point_logits = self.point_head(fine_feats, coarse_feats)
-
-        if self.mask_qry is None:
-            point_logits = point_logits[range(num_pos_matches), tgt_labels]
-        else:
-            point_logits = point_logits[:, 0]
+        point_logits = point_logits[range(num_pos_matches), tgt_labels]
 
         # Get point targets
-        target_single_args = (roi_boxes, roi_pts, matched_tgt_ids, tgt_masks, self.train_attrs)
+        target_single_args = (roi_boxes, roi_pts, matched_tgt_ids, tgt_masks, self.train_cfg)
         point_targets = self.point_head._get_target_single(*target_single_args)
 
         # Get point loss
         point_loss = self.point_head.loss_point(point_logits, point_targets)
-        point_loss = point_loss / self.train_attrs['num_points']
+        point_loss = point_loss / self.train_cfg['num_points']
 
         key_name = f'point_loss_{id}' if id is not None else 'point_loss'
         loss_dict[key_name] = point_loss
@@ -881,7 +892,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         if analysis_dict is not None:
 
             # Get mask accuracy
-            mask_preds = mask_logits_i > 0
+            mask_preds = cls_mask_logits > 0
             mask_targets = mask_targets.bool()
             mask_acc = (mask_preds == mask_targets).sum() / (mask_preds).numel()
 
@@ -905,51 +916,16 @@ class RefineMaskRoIHead(StandardRoIHead):
     Class implementing the RefineMaskRoIHead module.
 
     The module is based on the SimpleRefineRoIHead module from https://github.com/zhanggang001/RefineMask.
-
-    Attributes:
-        get_segs (bool): Boolean indicating whether to get segmentation predictions.
-
-        dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
-            - type (str): string containing the type of duplicate removal mechanism (mandatory);
-            - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
-            - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
-
-        max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-        matcher (nn.Module): Optional matcher module matching predictions with targets.
     """
 
-    def __init__(self, metadata, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, **kwargs):
-        """
-        Initializes the RefineMaskRoIHead module.
-
-        Args:
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-            get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
-            dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
-            max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
-            matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
-            kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
-        """
-
-        # Initialize module using MMDetStandardRoIHead __init__ method
-        MMDetStandardRoIHead.__init__(self, **kwargs)
-
-        # Build matcher module if needed
-        self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
-
-        # Set additional attributes
-        self.get_segs = get_segs
-        self.dup_attrs = dup_attrs
-        self.max_segs = max_segs
-        self.metadata = metadata
-
     @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
         """
         Method computing the segmentation predictions.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
@@ -958,6 +934,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -1004,6 +981,10 @@ class RefineMaskRoIHead(StandardRoIHead):
         batch_ids = torch.arange(batch_size, device=device)
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
         batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+
+        # Get number of stages and interpolation keyword arguments
+        num_stages = len(self.mask_head.stage_sup_size)
+        itp_kwargs = {'mode': 'bilinear', 'align_corners': True}
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
@@ -1060,11 +1041,17 @@ class RefineMaskRoIHead(StandardRoIHead):
             # Get prediction masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
-            ins_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
+            roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
-            mask_logits_i = self.mask_head(ins_feats_i, feat_maps[0], roi_boxes_i, pred_labels_i)
-            num_stages = len(mask_logits_i)
-            itp_kwargs = {'mode': 'bilinear', 'align_corners': True}
+            if self.fuse_qry is not None:
+                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
+                qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
+
+                fuse_qry_feats_i = torch.cat([qry_feats_i, roi_feats_i], dim=1)
+                roi_feats_i = roi_feats_i + self.fuse_qry(fuse_qry_feats_i)
+
+            mask_logits_i = self.mask_head(roi_feats_i, feat_maps[0], roi_boxes_i, pred_labels_i)
 
             for j in range(1, num_stages-1):
                 mask_logits_ij = mask_logits_i[j]
@@ -1096,12 +1083,14 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         return pred_dicts
 
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, cum_feats_batch=None, id=None,
-                     **kwargs):
+    def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict=None, cum_feats_batch=None,
+                     id=None, **kwargs):
         """
         Forward loss method of the RefineMaskRoIHead module.
 
         Args:
+            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
@@ -1172,18 +1161,25 @@ class RefineMaskRoIHead(StandardRoIHead):
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
         batch_ids = batch_ids[matched_qry_ids]
 
-        # Get RoI-boxes
+        # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
         roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
-        # Get instance features
-        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
-        ins_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
-
         # Get mask logits
+        roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
+        roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+        if self.fuse_qry is not None:
+            qry_feats = qry_feats[matched_qry_ids]
+            qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
+            qry_feats = qry_feats[:, :, None, None].expand_as(roi_feats)
+
+            fuse_qry_feats = torch.cat([qry_feats, roi_feats], dim=1)
+            roi_feats = roi_feats + self.fuse_qry(fuse_qry_feats)
+
         tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-        mask_logits = self.mask_head(ins_feats, feat_maps[0], roi_boxes, tgt_labels)
+        mask_logits = self.mask_head(roi_feats, feat_maps[0], roi_boxes, tgt_labels)
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
