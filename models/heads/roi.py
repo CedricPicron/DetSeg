@@ -431,7 +431,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             # Get mask loss
             mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
-            mask_loss += sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+            mask_loss += sum(0.0 * p.flatten()[0] for p in self.parameters())
 
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
@@ -790,15 +790,14 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             # Get mask loss
             mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
-            mask_loss += sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+            mask_loss += sum(0.0 * p.flatten()[0] for p in self.parameters())
 
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
 
             # Get point loss
-            point_loss = sum(0.0 * p.flatten()[0] for p in self.point_head.parameters())
             key_name = f'point_loss_{id}' if id is not None else 'point_loss'
-            loss_dict[key_name] = point_loss
+            loss_dict[key_name] = mask_loss
 
             # Get mask and point accuracies if needed
             if analysis_dict is not None:
@@ -1136,7 +1135,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             # Get mask loss
             mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
-            mask_loss += sum(0.0 * p.flatten()[0] for p in self.mask_head.parameters())
+            mask_loss += sum(0.0 * p.flatten()[0] for p in self.parameters())
 
             key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
             loss_dict[key_name] = mask_loss
