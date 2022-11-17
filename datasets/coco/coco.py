@@ -451,7 +451,7 @@ class CocoEvaluator(object):
                     json.dump(self.result_dicts, json_file)
 
                 with ZipFile(zip_file_name, 'w') as zip_file:
-                    zip_file.write(json_file_name, arc_name=f'{save_name}.json')
+                    zip_file.write(json_file_name, arcname=f'{save_name}.json')
                     os.remove(json_file_name)
 
         # Return if no ground-truth annotations are available
