@@ -35,12 +35,12 @@ class CocoDataset(Dataset):
     Class implementing the CocoDataset dataset.
 
     Attributes:
-        root (Path): Path to main directory from which datasets directory can be accessed.
         transforms (List): List [num_transforms] of transforms applied to image (and targets if available).
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         requires_masks (bool): Boolean indicating whether target dictionaries require masks.
-        coco (COCO): Optional object containing COCO annotations in COCO format.
-        image_paths (List): List [num_images] with image paths relative to the root path.
+        coco (COCO): Object containing COCO annotations in COCO format (only when annotation file is provided).
+        image_ids (List): List [num_images] with image ids.
+        image_paths (List): List [num_images] with image paths.
     """
 
     def __init__(self, image_dir, transforms, metadata, annotation_file=None, info_file=None, requires_masks=False):
@@ -60,7 +60,6 @@ class CocoDataset(Dataset):
         """
 
         # Set base attributes
-        self.root = Path()
         self.transforms = transforms
         self.metadata = metadata
         self.requires_masks = requires_masks
@@ -70,12 +69,13 @@ class CocoDataset(Dataset):
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
                     self.coco = COCO(annotation_file)
-                    self.coco.img_ids = list(sorted(self.coco.imgs.keys()))
-                    self.image_paths = [f'{image_dir}/{img_id:012}.jpg' for img_id in self.coco.img_ids]
+                    self.coco.img_ids = self.image_ids = list(sorted(self.coco.imgs.keys()))
+                    self.image_paths = [f'{image_dir}/{img_id:012}.jpg' for img_id in self.image_ids]
 
         elif info_file is not None:
             with open(info_file) as json_file:
                 info_dict = json.load(json_file)
+                self.image_ids = [img['id'] for img in info_dict['images']]
                 self.image_paths = [f"{image_dir}/{img['file_name']}" for img in info_dict['images']]
 
         else:
@@ -130,10 +130,10 @@ class CocoDataset(Dataset):
 
         # Load image and place it into Images structure
         contiguous_img_id = index // len(self.transforms)
-        img_id = self.coco.img_ids[contiguous_img_id] if hasattr(self, 'coco') else contiguous_img_id
-
         image_path = self.image_paths[contiguous_img_id]
         image = Image.open(image_path).convert('RGB')
+
+        img_id = self.image_ids[contiguous_img_id]
         image = Images(image, img_id)
 
         # Initialize empty target dictionary
@@ -451,7 +451,7 @@ class CocoEvaluator(object):
                     json.dump(self.result_dicts, json_file)
 
                 with ZipFile(zip_file_name, 'w') as zip_file:
-                    zip_file.write(json_file_name)
+                    zip_file.write(json_file_name, arc_name=f'{save_name}.json')
                     os.remove(json_file_name)
 
         # Return if no ground-truth annotations are available
