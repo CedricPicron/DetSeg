@@ -12,9 +12,10 @@ from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, Sequ
 from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train
 from models.archs.build import build_arch
+from utils.analysis import analyze_model
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
-from utils.analysis import analyze_model
+from utils.profiling import profile_model
 
 
 def get_parser():
@@ -54,11 +55,18 @@ def get_parser():
 
     # * Analysis
     parser.add_argument('--analysis_samples', default=100, type=int, help='number of samples used for model analysis')
+    parser.add_argument('--analysis_train_only', action='store_true', help='only analyze model in training mode')
+    parser.add_argument('--analysis_inf_only', action='store_true', help='only analyze model in inference mode')
 
     # * Performance
     parser.add_argument('--perf_save_res', action='store_true', help='save results even when having annotations')
     parser.add_argument('--perf_save_tag', default='single_scale', type=str, help='tag used in evaluation file names')
     parser.add_argument('--perf_with_vis', action='store_true', help='also gather visualizations during evaluation')
+
+    # * Profiling
+    parser.add_argument('--profile_samples', default=10, type=int, help='number of samples used for model profiling')
+    parser.add_argument('--profile_train_only', action='store_true', help='only profile model in training mode')
+    parser.add_argument('--profile_inf_only', action='store_true', help='only profile model in inference mode')
 
     # * Visualization
     parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
@@ -626,7 +634,11 @@ def main(args):
                 error_msg = "Distributed mode is not supported for the 'analysis' evaluation task."
                 raise ValueError(error_msg)
 
-            analysis_kwargs = {'num_samples': args.analysis_samples, 'output_dir': output_dir}
+            analyze_train = args.analysis_train_only or not args.analysis_inf_only
+            analyze_inf = args.analysis_inf_only or not args.analysis_train_only
+
+            analysis_kwargs = {'num_samples': args.analysis_samples, 'analyze_train': analyze_train}
+            analysis_kwargs = {**analysis_kwargs, 'analyze_inf': analyze_inf, 'output_dir': output_dir}
             analyze_model(model, eval_dataloader, optimizer, max_grad_norm=args.max_grad_norm, **analysis_kwargs)
             return
 
@@ -636,6 +648,21 @@ def main(args):
             perf_kwargs = {**perf_kwargs, 'save_tag': f'{args.eval_split}_{args.perf_save_tag}'}
             perf_kwargs = {**perf_kwargs, 'visualize': args.perf_with_vis, 'vis_score_thr': args.vis_score_thr}
             evaluate(model, eval_dataloader, evaluator=evaluator, output_dir=output_dir, **perf_kwargs)
+            return
+
+        # Perform model profiling and return
+        if args.eval_task == 'profile':
+
+            if args.distributed:
+                error_msg = "Distributed mode is not supported for the 'profile' evaluation task."
+                raise ValueError(error_msg)
+
+            profile_train = args.profile_train_only or not args.profile_inf_only
+            profile_inf = args.profile_inf_only or not args.profile_train_only
+
+            profile_kwargs = {'num_samples': args.profile_samples, 'profile_train': profile_train}
+            profile_kwargs = {**profile_kwargs, 'profile_inf': profile_inf, 'output_dir': output_dir}
+            profile_model(model, eval_dataloader, optimizer, max_grad_norm=args.max_grad_norm, **profile_kwargs)
             return
 
         # Visualize model predictions and return
