@@ -28,8 +28,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
     The module is based on the StandardRoIHead module from MMDetection.
 
     Attributes:
+        pos_enc (nn.Module): Optional module adding position encodings to the RoI features.
         qry (nn.Module): Optional module updating the query features.
-        fuse_qry (nn.Module): Optional module fusing the query features with the initial RoI features.
+        fuse_qry (nn.Module): Optional module fusing the query features with the RoI features.
 
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
@@ -43,13 +44,14 @@ class StandardRoIHead(MMDetStandardRoIHead):
         matcher (nn.Module): Optional matcher module matching predictions with targets.
     """
 
-    def __init__(self, metadata, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None, max_segs=None,
-                 matcher_cfg=None, **kwargs):
+    def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None,
+                 max_segs=None, matcher_cfg=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
         Args:
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            pos_enc_cfg (Dict): Configuration dictionary specifying the position encoder module (default=None).
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
@@ -62,7 +64,8 @@ class StandardRoIHead(MMDetStandardRoIHead):
         # Initialize module using parent __init__ method
         MMDetStandardRoIHead.__init__(self, **kwargs)
 
-        # Build query and fuse query modules
+        # Build position encoder, query and fuse query modules
+        self.pos_enc = build_model(pos_enc_cfg) if pos_enc_cfg is not None else None
         self.qry = build_model(qry_cfg) if qry_cfg is not None else None
         self.fuse_qry = build_model(fuse_qry_cfg) if fuse_qry_cfg is not None else None
 
@@ -195,6 +198,15 @@ class StandardRoIHead(MMDetStandardRoIHead):
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
+
+            if self.pos_enc is not None:
+                rH, rW = roi_feats_i.size()[2:]
+                pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+                pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+                norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+                roi_feats_i = roi_feats_i + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
 
             if self.fuse_qry is not None:
                 qry_feats_i = qry_feats[feat_ids_i]
@@ -465,6 +477,15 @@ class StandardRoIHead(MMDetStandardRoIHead):
         roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
         roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
 
+        if self.pos_enc is not None:
+            rH, rW = roi_feats.size()[2:]
+            pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+            pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+            norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+            norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+            roi_feats = roi_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
+
         if self.fuse_qry is not None:
             qry_feats = qry_feats[matched_qry_ids]
             qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
@@ -700,6 +721,15 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
+            if self.pos_enc is not None:
+                rH, rW = roi_feats_i.size()[2:]
+                pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+                pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+                norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+                roi_feats_i = roi_feats_i + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
+
             if self.fuse_qry is not None:
                 qry_feats_i = qry_feats[feat_ids_i]
                 qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
@@ -835,6 +865,15 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         # Get mask logits
         roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
         roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+        if self.pos_enc is not None:
+            rH, rW = roi_feats.size()[2:]
+            pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+            pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+            norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+            norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+            roi_feats = roi_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
 
         if self.fuse_qry is not None:
             qry_feats = qry_feats[matched_qry_ids]
@@ -1042,6 +1081,15 @@ class RefineMaskRoIHead(StandardRoIHead):
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
 
+            if self.pos_enc is not None:
+                rH, rW = roi_feats_i.size()[2:]
+                pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+                pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+                norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+                norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+                roi_feats_i = roi_feats_i + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
+
             if self.fuse_qry is not None:
                 qry_feats_i = qry_feats[feat_ids_i]
                 qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
@@ -1168,6 +1216,15 @@ class RefineMaskRoIHead(StandardRoIHead):
         # Get mask logits
         roi_feat_maps = feat_maps[:self.mask_roi_extractor.num_inputs]
         roi_feats = self.mask_roi_extractor(roi_feat_maps, roi_boxes)
+
+        if self.pos_enc is not None:
+            rH, rW = roi_feats.size()[2:]
+            pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+            pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+            norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+            norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+            roi_feats = roi_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
 
         if self.fuse_qry is not None:
             qry_feats = qry_feats[matched_qry_ids]
