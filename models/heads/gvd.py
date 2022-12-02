@@ -83,7 +83,6 @@ class GVD(nn.Module):
 
         Returns:
             group_init_feats (FloatTensor): Group initialization features of shape [num_groups, group_feat_size].
-            cum_feats_batch (LongTensor): Cumulative number of group features per batch entry of shape [batch_size+1].
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -100,13 +99,12 @@ class GVD(nn.Module):
             device = self.group_init_feats.device
             num_feats_batch = self.group_init_feats.size(dim=0)
             cum_feats_batch = torch.arange(batch_size+1, device=device) * num_feats_batch
+            storage_dict['cum_feats_batch'] = cum_feats_batch
 
         elif self.group_init_mode == 'selected':
             self.group_init_sel(storage_dict=storage_dict, **kwargs)
 
             group_init_feats = storage_dict.pop('sel_feats')
-            cum_feats_batch = storage_dict.pop('cum_feats_batch')
-
             storage_dict['prior_boxes'] = storage_dict.pop('sel_boxes', None)
             storage_dict['add_encs'] = storage_dict.pop('sel_box_encs', None)
 
@@ -114,7 +112,7 @@ class GVD(nn.Module):
             error_msg = f"Invalid group initialization mode (got '{self.group_init_mode}')."
             raise ValueError(error_msg)
 
-        return group_init_feats, cum_feats_batch
+        return group_init_feats
 
     def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
         """
@@ -158,8 +156,8 @@ class GVD(nn.Module):
         local_kwargs = {**local_kwargs, 'images_dict': images_dict}
 
         # Perform group initialization
-        group_feats, cum_feats_batch = self.group_init(**local_kwargs, **kwargs)
-        local_kwargs['cum_feats_batch'] = cum_feats_batch
+        group_feats = self.group_init(**local_kwargs, **kwargs)
+        local_kwargs['cum_feats_batch'] = storage_dict['cum_feats_batch']
         local_kwargs['add_encs'] = storage_dict.get('add_encs', None)
 
         # Apply heads if needed

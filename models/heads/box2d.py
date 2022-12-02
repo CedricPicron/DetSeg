@@ -74,17 +74,17 @@ class BaseBox2dHead(nn.Module):
         self.report_match_stats = report_match_stats
 
     @torch.no_grad()
-    def compute_dets(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_dets(self, storage_dict, pred_dicts, **kwargs):
         """
         Method computing the 2D object detection predictions.
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -99,17 +99,14 @@ class BaseBox2dHead(nn.Module):
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
         """
 
-        # Retrieve classification logits and predicted 2D bounding boxes
+        # Retrieve desired items from storage dictionary
         cls_logits = storage_dict['cls_logits']
+        cum_feats_batch = storage_dict['cum_feats_batch']
         pred_boxes = storage_dict['pred_boxes']
 
         # Get number of features, number of labels and device
         num_feats, num_labels = cls_logits.size()
         device = cls_logits.device
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1

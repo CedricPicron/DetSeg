@@ -243,7 +243,7 @@ class BoxCrossAttn(nn.Module):
         # Build underlying box-based cross-attention module
         self.attn = build_model(attn_cfg)
 
-    def forward(self, in_feats, storage_dict, cum_feats_batch=None):
+    def forward(self, in_feats, storage_dict):
         """
         Forward method of the BoxCrossAttn module.
 
@@ -254,9 +254,8 @@ class BoxCrossAttn(nn.Module):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure of size [batch_size] containing the batched images;
                 - prior_boxes (Boxes): structure with prior bounding boxes of size [num_feats];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - add_encs (FloatTensor): encodings added to queries and keys of shape [num_feats, in_size].
-
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
 
         Returns:
             out_feats (FloatTensor): Output features of shape [num_feats, out_size].
@@ -271,9 +270,8 @@ class BoxCrossAttn(nn.Module):
         # Get device
         device = in_feats.device
 
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, len(in_feats)], device=device)
+        # Retrieve cumulative number of features per batch entry
+        cum_feats_batch = storage_dict['cum_feats_batch']
 
         # Add sample priors to storage dictionary if needed
         if 'sample_priors' not in storage_dict:

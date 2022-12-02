@@ -84,7 +84,7 @@ class BaseSegHead(nn.Module):
         self.sample_attrs = sample_attrs
 
     @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, storage_dict, pred_dicts, **kwargs):
         """
         Method computing the segmentation predictions.
 
@@ -92,10 +92,11 @@ class BaseSegHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - seg_logits (FloatTensor): map with segmentation logits of shape [num_feats, fH, fW].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -112,6 +113,7 @@ class BaseSegHead(nn.Module):
         # Retrieve desired items from storage dictionary
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
+        cum_feats_batch = storage_dict['cum_feats_batch']
         seg_logits = storage_dict['seg_logits']
 
         # Get image width and height with padding
@@ -140,11 +142,6 @@ class BaseSegHead(nn.Module):
         # Get prediction labels and scores
         pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
         pred_scores = cls_logits[non_empty_masks, :-1].sigmoid().view(-1)
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            orig_num_feats = len(cls_logits)
-            cum_feats_batch = torch.tensor([0, orig_num_feats], device=device)
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
@@ -336,7 +333,7 @@ class BaseSegHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseSegHead module.
 
@@ -345,9 +342,9 @@ class BaseSegHead(nn.Module):
 
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure containing the batched images of size [batch_size].
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1].
 
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
@@ -357,14 +354,6 @@ class BaseSegHead(nn.Module):
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
         """
-
-        # Get number of features and device
-        num_feats = len(qry_feats)
-        device = qry_feats.device
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
 
         # Get query segmentation features
         qry_feats = self.qry(qry_feats)
@@ -377,6 +366,7 @@ class BaseSegHead(nn.Module):
 
         # Get segmentation logits
         batch_size = key_feat_map.size(dim=0)
+        cum_feats_batch = storage_dict['cum_feats_batch']
         seg_logits_list = []
 
         for i in range(batch_size):
@@ -394,7 +384,7 @@ class BaseSegHead(nn.Module):
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
-            self.compute_segs(storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
+            self.compute_segs(storage_dict=storage_dict, **kwargs)
 
         # Draw predicted and target segmentations if needed
         if images_dict is not None:
@@ -702,7 +692,7 @@ class TopDownSegHead(nn.Module):
         self.ref_loss_weights = ref_loss_weights
 
     @torch.no_grad()
-    def compute_segs(self, qry_feats, storage_dict, pred_dicts, cum_feats_batch=None, **kwargs):
+    def compute_segs(self, qry_feats, storage_dict, pred_dicts, **kwargs):
         """
         Method computing the segmentation predictions.
 
@@ -712,10 +702,11 @@ class TopDownSegHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
@@ -732,6 +723,7 @@ class TopDownSegHead(nn.Module):
         # Retrieve various items from storage dictionary
         images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
+        cum_feats_batch = storage_dict['cum_feats_batch']
         pred_boxes = storage_dict['pred_boxes']
 
         # Get image size, number of features, number of classes and device
@@ -744,10 +736,6 @@ class TopDownSegHead(nn.Module):
         pred_qry_ids = torch.arange(num_feats, device=device)[:, None].expand(-1, num_classes).reshape(-1)
         pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
         pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
-
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
@@ -807,8 +795,7 @@ class TopDownSegHead(nn.Module):
             seg_qry_ids, pred_inv_ids = pred_qry_ids_i.unique(sorted=True, return_inverse=True)
 
             # Compute segmentation predictions for desired queries
-            forward_pred_kwargs = {'cum_feats_batch': cum_feats_batch, 'seg_qry_ids': seg_qry_ids}
-            self.forward_pred(qry_feats, storage_dict, **forward_pred_kwargs, **kwargs)
+            self.forward_pred(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
 
             # Retrieve various items related to segmentation predictions from storage dictionary
             qry_ids = storage_dict['qry_ids']
@@ -996,8 +983,7 @@ class TopDownSegHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, qry_feats, storage_dict, cum_feats_batch=None, images_dict=None, seg_qry_ids=None,
-                     **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, images_dict=None, seg_qry_ids=None, **kwargs):
         """
         Forward prediction method of the TopDownSegHead module.
 
@@ -1005,12 +991,12 @@ class TopDownSegHead(nn.Module):
             qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary containing at least following keys:
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - feat_ids (LongTensor): indices of selected features resulting in query features of shape [num_feats];
                 - pred_boxes (Boxes): predicted 2D bounding boxes obtained from query features of size [num_feats].
 
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             seg_qry_ids (Dict): Indices determining for which queries to compute segmetations (default=None).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
@@ -1037,31 +1023,27 @@ class TopDownSegHead(nn.Module):
                 return storage_dict, images_dict
 
             if self.get_segs:
-                self.compute_segs(qry_feats, storage_dict=storage_dict, cum_feats_batch=cum_feats_batch, **kwargs)
+                self.compute_segs(qry_feats, storage_dict=storage_dict, **kwargs)
 
             if images_dict is not None:
                 self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
 
             return storage_dict, images_dict
 
-        # Get number of features and device
-        num_feats = len(qry_feats)
+        # Get device
         device = qry_feats.device
 
-        # Get cumulative number of features per batch entry if missing
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=device)
+        # Retrieve various items from storage dictionary
+        cum_feats_batch = storage_dict['cum_feats_batch']
+        key_feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        feat_ids = storage_dict['feat_ids']
+        qry_boxes = storage_dict['pred_boxes'].clone()
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
         batch_ids = torch.arange(batch_size, device=device)
         batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
-
-        # Retrieve various items from storage dictionary
-        key_feat_maps = storage_dict['feat_maps']
-        images = storage_dict['images']
-        feat_ids = storage_dict['feat_ids']
-        qry_boxes = storage_dict['pred_boxes'].clone()
 
         # Select for which queries to compute segmentations
         qry_feats = qry_feats[seg_qry_ids]
