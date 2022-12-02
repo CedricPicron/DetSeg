@@ -4,7 +4,7 @@ Functions constructing network module from one or multiple network dictionaries.
 from collections import OrderedDict
 from copy import deepcopy
 
-from models.modules.attention import DeformableAttn, ParticleAttn, SelfAttn1d
+from models.modules.attention import DeformableAttn, LegacySelfAttn1d, ParticleAttn
 from models.modules.container import Sequential
 from models.modules.mlp import OneStepMLP, TwoStepMLP
 
@@ -97,7 +97,7 @@ def get_net_single(net_dict):
     elif net_dict['type'] == 'self_attn_1d':
         net_args = (net_dict['in_size'], net_dict['out_size'])
         net_kwargs = {k: v for k, v in net_dict.items() if k in ('norm', 'act_fn', 'skip', 'num_heads')}
-        net_layer = SelfAttn1d(*net_args, **net_kwargs)
+        net_layer = LegacySelfAttn1d(*net_args, **net_kwargs)
 
     elif net_dict['type'] == 'two_step_mlp':
         net_args = (net_dict['in_size'], net_dict['hidden_size'], net_dict['out_size'])

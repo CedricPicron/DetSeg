@@ -157,8 +157,6 @@ class GVD(nn.Module):
 
         # Perform group initialization
         group_feats = self.group_init(**local_kwargs, **kwargs)
-        local_kwargs['cum_feats_batch'] = storage_dict['cum_feats_batch']
-        local_kwargs['add_encs'] = storage_dict.get('add_encs', None)
 
         # Apply heads if needed
         if 0 in self.head_apply_ids:
