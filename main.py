@@ -146,105 +146,6 @@ def get_parser():
     # Heads
     parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
 
-    # * Binary segmentation head
-    parser.add_argument('--disputed_loss', action='store_true', help='whether to apply loss at disputed positions')
-    parser.add_argument('--disputed_beta', default=0.2, type=float, help='threshold used for disputed smooth L1 loss')
-    parser.add_argument('--bin_seg_weight', default=1.0, type=float, help='binary segmentation loss weight')
-
-    # * BRD (Base Reinforced Detector) head
-    parser.add_argument('--brd_feat_size', default=256, type=int, help='internal feature size of the BRD head')
-
-    parser.add_argument('--brd_num_groups', default=8, type=int, help='number of group normalization groups')
-    parser.add_argument('--brd_prior_prob', default=0.01, type=float, help='prior object probability')
-    parser.add_argument('--brd_inference_samples', default=100, type=int, help='number of samples during inference')
-    parser.add_argument('--brd_policy_layers', default=1, type=int, help='number of policy hidden layers')
-
-    parser.add_argument('--brd_num_heads', default=8, type=int, help='number of decoder attention heads')
-    parser.add_argument('--brd_dec_hidden_size', default=1024, type=int, help='feature size in decoder hidden layer')
-    parser.add_argument('--brd_dec_layers', default=2, type=int, help='number of decoder layers')
-
-    parser.add_argument('--brd_head_hidden_size', default=256, type=int, help='feature size in head hidden layer')
-    parser.add_argument('--brd_head_layers', default=1, type=int, help='number of head hidden layers')
-    parser.add_argument('--brd_head_prior_cls_prob', default=0.01, type=float, help='prior class probability')
-
-    parser.add_argument('--brd_inter_loss', action='store_true', help='apply loss on intermediate layer predictions')
-    parser.add_argument('--brd_rel_preds', action='store_true', help='predict boxes relative to previous predictions')
-    parser.add_argument('--brd_use_all_preds', action='store_true', help='apply loss on all predictions from layer')
-    parser.add_argument('--brd_use_lsa', action='store_true', help='use linear sum assignment during loss matching')
-
-    parser.add_argument('--brd_delta_range_xy', default=1.0, type=float, help='range of object location delta')
-    parser.add_argument('--brd_delta_range_wh', default=8.0, type=float, help='range of object size delta')
-
-    parser.add_argument('--brd_focal_alpha', default=0.25, type=float, help='BRD head focal alpha value')
-    parser.add_argument('--brd_focal_gamma', default=2.0, type=float, help='BRD head focal gamma value')
-
-    parser.add_argument('--brd_reward_weight', default=1.0, type=float, help='BRD head reward weight factor')
-    parser.add_argument('--brd_punish_weight', default=0.1, type=float, help='BRD head punishment weight factor')
-
-    parser.add_argument('--brd_cls_rank_weight', default=1.0, type=float, help='classification ranking weight')
-    parser.add_argument('--brd_l1_rank_weight', default=5.0, type=float, help='L1 bounding box ranking weight')
-    parser.add_argument('--brd_giou_rank_weight', default=2.0, type=float, help='GIoU bounding box ranking weight')
-
-    parser.add_argument('--brd_cls_loss_weight', default=1.0, type=float, help='classification loss weight')
-    parser.add_argument('--brd_l1_loss_weight', default=5.0, type=float, help='L1 bounding box loss weight')
-    parser.add_argument('--brd_giou_loss_weight', default=2.0, type=float, help='GIoU bounding box loss weight')
-
-    # * Duplicate-Free Detector (DFD) head
-    parser.add_argument('--dfd_cls_feat_size', default=256, type=int, help='classification hidden feature size')
-    parser.add_argument('--dfd_cls_norm', default='group', type=str, help='normalization type of classification head')
-    parser.add_argument('--dfd_cls_prior_prob', default=0.01, type=float, help='prior class probability')
-    parser.add_argument('--dfd_cls_kernel_size', default=3, type=int, help='classification hidden layer kernel size')
-    parser.add_argument('--dfd_cls_bottle_size', default=64, type=int, help='classification bottleneck feature size')
-    parser.add_argument('--dfd_cls_hidden_layers', default=1, type=int, help='number of classification hidden layers')
-
-    parser.add_argument('--dfd_cls_focal_alpha', default=0.25, type=float, help='classification focal alpha value')
-    parser.add_argument('--dfd_cls_focal_gamma', default=2.0, type=float, help='classification focal gamma value')
-    parser.add_argument('--dfd_cls_weight', default=1e0, type=float, help='classification loss weight')
-
-    parser.add_argument('--dfd_obj_feat_size', default=256, type=int, help='objectness hidden feature size')
-    parser.add_argument('--dfd_obj_norm', default='group', type=str, help='normalization type of objectness head')
-    parser.add_argument('--dfd_obj_prior_prob', default=0.01, type=float, help='prior object probability')
-    parser.add_argument('--dfd_obj_kernel_size', default=3, type=int, help='objectness hidden layer kernel size')
-    parser.add_argument('--dfd_obj_bottle_size', default=64, type=int, help='objectness bottleneck feature size')
-    parser.add_argument('--dfd_obj_hidden_layers', default=1, type=int, help='number of objectness hidden layers')
-
-    parser.add_argument('--dfd_obj_focal_alpha', default=0.25, type=float, help='objectness focal alpha value')
-    parser.add_argument('--dfd_obj_focal_gamma', default=2.0, type=float, help='objectness focal gamma value')
-    parser.add_argument('--dfd_obj_weight', default=1e1, type=float, help='objectness loss weight')
-
-    parser.add_argument('--dfd_box_feat_size', default=256, type=int, help='bounding box hidden feature size')
-    parser.add_argument('--dfd_box_norm', default='group', type=str, help='normalization type of bounding box head')
-    parser.add_argument('--dfd_box_kernel_size', default=3, type=int, help='bounding box hidden layer kernel size')
-    parser.add_argument('--dfd_box_bottle_size', default=64, type=int, help='bounding box bottleneck feature size')
-    parser.add_argument('--dfd_box_hidden_layers', default=1, type=int, help='number of bounding box hidden layers')
-
-    parser.add_argument('--dfd_box_sl1_beta', default=0.0, type=float, help='bounding box smooth L1 beta value')
-    parser.add_argument('--dfd_box_weight', default=2e-1, type=float, help='bounding box loss weight')
-
-    parser.add_argument('--dfd_pos_feat_size', default=64, type=int, help='position encoding feature size')
-    parser.add_argument('--dfd_pos_norm', default='', type=str, help='normalization type of position head')
-    parser.add_argument('--dfd_pos_kernel_size', default=3, type=int, help='kernel size of position head')
-    parser.add_argument('--dfd_pos_bottle_size', default=8, type=int, help='bottleneck feature size of position head')
-    parser.add_argument('--dfd_pos_hidden_layers', default=2, type=int, help='number of position head hidden layers')
-
-    parser.add_argument('--dfd_ins_feat_size', default=256, type=int, help='instance hidden feature size')
-    parser.add_argument('--dfd_ins_norm', default='group', type=str, help='normalization type of instance head')
-    parser.add_argument('--dfd_ins_prior_prob', default=0.01, type=float, help='prior instance probability')
-    parser.add_argument('--dfd_ins_kernel_size', default=3, type=int, help='instance hidden layer kernel size')
-    parser.add_argument('--dfd_ins_bottle_size', default=64, type=int, help='instance bottleneck feature size')
-    parser.add_argument('--dfd_ins_hidden_layers', default=1, type=int, help='number of instance hidden layers')
-    parser.add_argument('--dfd_ins_out_size', default=256, type=int, help='instance output feature size')
-
-    parser.add_argument('--dfd_ins_focal_alpha', default=0.25, type=float, help='instance focal alpha value')
-    parser.add_argument('--dfd_ins_focal_gamma', default=2.0, type=float, help='instance focal gamma value')
-    parser.add_argument('--dfd_ins_weight', default=5e0, type=float, help='instance loss weight')
-
-    parser.add_argument('--dfd_inf_nms_candidates', default=1000, type=int, help='max candidates for inference NMS')
-    parser.add_argument('--dfd_inf_nms_threshold', default=0.5, type=float, help='IoU threshold during inference NMS')
-    parser.add_argument('--dfd_inf_ins_candidates', default=1000, type=int, help='max candidates for instance head')
-    parser.add_argument('--dfd_inf_ins_threshold', default=0.5, type=float, help='instance threshold during inference')
-    parser.add_argument('--dfd_inf_max_detections', default=100, type=int, help='max number of inference detections')
-
     # * Dense Object Discovery (DOD) head
     parser.add_argument('--dod_feat_size', default=256, type=int, help='DOD hidden feature size')
     parser.add_argument('--dod_norm', default='group', type=str, help='normalization type of DOD head')
@@ -281,51 +182,6 @@ def get_parser():
 
     # * General Vision Decoder (GVD) head
     parser.add_argument('--gvd_cfg_path', default='', type=str, help='path to GVD head config')
-
-    # * Map-Based Detector (MBD) head
-    parser.add_argument('--mbd_hrae_type', default='one_step_mlp', type=str, help='HRAE network type')
-    parser.add_argument('--mbd_hrae_layers', default=1, type=int, help='number of layers of HRAE network')
-    parser.add_argument('--mbd_hrae_hidden_size', default=1024, type=int, help='hidden feature size of HRAE network')
-    parser.add_argument('--mbd_hrae_norm', default='layer', type=str, help='normalization type of HRAE network')
-    parser.add_argument('--mbd_hrae_act_fn', default='relu', type=str, help='activation function of HRAE network')
-    parser.add_argument('--mbd_hrae_no_skip', action='store_true', help='remove skip connection of HRAE network')
-
-    parser.add_argument('--mbd_haae_type', default='one_step_mlp', type=str, help='HAAE network type')
-    parser.add_argument('--mbd_haae_layers', default=1, type=int, help='number of layers of HAAE network')
-    parser.add_argument('--mbd_haae_hidden_size', default=1024, type=int, help='hidden feature size of HAAE network')
-    parser.add_argument('--mbd_haae_norm', default='layer', type=str, help='normalization type of HAAE network')
-    parser.add_argument('--mbd_haae_act_fn', default='relu', type=str, help='activation function of HAAE network')
-    parser.add_argument('--mbd_haae_no_skip', action='store_true', help='remove skip connection of HAAE network')
-
-    parser.add_argument('--mbd_ca_type', default='deformable_attn', type=str, help='CA network type')
-    parser.add_argument('--mbd_ca_layers', default=6, type=int, help='number of layers of CA network')
-    parser.add_argument('--mbd_ca_norm', default='layer', type=str, help='normalization type of CA network')
-    parser.add_argument('--mbd_ca_act_fn', default='', type=str, help='activation function of CA network')
-    parser.add_argument('--mbd_ca_version', default=2, type=int, help='version of CA network')
-    parser.add_argument('--mbd_ca_num_heads', default=8, type=int, help='number of CA attention heads')
-    parser.add_argument('--mbd_ca_num_points', default=4, type=int, help='number of CA points')
-    parser.add_argument('--mbd_ca_rad_pts', default=4, type=int, help='number of CA radial points')
-    parser.add_argument('--mbd_ca_ang_pts', default=1, type=int, help='number of CA angular points')
-    parser.add_argument('--mbd_ca_lvl_pts', default=1, type=int, help='number of CA level points')
-    parser.add_argument('--mbd_ca_dup_pts', default=1, type=int, help='number of CA duplicate points')
-    parser.add_argument('--mbd_ca_qk_size', default=256, type=int, help='size of CA query and key features')
-    parser.add_argument('--mbd_ca_val_size', default=256, type=int, help='size of CA value features')
-    parser.add_argument('--mbd_ca_val_with_pos', action='store_true', help='adds position info to CA value features')
-    parser.add_argument('--mbd_ca_norm_z', default=1.0, type=float, help='Z-normalizer of CA sample offsets')
-    parser.add_argument('--mbd_ca_step_size', default=-1, type=float, help='CA step size relative to normalization')
-    parser.add_argument('--mbd_ca_step_norm_xy', default='map', type=str, help='XY-normalizer of CA sample steps')
-    parser.add_argument('--mbd_ca_step_norm_z', default=1, type=float, help='Z-normalizer of CA sample steps')
-    parser.add_argument('--mbd_ca_num_particles', default=20, type=int, help='number of particles per CA head')
-
-    parser.add_argument('--mbd_match_thr', default=0.5, type=float, help='minimum box IoU for positive matching')
-
-    parser.add_argument('--mbd_loss_gt_seg', action='store_true', help='use ground-truth segmentation during training')
-    parser.add_argument('--mbd_loss_seg_types', nargs='*', default='sigmoid_focal', help='segmentation loss types')
-    parser.add_argument('--mbd_loss_seg_alpha', default=0.25, type=float, help='segmentation focal alpha value')
-    parser.add_argument('--mbd_loss_seg_gamma', default=2.0, type=float, help='segmentation focal gamma value')
-    parser.add_argument('--mbd_loss_seg_weights', nargs='*', default=1.0, type=float, help='segmentation loss weights')
-
-    parser.add_argument('--mbd_pred_thr', default=0.6, type=float, help='minimum probability for positive prediction')
 
     # * Retina head
     parser.add_argument('--ret_feat_size', default=256, type=int, help='internal feature size of the retina head')
@@ -458,10 +314,6 @@ def get_parser():
     parser.add_argument('--sbd_ffn_hidden_size', default=1024, type=int, help='hidden feature size of FFN network')
     parser.add_argument('--sbd_ffn_norm', default='layer', type=str, help='normalization type of FFN network')
     parser.add_argument('--sbd_ffn_act_fn', default='relu', type=str, help='activation function of FFN network')
-
-    # * Semantic segmentation head
-    parser.add_argument('--bg_weight', default=0.1, type=float, help='weight scaling losses in background positions')
-    parser.add_argument('--sem_seg_weight', default=1.0, type=float, help='semantic segmentation loss weight')
 
     # Optimizer
     parser.add_argument('--max_grad_norm', default=-1, type=float, help='maximum gradient norm during training')

@@ -5,15 +5,10 @@ from copy import deepcopy
 
 from mmcv import Config
 
-from .binary import BinarySegHead
-from .brd import BRD
-from .dfd import DFD
 from .dod import DOD
-from .mbd import MBD
 from models.build import build_model
 from .retina import RetinaHead
 from .sbd import SBD
-from .semantic import SemanticSegHead
 
 
 def build_heads(args):
@@ -35,91 +30,8 @@ def build_heads(args):
 
     # Build head modules
     for head_type in args.heads:
-        if head_type == 'bin':
-            args.requires_masks = True
-            head_args = [args.disputed_loss, args.disputed_beta, args.bin_seg_weight]
 
-            bin_head = BinarySegHead(args.core_out_sizes, *head_args)
-            heads[head_type] = bin_head
-
-        elif head_type == 'brd':
-            feat_size = args.brd_feat_size
-            assert all(feat_size == core_out_size for core_out_size in args.core_out_sizes)
-
-            policy_dict = {'num_groups': args.brd_num_groups, 'prior_prob': args.brd_prior_prob}
-            policy_dict = {**policy_dict, 'inference_samples': args.brd_inference_samples}
-            policy_dict = {**policy_dict, 'num_hidden_layers': args.brd_policy_layers}
-
-            decoder_dict = {'num_heads': args.brd_num_heads, 'hidden_size': args.brd_dec_hidden_size}
-            decoder_dict = {**decoder_dict, 'num_layers': args.brd_dec_layers}
-
-            head_dict = {'num_classes': args.num_classes, 'hidden_size': args.brd_head_hidden_size}
-            head_dict = {**head_dict, 'layers': args.brd_head_layers}
-            head_dict = {**head_dict, 'prior_cls_prob': args.brd_head_prior_cls_prob}
-
-            loss_dict = {'inter_loss': args.brd_inter_loss, 'rel_preds': args.brd_rel_preds}
-            loss_dict = {**loss_dict, 'use_all_preds': args.brd_use_all_preds, 'use_lsa': args.brd_use_lsa}
-
-            loss_dict = {**loss_dict, 'delta_range_xy': args.brd_delta_range_xy}
-            loss_dict = {**loss_dict, 'delta_range_wh': args.brd_delta_range_wh}
-
-            loss_dict = {**loss_dict, 'focal_alpha': args.brd_focal_alpha, 'focal_gamma': args.brd_focal_gamma}
-            loss_dict = {**loss_dict, 'reward_weight': args.brd_reward_weight, 'punish_weight': args.brd_punish_weight}
-
-            loss_dict = {**loss_dict, 'cls_rank_weight': args.brd_cls_rank_weight}
-            loss_dict = {**loss_dict, 'l1_rank_weight': args.brd_l1_rank_weight}
-            loss_dict = {**loss_dict, 'giou_rank_weight': args.brd_giou_rank_weight}
-
-            loss_dict = {**loss_dict, 'cls_loss_weight': args.brd_cls_loss_weight}
-            loss_dict = {**loss_dict, 'l1_loss_weight': args.brd_l1_loss_weight}
-            loss_dict = {**loss_dict, 'giou_loss_weight': args.brd_giou_loss_weight}
-
-            brd_head = BRD(feat_size, policy_dict, decoder_dict, head_dict, loss_dict, args.metadata)
-            heads[head_type] = brd_head
-
-        elif head_type == 'dfd':
-            in_feat_size = args.core_out_sizes[0]
-            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
-
-            cls_dict = {'feat_size': args.dfd_cls_feat_size, 'norm': args.dfd_cls_norm}
-            cls_dict = {**cls_dict, 'num_classes': args.num_classes, 'prior_prob': args.dfd_cls_prior_prob}
-            cls_dict = {**cls_dict, 'kernel_size': args.dfd_cls_kernel_size, 'bottle_size': args.dfd_cls_bottle_size}
-            cls_dict = {**cls_dict, 'hidden_layers': args.dfd_cls_hidden_layers}
-            cls_dict = {**cls_dict, 'focal_alpha': args.dfd_cls_focal_alpha, 'focal_gamma': args.dfd_cls_focal_gamma}
-            cls_dict = {**cls_dict, 'weight': args.dfd_cls_weight}
-
-            obj_dict = {'feat_size': args.dfd_obj_feat_size, 'norm': args.dfd_obj_norm}
-            obj_dict = {**obj_dict, 'prior_prob': args.dfd_obj_prior_prob, 'kernel_size': args.dfd_obj_kernel_size}
-            obj_dict = {**obj_dict, 'bottle_size': args.dfd_obj_bottle_size}
-            obj_dict = {**obj_dict, 'hidden_layers': args.dfd_obj_hidden_layers}
-            obj_dict = {**obj_dict, 'focal_alpha': args.dfd_obj_focal_alpha, 'focal_gamma': args.dfd_obj_focal_gamma}
-            obj_dict = {**obj_dict, 'weight': args.dfd_obj_weight}
-
-            box_dict = {'feat_size': args.dfd_box_feat_size, 'norm': args.dfd_box_norm}
-            box_dict = {**box_dict, 'kernel_size': args.dfd_box_kernel_size, 'bottle_size': args.dfd_box_bottle_size}
-            box_dict = {**box_dict, 'hidden_layers': args.dfd_box_hidden_layers, 'sl1_beta': args.dfd_box_sl1_beta}
-            box_dict = {**box_dict, 'weight': args.dfd_box_weight}
-
-            pos_dict = {'feat_size': args.dfd_pos_feat_size, 'norm': args.dfd_pos_norm}
-            pos_dict = {**pos_dict, 'kernel_size': args.dfd_pos_kernel_size, 'bottle_size': args.dfd_pos_bottle_size}
-            pos_dict = {**pos_dict, 'hidden_layers': args.dfd_pos_hidden_layers}
-
-            ins_dict = {'feat_size': args.dfd_ins_feat_size, 'norm': args.dfd_ins_norm}
-            ins_dict = {**ins_dict, 'prior_prob': args.dfd_ins_prior_prob, 'kernel_size': args.dfd_ins_kernel_size}
-            ins_dict = {**ins_dict, 'bottle_size': args.dfd_ins_bottle_size}
-            ins_dict = {**ins_dict, 'hidden_layers': args.dfd_ins_hidden_layers, 'out_size': args.dfd_ins_out_size}
-            ins_dict = {**ins_dict, 'focal_alpha': args.dfd_ins_focal_alpha, 'focal_gamma': args.dfd_ins_focal_gamma}
-            ins_dict = {**ins_dict, 'weight': args.dfd_ins_weight}
-
-            inf_dict = {'nms_candidates': args.dfd_inf_nms_candidates, 'nms_threshold': args.dfd_inf_nms_threshold}
-            inf_dict = {**inf_dict, 'ins_candidates': args.dfd_inf_ins_candidates}
-            inf_dict = {**inf_dict, 'ins_threshold': args.dfd_inf_ins_threshold}
-            inf_dict = {**inf_dict, 'max_detections': args.dfd_inf_max_detections}
-
-            dfd_head = DFD(in_feat_size, cls_dict, obj_dict, box_dict, pos_dict, ins_dict, inf_dict, args.metadata)
-            heads[head_type] = dfd_head
-
-        elif head_type == 'dod':
+        if head_type == 'dod':
             in_feat_size = args.core_out_sizes[0]
             assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
             map_ids = args.core_out_ids
@@ -163,58 +75,6 @@ def build_heads(args):
 
             gvd_head = build_model(gvd_cfg.model, metadata=args.metadata)
             heads[head_type] = gvd_head
-
-        elif head_type == 'mbd':
-            in_feat_size = args.core_out_sizes[0]
-            assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
-            num_levels = len(args.core_out_sizes)
-
-            if not isinstance(args.mbd_loss_seg_types, list):
-                args.mbd_loss_seg_types = [args.mbd_loss_seg_types]
-
-            if not isinstance(args.mbd_loss_seg_weights, list):
-                args.mbd_loss_seg_weights = [args.mbd_loss_seg_weights]
-
-            args_copy = deepcopy(args)
-            args_copy.heads = ['sbd']
-            sbd = build_heads(args_copy)['sbd']
-
-            rae_dict = {'type': args.mbd_hrae_type, 'layers': args.mbd_hrae_layers, 'in_size': args.sbd_state_size}
-            rae_dict = {**rae_dict, 'hidden_size': args.mbd_hrae_hidden_size, 'out_size': args.sbd_state_size}
-            rae_dict = {**rae_dict, 'norm': args.mbd_hrae_norm, 'act_fn': args.mbd_hrae_act_fn}
-            rae_dict = {**rae_dict, 'skip': not args.mbd_hrae_no_skip}
-
-            aae_dict = {'type': args.mbd_haae_type, 'layers': args.mbd_haae_layers, 'in_size': args.sbd_state_size}
-            aae_dict = {**aae_dict, 'hidden_size': args.mbd_haae_hidden_size, 'out_size': args.sbd_state_size}
-            aae_dict = {**aae_dict, 'norm': args.mbd_haae_norm, 'act_fn': args.mbd_haae_act_fn}
-            aae_dict = {**aae_dict, 'skip': not args.mbd_haae_no_skip}
-
-            ca_dict = {'type': args.mbd_ca_type, 'layers': args.mbd_ca_layers, 'in_size': args.sbd_state_size}
-            ca_dict = {**ca_dict, 'sample_size': in_feat_size, 'out_size': args.sbd_state_size}
-            ca_dict = {**ca_dict, 'norm': args.mbd_ca_norm, 'act_fn': args.mbd_ca_act_fn, 'skip': True}
-            ca_dict = {**ca_dict, 'version': args.mbd_ca_version, 'num_heads': args.mbd_ca_num_heads}
-            ca_dict = {**ca_dict, 'num_levels': num_levels, 'num_points': args.mbd_ca_num_points}
-            ca_dict = {**ca_dict, 'rad_pts': args.mbd_ca_rad_pts, 'ang_pts': args.mbd_ca_ang_pts}
-            ca_dict = {**ca_dict, 'lvl_pts': args.mbd_ca_lvl_pts, 'dup_pts': args.mbd_ca_dup_pts}
-            ca_dict = {**ca_dict, 'qk_size': args.mbd_ca_qk_size, 'val_size': args.mbd_ca_val_size}
-            ca_dict = {**ca_dict, 'val_with_pos': args.mbd_ca_val_with_pos, 'norm_z': args.mbd_ca_norm_z}
-            ca_dict = {**ca_dict, 'step_size': args.mbd_ca_step_size, 'step_norm_xy': args.mbd_ca_step_norm_xy}
-            ca_dict = {**ca_dict, 'step_norm_z': args.mbd_ca_step_norm_z, 'num_particles': args.mbd_ca_num_particles}
-            ca_dict = {**ca_dict, 'sample_insert': True, 'insert_size': 1}
-
-            match_dict = {'match_thr': args.mbd_match_thr}
-
-            if args.mbd_loss_gt_seg:
-                args.requires_masks = True
-
-            loss_dict = {'use_gt_seg': args.mbd_loss_gt_seg, 'seg_types': args.mbd_loss_seg_types}
-            loss_dict = {**loss_dict, 'seg_alpha': args.mbd_loss_seg_alpha, 'seg_gamma': args.mbd_loss_seg_gamma}
-            loss_dict = {**loss_dict, 'seg_weights': args.mbd_loss_seg_weights}
-
-            pred_dict = {'pred_thr': args.mbd_pred_thr}
-
-            mbd_head = MBD(sbd, rae_dict, aae_dict, ca_dict, match_dict, loss_dict, pred_dict, args.metadata)
-            heads[head_type] = mbd_head
 
         elif head_type == 'ret':
             num_classes = args.num_classes
@@ -342,13 +202,6 @@ def build_heads(args):
 
             sbd_head = SBD(*sbd_args)
             heads[head_type] = sbd_head
-
-        elif head_type == 'sem':
-            args.requires_masks = True
-            head_args = [args.num_classes, args.bg_weight, args.sem_seg_weight, args.metadata]
-
-            sem_head = SemanticSegHead(args.core_out_sizes, *head_args)
-            heads[head_type] = sem_head
 
         else:
             raise ValueError(f"Unknown head type '{head_type}' was provided.")
