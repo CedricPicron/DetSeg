@@ -1359,6 +1359,11 @@ class TopDownSegHead(nn.Module):
                 map_ids_list.append(map_ids)
 
                 # Fuse top-down features
+                fuse_td_feats = self.fuse_td[i](seg_feats[refine_mask])
+                seg_feats = seg_feats.repeat_interleave(repeats, dim=0)[used_ids]
+                seg_feats[core_mask] += fuse_td_feats
+
+                # Fuse key features
                 map_sizes_i = map_sizes[map_ids]
                 map_offsets_i = map_offsets[map_ids]
 
@@ -1366,11 +1371,6 @@ class TopDownSegHead(nn.Module):
                 feat_ids[:, 1] = feat_ids[:, 1] * map_sizes_i[:, 0]
                 feat_ids = (map_offsets_i - delta_key_map_offset) + feat_ids.sum(dim=1)
 
-                fuse_td_feats = self.fuse_td[i](seg_feats[refine_mask])
-                seg_feats = seg_feats.repeat_interleave(repeats, dim=0)[used_ids]
-                seg_feats[core_mask] += fuse_td_feats
-
-                # Fuse key features
                 select_mask = map_ids >= self.key_min_id
                 key_feats = torch.zeros(len(select_mask), key_feat_size, device=device)
                 key_feats[select_mask] = cat_key_feats[batch_ids[select_mask], feat_ids[select_mask], :]
