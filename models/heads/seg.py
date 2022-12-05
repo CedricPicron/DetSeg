@@ -794,8 +794,8 @@ class TopDownSegHead(nn.Module):
             # Get query indices for which to compute segmentations
             seg_qry_ids, pred_inv_ids = pred_qry_ids_i.unique(sorted=True, return_inverse=True)
 
-            # Compute segmentation predictions for desired queries
-            self.forward_pred(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
+            # Get segmentation and refinement predictions for desired queries
+            self.get_preds(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
 
             # Retrieve various items related to segmentation predictions from storage dictionary
             qry_ids = storage_dict['qry_ids']
@@ -983,9 +983,9 @@ class TopDownSegHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, qry_feats, storage_dict, images_dict=None, seg_qry_ids=None, **kwargs):
+    def get_preds(self, qry_feats, storage_dict, seg_qry_ids, **kwargs):
         """
-        Forward prediction method of the TopDownSegHead module.
+        Method computing the segmentation and refinement logits for the desired queries.
 
         Args:
             qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
@@ -997,12 +997,11 @@ class TopDownSegHead(nn.Module):
                 - feat_ids (LongTensor): indices of selected features resulting in query features of shape [num_feats];
                 - pred_boxes (Boxes): predicted 2D bounding boxes obtained from query features of size [num_feats].
 
-            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            seg_qry_ids (Dict): Indices determining for which queries to compute segmetations (default=None).
+            seg_qry_ids (Dict): Indices determining for which queries to compute segmentations.
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
-            storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
                 - qry_ids (LongTensor): query indices (post-selection) of predictions of shape [num_preds];
                 - seg_xy (FloatTensor): normalized key locations of predictions of shape [num_preds, 2];
                 - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
@@ -1012,23 +1011,7 @@ class TopDownSegHead(nn.Module):
                 - ref_logits (FloatTensor): refinement logits of shape [num_preds];
                 - num_stage_preds (List): list with number of predictions per stage of size [self.seg_iters];
                 - refined_mask (BoolTensor): mask indicating refined predictions of shape [num_preds].
-
-            images_dict (Dict): Dictionary (possibly) containing additional images annotated with segmentations.
         """
-
-        # Handle case where no segmentation queries are provided
-        if seg_qry_ids is None:
-
-            if self.training:
-                return storage_dict, images_dict
-
-            if self.get_segs:
-                self.compute_segs(qry_feats, storage_dict=storage_dict, **kwargs)
-
-            if images_dict is not None:
-                self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
-
-            return storage_dict, images_dict
 
         # Get device
         device = qry_feats.device
@@ -1422,6 +1405,30 @@ class TopDownSegHead(nn.Module):
         storage_dict['num_stage_preds'] = num_stage_preds
         storage_dict['refined_mask'] = refined_mask
 
+        return storage_dict
+
+    def forward_pred(self, storage_dict, images_dict=None, **kwargs):
+        """
+        Forward prediction method of the TopDownSegHead module.
+
+        Args:
+            storage_dict (Dict): Dictionary storing various items of interest.
+            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
+
+        Returns:
+            storage_dict (Dict): Dictionary with (possibly) additional stored items of interest.
+            images_dict (Dict): Dictionary (possibly) containing additional images annotated with segmentations.
+        """
+
+        # Get segmentation predictions if needed
+        if self.get_segs and not self.training:
+            self.compute_segs(storage_dict=storage_dict, **kwargs)
+
+        # Draw predicted and target segmentations if needed
+        if images_dict is not None:
+            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
+
         return storage_dict, images_dict
 
     def forward_loss(self, qry_feats, storage_dict, tgt_dict, loss_dict, analysis_dict, id=None, **kwargs):
@@ -1531,8 +1538,8 @@ class TopDownSegHead(nn.Module):
             error_msg = "The TopDownSegHead does not support a single query to be matched with multiple targets."
             raise ValueError(error_msg)
 
-        # Compute segmentation predictions for desired queries
-        self.forward_pred(qry_feats, storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
+        # Get segmentation and refinement predictions for desired queries
+        self.get_preds(qry_feats, storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
         qry_ids = storage_dict['qry_ids']
