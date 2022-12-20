@@ -581,10 +581,10 @@ class TopDownSegHead(nn.Module):
         key_2d (nn.Module): Optional module updating the 2D key feature maps.
         roi_ext (nn.Module): Module extracting the initial segmentation features from feature maps based on RoI boxes.
 
-        key (nn.Module): Optional module updating the initial segmentation features.
-        pos_enc (nn.Module): Optional module adding position features to the initial segmentation features.
+        pos_enc (nn.Module): Optional module adding position features to the segmentation features.
         qry (nn.Module): Optional module updating the query features.
-        fuse_qry (nn.Module): Optional module fusing the query features with the initial segmentation features.
+        fuse_qry (nn.Module): Optional module fusing the query features with the segmentation features.
+        roi_ins (nn.Module): Optional module updating the segmentation features in map-based format.
 
         proc (nn.ModuleList): List [seg_iters] of modules processing the segmentation features.
         seg (nn.ModuleList): List [seg_iters] of modules computing segmentation logits from segmentation features.
@@ -619,8 +619,8 @@ class TopDownSegHead(nn.Module):
 
     def __init__(self, roi_ext_cfg, proc_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, map_offset,
                  key_min_id, key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg,
-                 seg_loss_weights, ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, key_cfg=None, pos_enc_cfg=None,
-                 qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
+                 seg_loss_weights, ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None,
+                 fuse_qry_cfg=None, roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
                  **kwargs):
         """
         Initializes the TopDownSegHead module.
@@ -645,10 +645,10 @@ class TopDownSegHead(nn.Module):
             ref_loss_cfg (Dict): Configuration dictionary specifying the refinement loss module.
             ref_loss_weights (Tuple): Tuple of size [seg_iters] containing the refinement loss weights.
             key_2d_cfg (Dict): Configuration dictionary specifying the key 2D module (default=None).
-            key_cfg (Dict): Configuration dictionary specifying the key module (default=None).
             pos_enc_cfg (Dict): Configuration dictionary specifying the position encoder module (default=None).
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
+            roi_ins_cfg (Dict): Configuration dictionary specifying the RoI-instance module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
@@ -663,10 +663,10 @@ class TopDownSegHead(nn.Module):
         self.key_2d = build_model(key_2d_cfg) if key_2d_cfg is not None else None
         self.roi_ext = build_model(roi_ext_cfg)
 
-        self.key = build_model(key_cfg) if key_cfg is not None else None
         self.pos_enc = build_model(pos_enc_cfg) if pos_enc_cfg is not None else None
         self.qry = build_model(qry_cfg) if qry_cfg is not None else None
         self.fuse_qry = build_model(fuse_qry_cfg) if fuse_qry_cfg is not None else None
+        self.roi_ins = build_model(roi_ins_cfg) if roi_ins_cfg is not None else None
 
         self.proc = nn.ModuleList([build_model(cfg_i) for cfg_i in proc_cfg])
         self.seg = nn.ModuleList([build_model(cfg_i) for cfg_i in seg_cfg])
@@ -1027,8 +1027,27 @@ class TopDownSegHead(nn.Module):
         roi_feat_maps = key_feat_maps[:self.roi_ext.num_inputs]
         seg_feats = self.roi_ext(roi_feat_maps, roi_boxes)
 
+        # Add position encodings if needed
+        if self.pos_enc is not None:
+            rH, rW = seg_feats.size()[2:]
+            pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
+            pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
+
+            norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
+            norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
+            seg_feats = seg_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
+
+        # Fuse query features if needed
+        if self.fuse_qry is not None:
+            qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
+            qry_feats = qry_feats[:, :, None, None].expand_as(seg_feats)
+
+            fuse_qry_feats = torch.cat([qry_feats, seg_feats], dim=1)
+            seg_feats = seg_feats + self.fuse_qry(fuse_qry_feats)
+
+        # Update segmentation features if needed
+        seg_feats = self.roi_ins(seg_feats) if self.roi_ins is not None else seg_feats
         num_boxes, feat_size, rH, rW = seg_feats.size()
-        seg_feats = seg_feats.permute(0, 2, 3, 1).flatten(0, 2)
 
         # Get query and batch indices
         qry_ids = torch.arange(num_boxes, device=device)[:, None].expand(-1, rH*rW).flatten()
@@ -1042,20 +1061,8 @@ class TopDownSegHead(nn.Module):
         pos_ids = torch.stack(pos_ids, dim=2)
         pos_ids = pos_ids[None, :, :, :].expand(num_boxes, -1, -1, -1).flatten(0, 2)
 
-        # Update segmentation features
-        seg_feats = self.key(seg_feats) if self.key is not None else seg_feats
-
-        # Add position encodings if needed
-        if self.pos_enc is not None:
-            pos_wh = torch.tensor([1/rW, 1/rH], device=device)
-            pos_xy = pos_wh/2 + pos_ids * pos_wh
-            seg_feats = seg_feats + self.pos_enc(pos_xy)
-
-        # Fuse query features if needed
-        if self.fuse_qry is not None:
-            qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
-            fuse_qry_feats = torch.cat([qry_feats[qry_ids], seg_feats], dim=1)
-            seg_feats = seg_feats + self.fuse_qry(fuse_qry_feats)
+        # Get segmentation features in flattened format
+        seg_feats = seg_feats.permute(0, 2, 3, 1).flatten(0, 2)
 
         # Append padding feature to segmentation features
         seg_feats = torch.cat([seg_feats, seg_feats.new_zeros([1, feat_size])], dim=0)
