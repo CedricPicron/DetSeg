@@ -225,18 +225,6 @@ model = dict(
                 out_channels=256,
                 featmap_strides=[4, 8, 16, 32],
             ),
-            key_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
             pos_enc_cfg=dict(
                 type='SinePosEncoder2d',
                 feat_size=256,
@@ -255,9 +243,10 @@ model = dict(
             ],
             fuse_qry_cfg=[
                 dict(
-                    type='nn.Linear',
-                    in_features=512,
-                    out_features=256,
+                    type='nn.Conv2d',
+                    in_channels=512,
+                    out_channels=256,
+                    kernel_size=1,
                     bias=True,
                 ),
                 dict(
@@ -265,12 +254,21 @@ model = dict(
                     inplace=True,
                 ),
                 dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
+                    type='nn.Conv2d',
+                    in_channels=256,
+                    out_channels=256,
+                    kernel_size=1,
                     bias=True,
                 ),
             ],
+            roi_ins_cfg=dict(
+                type='mmcv.ConvModule',
+                num_layers=4,
+                in_channels=256,
+                out_channels=256,
+                kernel_size=3,
+                padding=1,
+            ),
             proc_cfg=[[
                 dict(
                     type='SkipConnection',
