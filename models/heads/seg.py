@@ -1019,35 +1019,35 @@ class TopDownSegHead(nn.Module):
         qry_boxes = qry_boxes[seg_qry_ids]
         batch_ids = batch_ids[seg_qry_ids]
 
-        # Extract segmentation features
+        # Extract RoI features
         roi_boxes = qry_boxes.to_format('xyxy').to_img_scale(images[0]).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         key_feat_maps = self.key_2d(key_feat_maps) if self.key_2d is not None else key_feat_maps
         roi_feat_maps = key_feat_maps[:self.roi_ext.num_inputs]
-        seg_feats = self.roi_ext(roi_feat_maps, roi_boxes)
+        roi_feats = self.roi_ext(roi_feat_maps, roi_boxes)
 
         # Add position encodings if needed
         if self.pos_enc is not None:
-            rH, rW = seg_feats.size()[2:]
+            rH, rW = roi_feats.size()[2:]
             pts_x = torch.linspace(0.5/rW, 1-0.5/rW, steps=rW, device=device)
             pts_y = torch.linspace(0.5/rH, 1-0.5/rH, steps=rH, device=device)
 
             norm_xy = torch.meshgrid(pts_x, pts_y, indexing='xy')
             norm_xy = torch.stack(norm_xy, dim=2).flatten(0, 1)
-            seg_feats = seg_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
+            roi_feats = roi_feats + self.pos_enc(norm_xy).t().view(1, -1, rH, rW)
 
         # Fuse query features if needed
         if self.fuse_qry is not None:
             qry_feats = self.qry(qry_feats) if self.qry is not None else qry_feats
-            qry_feats = qry_feats[:, :, None, None].expand_as(seg_feats)
+            qry_feats = qry_feats[:, :, None, None].expand_as(roi_feats)
 
-            fuse_qry_feats = torch.cat([qry_feats, seg_feats], dim=1)
-            seg_feats = seg_feats + self.fuse_qry(fuse_qry_feats)
+            fuse_qry_feats = torch.cat([qry_feats, roi_feats], dim=1)
+            roi_feats = roi_feats + self.fuse_qry(fuse_qry_feats)
 
-        # Update segmentation features if needed
-        seg_feats = self.roi_ins(seg_feats) if self.roi_ins is not None else seg_feats
-        num_boxes, feat_size, rH, rW = seg_feats.size()
+        # Update RoI features if needed
+        roi_feats = self.roi_ins(roi_feats) if self.roi_ins is not None else roi_feats
+        num_boxes, feat_size, rH, rW = roi_feats.size()
 
         # Get query and batch indices
         qry_ids = torch.arange(num_boxes, device=device)[:, None].expand(-1, rH*rW).flatten()
@@ -1061,20 +1061,18 @@ class TopDownSegHead(nn.Module):
         pos_ids = torch.stack(pos_ids, dim=2)
         pos_ids = pos_ids[None, :, :, :].expand(num_boxes, -1, -1, -1).flatten(0, 2)
 
-        # Get segmentation features in flattened format
-        seg_feats = seg_feats.permute(0, 2, 3, 1).flatten(0, 2)
+        # Get core and auxiliary features
+        core_feats = roi_feats.permute(0, 2, 3, 1).flatten(0, 2)
+        aux_feats = roi_feats.new_zeros([1, feat_size])
 
-        # Append padding feature to segmentation features
-        seg_feats = torch.cat([seg_feats, seg_feats.new_zeros([1, feat_size])], dim=0)
-
-        # Get core mask
-        bool_kwargs = {'dtype': torch.bool, 'device': device}
-        core_mask = torch.cat([torch.ones(num_boxes*rH*rW, **bool_kwargs), torch.zeros(1, **bool_kwargs)], dim=0)
+        # Get number of core features
+        num_core_feats = len(core_feats)
 
         # Get adjacency indices
         offs = torch.tensor([-rW-1, -rW, -rW+1, -1, 0, 1, rW-1, rW, rW+1], device=device)
         adj_ids = torch.arange(num_boxes*rH*rW, device=device)[:, None] + offs
 
+        bool_kwargs = {'dtype': torch.bool, 'device': device}
         pad_mask = torch.tensor([1] + [0]*rH + [1], **bool_kwargs)[:, None]
         pad_mask = pad_mask | torch.tensor([1] + [0]*rW + [1], **bool_kwargs)[None, :]
 
@@ -1117,13 +1115,12 @@ class TopDownSegHead(nn.Module):
         # Perform segmentation iterations
         for i in range(self.seg_iters):
 
-            # Process segmentation features
-            seg_feats = self.proc[i](seg_feats, mask=core_mask, adj_ids=adj_ids)
+            # Update core features
+            core_feats = self.proc[i](core_feats, aux_feats=aux_feats, adj_ids=adj_ids)
 
             # Get segmentation and refinement logits
-            core_seg_feats = seg_feats[core_mask]
-            seg_logits = self.seg[i](core_seg_feats)
-            ref_logits = self.ref[i](core_seg_feats)
+            seg_logits = self.seg[i](core_feats)
+            ref_logits = self.ref[i](core_feats)
 
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
@@ -1132,59 +1129,66 @@ class TopDownSegHead(nn.Module):
             if i < self.seg_iters-1:
 
                 # Get refine mask
-                num_core_elems = len(seg_logits)
-
-                if num_core_elems > self.refines_per_iter:
+                if num_core_feats > self.refines_per_iter:
                     refine_ids = torch.topk(ref_logits, self.refines_per_iter, sorted=False)[1]
-                    core_refine_mask = torch.zeros(num_core_elems, **bool_kwargs)
-                    core_refine_mask[refine_ids] = True
+                    refine_mask = torch.zeros(num_core_feats, **bool_kwargs)
+                    refine_mask[refine_ids] = True
 
                 else:
-                    core_refine_mask = torch.ones(num_core_elems, **bool_kwargs)
-
-                refine_mask = core_mask.clone()
-                refine_mask[core_mask] = core_refine_mask
+                    refine_mask = torch.ones(num_core_feats, **bool_kwargs)
 
                 # Update adjacency indices
-                adj_ids = adj_ids[core_refine_mask]
+                adj_ids = adj_ids[refine_mask]
+                new_core_ids = torch.empty(num_core_feats, dtype=torch.int64, device=device)
+
+                num_refines = len(adj_ids)
+                num_non_refines = num_core_feats - num_refines
+                num_core_feats = 4 * num_refines
+                num_aux_feats = len(aux_feats)
+
+                mid = num_core_feats + num_aux_feats
+                end = mid + num_non_refines
+
+                new_core_ids[refine_mask] = torch.arange(3, num_core_feats, step=4, device=device)
+                new_aux_ids = torch.arange(num_core_feats, mid, device=device)
+                new_core_ids[~refine_mask] = torch.arange(mid, end, device=device)
+                new_ids = torch.cat([new_core_ids, new_aux_ids], dim=0)
+
+                adj_ids = new_ids[adj_ids]
                 adj_ids = adj_ids[:, ids]
 
-                shifts = torch.where(refine_mask, 3, 0).cumsum(dim=0)
-                shifts = shifts[adj_ids]
+                offs = base_offs[None, :, :].expand(num_refines, -1, -1)
+                offs = torch.where(adj_ids < 4 * num_refines, offs, 0)
 
-                adj_refine_mask = refine_mask[adj_ids]
-                offs = base_offs[None, :, :].expand_as(adj_refine_mask).clone()
-                offs[~adj_refine_mask] = 0
-
-                adj_ids = adj_ids + shifts - offs
+                adj_ids = adj_ids - offs
                 adj_ids = adj_ids.flatten(0, 1)
                 used_ids, adj_ids = adj_ids.unique(sorted=True, return_inverse=True)
 
-                # Update core mask
-                repeats = torch.where(refine_mask, 4, 1)
-                core_mask = refine_mask.repeat_interleave(repeats, dim=0)
-                core_mask = core_mask[used_ids]
+                # Update core and auxiliary features
+                aux_feats = torch.cat([aux_feats, core_feats[~refine_mask]], dim=0)
+                core_feats = core_feats[refine_mask]
+
+                used_aux_ids = used_ids[num_core_feats:] - num_core_feats
+                aux_feats = aux_feats[used_aux_ids]
 
                 # Update query indices
-                qry_ids = qry_ids[core_refine_mask].repeat_interleave(4, dim=0)
+                qry_ids = qry_ids[refine_mask].repeat_interleave(4, dim=0)
                 qry_ids_list.append(qry_ids)
 
                 # Update batch indices
-                batch_ids = batch_ids[core_refine_mask]
-                batch_ids = batch_ids.repeat_interleave(4, dim=0)
+                batch_ids = batch_ids[refine_mask].repeat_interleave(4, dim=0)
 
                 # Update position indices
-                pos_ids = 2*pos_ids[core_refine_mask, None, :] + pos_offs
+                pos_ids = 2*pos_ids[refine_mask, None, :] + pos_offs
                 pos_ids = pos_ids.flatten(0, 1)
                 pos_ids_list.append(pos_ids)
 
                 # Fuse top-down features
-                fuse_td_feats = self.fuse_td[i](seg_feats[refine_mask])
-                seg_feats = seg_feats.repeat_interleave(repeats, dim=0)[used_ids]
-                seg_feats[core_mask] += fuse_td_feats
+                fuse_td_feats = self.fuse_td[i](core_feats)
+                core_feats = core_feats.repeat_interleave(4, dim=0) + fuse_td_feats
 
                 # Fuse key features
-                key_feats = torch.empty(len(batch_ids), key_feat_size, device=device)
+                key_feats = torch.empty(num_core_feats, key_feat_size, device=device)
 
                 pos_wh = 2**(-i-1) * torch.tensor([1/rW, 1/rH], device=device)
                 pos_xy = 0.5*pos_wh + pos_ids * pos_wh
@@ -1200,11 +1204,12 @@ class TopDownSegHead(nn.Module):
                         sample_key_feats = F.grid_sample(key_feat_maps[0][j:j+1], sample_grid, align_corners=False)
                         key_feats[batch_mask_j] = sample_key_feats[0, :, 0, :].t()
 
-                fuse_key_feats = torch.cat([seg_feats[core_mask], key_feats], dim=1)
-                seg_feats[core_mask] += self.fuse_key[i](fuse_key_feats)
+                fuse_key_feats = torch.cat([core_feats, key_feats], dim=1)
+                core_feats += self.fuse_key[i](fuse_key_feats)
 
-                # Transition segmentation features
-                seg_feats = self.trans[i](seg_feats)
+                # Transition core and auxiliary features
+                core_feats = self.trans[i](core_feats)
+                aux_feats = self.trans[i](aux_feats)
 
         # Store desired items in storage dictionary
         storage_dict['roi_size'] = (rH, rW)

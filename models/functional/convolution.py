@@ -8,26 +8,27 @@ import torch.nn.functional as F
 from models.functional.autograd import AdjConv2d
 
 
-def adj_conv2d(in_feats, weight, bias, adj_ids):
+def adj_conv2d(in_core_feats, aux_feats, adj_ids, weight, bias):
     """
     Function implementing the 2D adjacency convolution operation.
 
-    This custom implementation does not keep the intermediate data structure in memory.
+    This custom implementation does not keep intermediate data structures in memory.
 
     Args:
-        in_feats (FloatTensor): Input features of shape [num_feats, in_channels].
+        in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
+        aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
+        adj_ids (LongTensor): Adjacency indices of core features of shape [num_core_feats, kH * kW].
         weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
         bias (FloatTensor): Tensor with convolution biases of shape [out_channels].
-        adj_ids (LongTensor): Adjacency indices of convolution features of shape [num_conv_feats, kH * kW].
 
     Returns:
-        out_feats (FloatTensor): Output convolution features of shape [num_conv_feats, out_channels].
+        out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
     """
 
     # Apply custom AdjConv2d autograd function
-    out_feats = AdjConv2d.apply(in_feats, weight, bias, adj_ids)
+    out_core_feats = AdjConv2d.apply(in_core_feats, aux_feats, adj_ids, weight, bias)
 
-    return out_feats
+    return out_core_feats
 
 
 def conv_transpose2d(input, weight, base_map_size=None, stride=1, padding=0, dilation=1, max_counter=100, **kwargs):

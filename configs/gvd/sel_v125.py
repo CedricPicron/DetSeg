@@ -280,11 +280,11 @@ model = dict(
                             kernel_size=3,
                         ),
                         dict(
-                            type='MaskedLayerNorm',
+                            type='nn.LayerNorm',
                             normalized_shape=2**(8-i),
                         ),
                         dict(
-                            type='MaskedLinear',
+                            type='nn.Linear',
                             in_features=2**(8-i),
                             out_features=2**(10-i),
                             bias=True,
@@ -294,7 +294,7 @@ model = dict(
                             inplace=True,
                         ),
                         dict(
-                            type='MaskedLinear',
+                            type='nn.Linear',
                             in_features=2**(10-i),
                             out_features=2**(8-i),
                             bias=True,

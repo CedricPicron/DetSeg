@@ -41,29 +41,24 @@ class AdjacencyConv2d(nn.Module):
         self.register_parameter('conv_weight', Parameter(conv_weight))
         self.register_parameter('conv_bias', Parameter(conv_module.bias))
 
-    def forward(self, in_feats, mask, adj_ids, **kwargs):
+    def forward(self, in_core_feats, aux_feats, adj_ids, **kwargs):
         """
         Forward method of the AdjacencyConv2d module.
 
         Args:
-            in_feats (FloatTensor): Input features of shape [num_feats, in_channels].
-            mask (BoolTensor): Mask indicating for which features to apply convolution of shape [num_feats].
-            adj_ids (LongTensor): Adjacency indices of convolution features of shape [num_conv_feats, kH * kW].
+            in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
+            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
+            adj_ids (LongTensor): Adjacency indices of core features of shape [num_core_feats, kH * kW].
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            out_feats (FloatTensor): Output features of shape [num_feats, out_channels].
+            out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
         """
 
-        # Initialize tensor with zeros for output features
-        num_feats = len(in_feats)
-        out_channels = len(self.conv_bias)
-        out_feats = in_feats.new_zeros([num_feats, out_channels])
+        # Perform 2D adjacency convolution
+        out_core_feats = adj_conv2d(in_core_feats, aux_feats, adj_ids, self.conv_weight, self.conv_bias)
 
-        # Apply convolution on convolution features
-        out_feats[mask] = adj_conv2d(in_feats, self.conv_weight, self.conv_bias, adj_ids)
-
-        return out_feats
+        return out_core_feats
 
 
 @MODELS.register_module()

@@ -12,70 +12,77 @@ class AdjConv2d(Function):
     """
     Class implementing the AdjConv2d autograd function.
 
-    This custom autograd function alters the backward pass by not keeping the intermediate data structure in memory.
+    This custom autograd function avoids keeping intermediate data structures in memory.
     """
 
     @staticmethod
-    def forward(ctx, in_feats, weight, bias, adj_ids):
+    def forward(ctx, in_core_feats, aux_feats, adj_ids, weight, bias):
         """
         Forward method of the AdjConv2d autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
-            in_feats (FloatTensor): Input features of shape [num_feats, in_channels].
+            in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
+            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
+            adj_ids (LongTensor): Adjacency indices of core features of shape [num_core_feats, kH * kW].
             weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
             bias (FloatTensor): Tensor with the convolution biases of shape [out_channels].
-            adj_ids (LongTensor): Adjacency indices of convolution features of shape [num_conv_feats, kH * kW].
 
         Returns:
-            out_feats (FloatTensor): Output convolution features of shape [num_conv_feats, out_channels].
+            out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
         """
 
-        # Get intermediate features
-        inter_feats = in_feats[adj_ids].flatten(1)
+        # Get intermediate data structures
+        cat_feats = torch.cat([in_core_feats, aux_feats], dim=0)
+        conv_feats = cat_feats[adj_ids].flatten(1)
 
-        # Get output features
-        out_feats = torch.mm(inter_feats, weight.t()) + bias
+        # Get output core features
+        out_core_feats = torch.mm(conv_feats, weight.t()) + bias
 
         # Save desired input tensors for backward pass
-        ctx.save_for_backward(in_feats, weight, adj_ids)
+        ctx.save_for_backward(in_core_feats, aux_feats, adj_ids, weight)
 
-        return out_feats
+        return out_core_feats
 
     @staticmethod
     @once_differentiable
-    def backward(ctx, grad_out_feats):
+    def backward(ctx, grad_out_core_feats):
         """
         Backward method of the AdjConv2d autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
-            grad_out_feats (FloatTensor): Gradient w.r.t. the output features of shape [num_conv_feats, out_channels].
+            grad_out_core_feats (FloatTensor): Output core features gradient of shape [num_core_feats, out_channels].
 
         Returns:
-            grad_in_feats (FloatTensor): Gradient w.r.t. the input features of shape [num_feats, in_channels].
-            grad_weight (FloatTensor): Gradient w.r.t. the conv weights of shape [out_channels, kH * kW * in_channels].
-            grad_bias (FloatTensor): Gradient w.r.t. the conv biases of shape [out_channels].
+            grad_in_core_feats (FloatTensor): Input core features gradient of shape [num_core_feats, in_channels].
+            grad_aux_feats (FloatTensor): Auxiliary features gradient of shape [num_aux_feats, in_channels].
             grad_adj_ids (None): None.
+            grad_weight (FloatTensor): Convolution weights gradient of shape [out_channels, kH * kW * in_channels].
+            grad_bias (FloatTensor): Convolution biases gradient of shape [out_channels].
         """
 
         # Recover desired input tensors from forward method
-        in_feats, weight, adj_ids = ctx.saved_tensors
+        in_core_feats, aux_feats, adj_ids, weight = ctx.saved_tensors
 
-        # Recompute intermediate features
-        inter_feats = in_feats[adj_ids].flatten(1)
+        # Recompute intermediate data structures
+        cat_feats = torch.cat([in_core_feats, aux_feats], dim=0)
+        conv_feats = cat_feats[adj_ids].flatten(1)
 
         # Get gradient tensors
-        grad_inter_feats = torch.mm(grad_out_feats, weight)
-        grad_weight = torch.mm(grad_out_feats.t(), inter_feats)
-        grad_bias = grad_out_feats.sum(dim=0)
+        grad_conv_feats = torch.mm(grad_out_core_feats, weight)
+        grad_weight = torch.mm(grad_out_core_feats.t(), conv_feats)
+        grad_bias = grad_out_core_feats.sum(dim=0)
 
-        in_channels = in_feats.size(dim=1)
-        grad_inter_feats = grad_inter_feats.view(-1, in_channels)
-        grad_in_feats = torch.zeros_like(in_feats).index_add_(0, adj_ids.flatten(), grad_inter_feats)
+        num_core_feats, in_channels = in_core_feats.size()
+        grad_conv_feats = grad_conv_feats.view(-1, in_channels)
+        grad_cat_feats = torch.zeros_like(cat_feats).index_add_(0, adj_ids.flatten(), grad_conv_feats)
+
+        grad_in_core_feats = grad_cat_feats[:num_core_feats]
+        grad_aux_feats = grad_cat_feats[num_core_feats:]
         grad_adj_ids = None
 
-        return grad_in_feats, grad_weight, grad_bias, grad_adj_ids
+        return grad_in_core_feats, grad_aux_feats, grad_adj_ids, grad_weight, grad_bias
 
 
 class CustomClamp(Function):
