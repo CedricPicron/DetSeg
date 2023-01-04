@@ -167,7 +167,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                     pred_scores_i = pred_scores_i[candidate_ids]
 
                     pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
-                    pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
+                    pred_boxes_i = pred_boxes_i.to_img_scale(images[0]).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
@@ -463,7 +463,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
-        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = roi_boxes.to_img_scale(images[0]).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         # Get mask logits
@@ -682,7 +682,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                     pred_scores_i = pred_scores_i[candidate_ids]
 
                     pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
-                    pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
+                    pred_boxes_i = pred_boxes_i.to_img_scale(images[0]).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
@@ -845,7 +845,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
-        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = roi_boxes.to_img_scale(images[0]).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         # Get mask logits
@@ -1035,7 +1035,7 @@ class RefineMaskRoIHead(StandardRoIHead):
                     pred_scores_i = pred_scores_i[candidate_ids]
 
                     pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
-                    pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
+                    pred_boxes_i = pred_boxes_i.to_img_scale(images[0]).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
@@ -1189,7 +1189,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         # Get RoI boxes
         roi_boxes = pred_boxes[matched_qry_ids].to_format('xyxy')
-        roi_boxes = roi_boxes.to_img_scale(images).boxes.detach()
+        roi_boxes = roi_boxes.to_img_scale(images[0]).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         # Get mask logits

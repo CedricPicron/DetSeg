@@ -751,6 +751,9 @@ class TopDownSegHead(nn.Module):
         pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
         pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
+        # Get prediction boxes in desired format
+        pred_boxes = pred_boxes.to_format('xyxy').to_img_scale(images[0]).boxes
+
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
         batch_ids = torch.arange(batch_size, device=device)
@@ -784,15 +787,12 @@ class TopDownSegHead(nn.Module):
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    pred_boxes_i = pred_boxes[pred_qry_ids_i].to_format('xyxy')
-                    pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
-
+                    pred_boxes_i = pred_boxes[pred_qry_ids_i]
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
 
                     pred_qry_ids_i = pred_qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
-                    pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
 
                 else:
@@ -806,7 +806,6 @@ class TopDownSegHead(nn.Module):
 
                     pred_qry_ids_i = pred_qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
-                    pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Get query indices for which to compute segmentations
@@ -837,10 +836,10 @@ class TopDownSegHead(nn.Module):
                     mask_logits = F.interpolate(mask_logits, roi_size, mode='bilinear', align_corners=False)
 
             mask_scores = mask_logits.sigmoid()
-            mask_scores = mask_scores[pred_inv_ids]
+            pred_boxes_i = pred_boxes[seg_qry_ids]
 
             mask_scores = _do_paste_mask(mask_scores, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_scores > self.mask_thr
+            pred_masks_i = mask_scores[pred_inv_ids] > self.mask_thr
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
