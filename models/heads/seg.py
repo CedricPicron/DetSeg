@@ -579,20 +579,20 @@ class TopDownSegHead(nn.Module):
 
     Attributes:
         key_2d (nn.Module): Optional module updating the 2D key feature maps.
-        roi_ext (nn.Module): Module extracting the initial segmentation features from feature maps based on RoI boxes.
+        roi_ext (nn.Module): Module extracting RoI features from feature maps based on RoI boxes.
 
-        pos_enc (nn.Module): Optional module adding position features to the segmentation features.
+        pos_enc (nn.Module): Optional module adding position features to RoI features.
         qry (nn.Module): Optional module updating the query features.
-        fuse_qry (nn.Module): Optional module fusing the query features with the segmentation features.
-        roi_ins (nn.Module): Optional module updating the segmentation features in map-based format.
+        fuse_qry (nn.Module): Optional module fusing query features with RoI features.
+        roi_ins (nn.Module): Optional module updating the RoI features.
 
-        proc (nn.ModuleList): List [seg_iters] of modules processing the segmentation features.
-        seg (nn.ModuleList): List [seg_iters] of modules computing segmentation logits from segmentation features.
-        ref (nn.ModuleList): List [seg_iters] of modules computing refinement logits from segmentation features.
+        seg (nn.ModuleList): List [seg_iters] of modules computing segmentation logits from core features.
+        ref (nn.ModuleList): List [seg_iters] of modules computing refinement logits from core features.
 
-        fuse_td (nn.ModuleList): List [seg_iters-1] of modules fusing top-down features with segmentation features.
-        fuse_key (nn.ModuleList): List [seg_iters-1] of modules fusing key features with segmentation features.
-        trans (nn.ModuleList): List [seg_iters-1] of modules transitioning segmentation features to new feature space.
+        fuse_td (nn.ModuleList): List [seg_iters-1] of modules fusing top-down features with core features.
+        fuse_key (nn.ModuleList): List [seg_iters-1] of modules fusing key features with core features.
+        trans (nn.ModuleList): List [seg_iters-1] of modules transitioning core and auxiliary features to new space.
+        proc (nn.ModuleList): List [seg_iters-1] of modules processing the core features.
 
         map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
@@ -617,7 +617,7 @@ class TopDownSegHead(nn.Module):
         ref_loss_weights (Tuple): Tuple of size [seg_iters] containing the refinement loss weights.
     """
 
-    def __init__(self, roi_ext_cfg, proc_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, map_offset,
+    def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, map_offset,
                  key_min_id, key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg,
                  seg_loss_weights, ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None,
                  fuse_qry_cfg=None, roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
@@ -627,12 +627,12 @@ class TopDownSegHead(nn.Module):
 
         Args:
             roi_ext_cfg: Configuration dictionary specifying the RoI-extractor module.
-            proc_cfg (Dict): Configuration dictionary specifying the processing module.
             seg_cfg (Dict): Configuration dictionary specifying the segmentation module.
             ref_cfg (Dict): Configuration dictionary specifying the refinement module.
             fuse_td_cfg (Dict): Configuration dictionary specifying the fuse top-down module.
             fuse_key_cfg (Dict): Configuration dictionary specifying the fuse key module.
             trans_cfg (Dict): Configuration dictionary specifying the transition module.
+            proc_cfg (Dict): Configuration dictionary specifying the processing module.
             map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
             key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
@@ -668,13 +668,13 @@ class TopDownSegHead(nn.Module):
         self.fuse_qry = build_model(fuse_qry_cfg) if fuse_qry_cfg is not None else None
         self.roi_ins = build_model(roi_ins_cfg) if roi_ins_cfg is not None else None
 
-        self.proc = nn.ModuleList([build_model(cfg_i) for cfg_i in proc_cfg])
         self.seg = nn.ModuleList([build_model(cfg_i) for cfg_i in seg_cfg])
         self.ref = nn.ModuleList([build_model(cfg_i) for cfg_i in ref_cfg])
 
         self.fuse_td = nn.ModuleList([build_model(cfg_i) for cfg_i in fuse_td_cfg])
         self.fuse_key = nn.ModuleList([build_model(cfg_i) for cfg_i in fuse_key_cfg])
         self.trans = nn.ModuleList([build_model(cfg_i) for cfg_i in trans_cfg])
+        self.proc = nn.ModuleList([build_model(cfg_i) for cfg_i in proc_cfg])
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -1048,7 +1048,7 @@ class TopDownSegHead(nn.Module):
         roi_feats = self.roi_ins(roi_feats) if self.roi_ins is not None else roi_feats
         num_boxes, feat_size, rH, rW = roi_feats.size()
 
-        # Get map indices from which segmentation features were extracted
+        # Get map indices from which RoI features were extracted
         map_ids = self.roi_ext.map_roi_levels(roi_boxes, self.roi_ext.num_inputs)
         max_map_id = map_ids.max().item()
         map_ids = map_ids[:, None].expand(-1, rH*rW).flatten()
@@ -1118,9 +1118,6 @@ class TopDownSegHead(nn.Module):
 
         # Perform segmentation iterations
         for i in range(self.seg_iters):
-
-            # Update core features
-            core_feats = self.proc[i](core_feats, aux_feats=aux_feats, adj_ids=adj_ids)
 
             # Get segmentation and refinement logits
             seg_logits = self.seg[i](core_feats)
@@ -1222,6 +1219,9 @@ class TopDownSegHead(nn.Module):
                 # Transition core and auxiliary features
                 core_feats = self.trans[i](core_feats)
                 aux_feats = self.trans[i](aux_feats)
+
+                # Update core features
+                core_feats = self.proc[i](core_feats, aux_feats=aux_feats, adj_ids=adj_ids)
 
         # Store desired items in storage dictionary
         storage_dict['roi_size'] = (rH, rW)

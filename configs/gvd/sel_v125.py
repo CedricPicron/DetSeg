@@ -269,39 +269,6 @@ model = dict(
                 kernel_size=3,
                 padding=1,
             ),
-            proc_cfg=[[
-                dict(
-                    type='SkipConnection',
-                    res_cfg=[
-                        dict(
-                            type='AdjacencyConv2d',
-                            in_channels=2**(8-i),
-                            out_channels=2**(8-i),
-                            kernel_size=3,
-                        ),
-                        dict(
-                            type='nn.LayerNorm',
-                            normalized_shape=2**(8-i),
-                        ),
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**(8-i),
-                            out_features=2**(10-i),
-                            bias=True,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**(10-i),
-                            out_features=2**(8-i),
-                            bias=True,
-                        ),
-                    ],
-                ),
-            ] for i in range(4)],
             seg_cfg=[[
                 dict(
                     type='nn.Linear',
@@ -396,6 +363,39 @@ model = dict(
                 dict(
                     type='nn.ReLU',
                     inplace=True,
+                ),
+            ] for i in range(3)],
+            proc_cfg=[[
+                dict(
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='AdjacencyConv2d',
+                            in_channels=2**(7-i),
+                            out_channels=2**(7-i),
+                            kernel_size=3,
+                        ),
+                        dict(
+                            type='nn.LayerNorm',
+                            normalized_shape=2**(7-i),
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**(7-i),
+                            out_features=2**(9-i),
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**(9-i),
+                            out_features=2**(7-i),
+                            bias=True,
+                        ),
+                    ],
                 ),
             ] for i in range(3)],
             map_offset=1,
