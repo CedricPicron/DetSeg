@@ -1048,6 +1048,11 @@ class TopDownSegHead(nn.Module):
         roi_feats = self.roi_ins(roi_feats) if self.roi_ins is not None else roi_feats
         num_boxes, feat_size, rH, rW = roi_feats.size()
 
+        # Get map indices from which segmentation features were extracted
+        map_ids = self.roi_ext.map_roi_levels(roi_boxes, self.roi_ext.num_inputs)
+        max_map_id = map_ids.max().item()
+        map_ids = map_ids[:, None].expand(-1, rH*rW).flatten()
+
         # Get query and batch indices
         qry_ids = torch.arange(num_boxes, device=device)[:, None].expand(-1, rH*rW).flatten()
         batch_ids = batch_ids[:, None].expand(-1, rH*rW).flatten()
@@ -1170,6 +1175,11 @@ class TopDownSegHead(nn.Module):
                 used_aux_ids = used_ids[num_core_feats:] - num_core_feats
                 aux_feats = aux_feats[used_aux_ids]
 
+                # Update map indices
+                map_ids = torch.clamp(map_ids-1, min=0)
+                map_ids = map_ids[refine_mask].repeat_interleave(4, dim=0)
+                max_map_id = max(max_map_id-1, 0)
+
                 # Update query indices
                 qry_ids = qry_ids[refine_mask].repeat_interleave(4, dim=0)
                 qry_ids_list.append(qry_ids)
@@ -1196,12 +1206,15 @@ class TopDownSegHead(nn.Module):
                 seg_xy = seg_boxes_i[:, :2] + pos_xy * seg_boxes_i[:, 2:]
 
                 for j in range(batch_size):
-                    batch_mask_j = batch_ids == j
+                    mask_j = batch_ids == j
 
-                    if batch_mask_j.sum().item() > 0:
-                        sample_grid = 2 * seg_xy[batch_mask_j][None, None, :, :] - 1
-                        sample_key_feats = F.grid_sample(key_feat_maps[0][j:j+1], sample_grid, align_corners=False)
-                        key_feats[batch_mask_j] = sample_key_feats[0, :, 0, :].t()
+                    for k in range(max_map_id+1):
+                        mask_jk = mask_j & (map_ids == k)
+
+                        if mask_jk.sum().item() > 0:
+                            sample_grid = 2 * seg_xy[mask_jk][None, None, :, :] - 1
+                            sample_key_feats = F.grid_sample(key_feat_maps[k][j:j+1], sample_grid, align_corners=False)
+                            key_feats[mask_jk] = sample_key_feats[0, :, 0, :].t()
 
                 fuse_key_feats = torch.cat([core_feats, key_feats], dim=1)
                 core_feats += self.fuse_key[i](fuse_key_feats)
