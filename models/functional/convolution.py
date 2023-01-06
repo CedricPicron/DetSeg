@@ -5,30 +5,7 @@ Collection of functions related to convolutions.
 import torch
 import torch.nn.functional as F
 
-from models.functional.autograd import AdjConv2d
-
-
-def adj_conv2d(in_core_feats, aux_feats, adj_ids, weight, bias):
-    """
-    Function implementing the 2D adjacency convolution operation.
-
-    This custom implementation does not keep intermediate data structures in memory.
-
-    Args:
-        in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
-        aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
-        adj_ids (LongTensor): Adjacency indices of core features of shape [num_core_feats, kH * kW].
-        weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
-        bias (FloatTensor): Tensor with convolution biases of shape [out_channels].
-
-    Returns:
-        out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
-    """
-
-    # Apply custom AdjConv2d autograd function
-    out_core_feats = AdjConv2d.apply(in_core_feats, aux_feats, adj_ids, weight, bias)
-
-    return out_core_feats
+from models.functional.autograd import IdConv2d
 
 
 def conv_transpose2d(input, weight, base_map_size=None, stride=1, padding=0, dilation=1, max_counter=100, **kwargs):
@@ -97,3 +74,26 @@ def conv_transpose2d(input, weight, base_map_size=None, stride=1, padding=0, dil
     output = F.conv_transpose2d(input, weight, stride=stride, padding=padding, dilation=dilation, **kwargs)
 
     return output
+
+
+def id_conv2d(in_core_feats, aux_feats, conv_ids, weight, bias):
+    """
+    Function implementing the 2D index-based convolution operation.
+
+    This custom implementation does not keep intermediate data structures in memory.
+
+    Args:
+        in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
+        aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
+        conv_ids (LongTensor): Indices selecting convolution features of shape [num_core_feats, kH * kW].
+        weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
+        bias (FloatTensor): Tensor with convolution biases of shape [out_channels].
+
+    Returns:
+        out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
+    """
+
+    # Apply custom IdConv2d autograd function
+    out_core_feats = IdConv2d.apply(in_core_feats, aux_feats, conv_ids, weight, bias)
+
+    return out_core_feats

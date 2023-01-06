@@ -2,6 +2,7 @@
 Collection of utility modules.
 """
 
+import torch
 from torch import nn
 
 from models.build import build_model, MODELS
@@ -148,6 +149,49 @@ class GetApplyInsert(nn.Module):
         in_list.insert(self.insert_id, output)
 
         return in_list
+
+
+@MODELS.register_module()
+class IdAvg2d(nn.Module):
+    """
+    Class implementing the IdAvg2d module.
+    """
+
+    def __init__(self):
+        """
+        Initializes the IdAvg2d module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+    def forward(self, core_feats, aux_feats, id_map, **kwargs):
+        """
+        Forward method of the IdAvg2d module.
+
+        Args:
+            core_feats (FloatTensor): Core features of shape [num_core_feats, feat_size].
+            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, feat_size].
+            id_map (LongTensor): Index map with feature indices of shape [num_rois, rH, rW].
+            kwargs (Dict): Dictionary with unused keyword arguments.
+
+        Returns:
+            avg_feat (FloatTensor): Average feature of shape [1, feat_size].
+        """
+
+        # Get average feature
+        num_core_feats = len(core_feats)
+        num_aux_feats = len(aux_feats)
+        num_feats = num_core_feats + num_aux_feats
+
+        counts = torch.bincount(id_map.flatten(), minlength=num_feats)
+        counts = counts[:, None]
+
+        avg_feat = (counts[:num_core_feats] * core_feats).sum(dim=0, keepdim=True)
+        avg_feat += (counts[num_core_feats:] * aux_feats).sum(dim=0, keepdim=True)
+        avg_feat *= 1/id_map.numel()
+
+        return avg_feat
 
 
 @MODELS.register_module()
