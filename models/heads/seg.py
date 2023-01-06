@@ -816,20 +816,20 @@ class TopDownSegHead(nn.Module):
 
             # Retrieve various items related to segmentation predictions from storage dictionary
             roi_size = storage_dict['roi_size']
-            qry_ids_list = storage_dict['qry_ids_list']
+            roi_ids_list = storage_dict['roi_ids_list']
             pos_ids_list = storage_dict['pos_ids_list']
             seg_logits_list = storage_dict['seg_logits_list']
 
             # Get prediction masks
-            num_boxes = len(seg_qry_ids)
-            mask_logits = torch.zeros(num_boxes, 1, *roi_size, device=device)
+            num_rois = len(seg_qry_ids)
+            mask_logits = torch.zeros(num_rois, 1, *roi_size, device=device)
 
             for j in range(self.seg_iters):
-                qry_ids = qry_ids_list[j]
+                roi_ids = roi_ids_list[j]
                 pos_ids = pos_ids_list[j]
 
                 seg_logits = seg_logits_list[j]
-                mask_logits[qry_ids, 0, pos_ids[:, 1], pos_ids[:, 0]] = seg_logits
+                mask_logits[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]] = seg_logits
 
                 if j < self.seg_iters-1:
                     roi_size = tuple(2*size for size in roi_size)
@@ -993,7 +993,7 @@ class TopDownSegHead(nn.Module):
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - roi_size (Tuple): tuple [2] containing the size of the initial RoI in (height, width) format;
-                - qry_ids_list (List): list [seg_iters] with post-selection query indices of predictions [num_preds_i];
+                - roi_ids_list (List): list [seg_iters] with RoI indices of predictions [num_preds_i];
                 - pos_ids_list (List): list [seg_iters] with RoI-based position ids in (X, Y) format [num_preds_i, 2];
                 - seg_logits_list (List): list [seg_iters] with segmentation logits of shape [num_preds_i];
                 - ref_logits_list (List): list [seg_iters] with refinement logits of shape [num_preds_i].
@@ -1046,15 +1046,15 @@ class TopDownSegHead(nn.Module):
 
         # Update RoI features if needed
         roi_feats = self.roi_ins(roi_feats) if self.roi_ins is not None else roi_feats
-        num_boxes, feat_size, rH, rW = roi_feats.size()
+        num_rois, feat_size, rH, rW = roi_feats.size()
 
         # Get map indices from which RoI features were extracted
         map_ids = self.roi_ext.map_roi_levels(roi_boxes, self.roi_ext.num_inputs)
         max_map_id = map_ids.max().item()
         map_ids = map_ids[:, None].expand(-1, rH*rW).flatten()
 
-        # Get query and batch indices
-        qry_ids = torch.arange(num_boxes, device=device)[:, None].expand(-1, rH*rW).flatten()
+        # Get RoI and batch indices
+        roi_ids = torch.arange(num_rois, device=device)[:, None].expand(-1, rH*rW).flatten()
         batch_ids = batch_ids[:, None].expand(-1, rH*rW).flatten()
 
         # Get RoI-based position indices in (X, Y) format
@@ -1063,41 +1063,17 @@ class TopDownSegHead(nn.Module):
 
         pos_ids = torch.meshgrid(x_ids, y_ids, indexing='xy')
         pos_ids = torch.stack(pos_ids, dim=2)
-        pos_ids = pos_ids[None, :, :, :].expand(num_boxes, -1, -1, -1).flatten(0, 2)
+        pos_ids = pos_ids[None, :, :, :].expand(num_rois, -1, -1, -1).flatten(0, 2)
 
         # Get core and auxiliary features
         core_feats = roi_feats.permute(0, 2, 3, 1).flatten(0, 2)
-        aux_feats = roi_feats.new_zeros([1, feat_size])
+        aux_feats = roi_feats.new_empty([0, feat_size])
 
         # Get number of core features
         num_core_feats = len(core_feats)
 
-        # Get adjacency indices
-        offs = torch.tensor([-rW-1, -rW, -rW+1, -1, 0, 1, rW-1, rW, rW+1], device=device)
-        adj_ids = torch.arange(num_boxes*rH*rW, device=device)[:, None] + offs
-
-        bool_kwargs = {'dtype': torch.bool, 'device': device}
-        pad_mask = torch.tensor([1] + [0]*rH + [1], **bool_kwargs)[:, None]
-        pad_mask = pad_mask | torch.tensor([1] + [0]*rW + [1], **bool_kwargs)[None, :]
-
-        pad_masks = [pad_mask[:-2, :-2], pad_mask[:-2, 1:-1], pad_mask[:-2, 2:],
-                     pad_mask[1:-1, :-2], pad_mask[1:-1, 1:-1], pad_mask[1:-1, 2:],
-                     pad_mask[2:, :-2], pad_mask[2:, 1:-1], pad_mask[2:, 2:]]
-
-        pad_mask = torch.stack(pad_masks, dim=2)
-        pad_mask = pad_mask[None, :, :, :].expand(num_boxes, -1, -1, -1).flatten(0, 2)
-        adj_ids[pad_mask] = num_boxes*rH*rW
-
-        # Get ids and base_offs tensors used during update of adjacency indices
-        ids = torch.tensor([[0, 1, 1, 3, 4, 4, 3, 4, 4],
-                            [1, 1, 2, 4, 4, 5, 4, 4, 5],
-                            [3, 4, 4, 3, 4, 4, 6, 7, 7],
-                            [4, 4, 5, 4, 4, 5, 7, 7, 8]], device=device)
-
-        base_offs = torch.tensor([[0, 1, 0, 2, 3, 2, 0, 1, 0],
-                                  [1, 0, 1, 3, 2, 3, 1, 0, 1],
-                                  [2, 3, 2, 0, 1, 0, 2, 3, 2],
-                                  [3, 2, 3, 1, 0, 1, 3, 2, 3]], device=device)
+        # Get index map
+        id_map = torch.arange(num_rois*rH*rW, device=device).view(num_rois, rH, rW)
 
         # Get position offsets
         pos_offs = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], device=device)
@@ -1109,7 +1085,7 @@ class TopDownSegHead(nn.Module):
         seg_boxes = qry_boxes.to_format('xywh').normalize(images[0]).boxes
 
         # Store desired items in lists
-        qry_ids_list = [qry_ids]
+        roi_ids_list = [roi_ids]
         pos_ids_list = [pos_ids]
 
         # Initialize empty lists
@@ -1132,17 +1108,16 @@ class TopDownSegHead(nn.Module):
                 # Get refine mask
                 if num_core_feats > self.refines_per_iter:
                     refine_ids = torch.topk(ref_logits, self.refines_per_iter, sorted=False)[1]
-                    refine_mask = torch.zeros(num_core_feats, **bool_kwargs)
+                    refine_mask = torch.zeros(num_core_feats, dtype=torch.bool, device=device)
                     refine_mask[refine_ids] = True
 
                 else:
-                    refine_mask = torch.ones(num_core_feats, **bool_kwargs)
+                    refine_mask = torch.ones(num_core_feats, dtype=torch.bool, device=device)
 
-                # Update adjacency indices
-                adj_ids = adj_ids[refine_mask]
+                # Update id map
                 new_core_ids = torch.empty(num_core_feats, dtype=torch.int64, device=device)
 
-                num_refines = len(adj_ids)
+                num_refines = min(num_core_feats, self.refines_per_iter)
                 num_non_refines = num_core_feats - num_refines
                 num_core_feats = 4 * num_refines
                 num_aux_feats = len(aux_feats)
@@ -1150,36 +1125,34 @@ class TopDownSegHead(nn.Module):
                 mid = num_core_feats + num_aux_feats
                 end = mid + num_non_refines
 
-                new_core_ids[refine_mask] = torch.arange(3, num_core_feats, step=4, device=device)
+                new_core_ids[refine_mask] = torch.arange(0, num_core_feats, step=4, device=device)
                 new_aux_ids = torch.arange(num_core_feats, mid, device=device)
                 new_core_ids[~refine_mask] = torch.arange(mid, end, device=device)
+
                 new_ids = torch.cat([new_core_ids, new_aux_ids], dim=0)
+                id_map_0 = new_ids[id_map]
 
-                adj_ids = new_ids[adj_ids]
-                adj_ids = adj_ids[:, ids]
+                off_mask = id_map_0 < num_core_feats
+                id_map_1 = torch.where(off_mask, id_map_0 + 1, id_map_0)
+                id_map_2 = torch.where(off_mask, id_map_0 + 2, id_map_0)
+                id_map_3 = torch.where(off_mask, id_map_0 + 3, id_map_0)
 
-                offs = base_offs[None, :, :].expand(num_refines, -1, -1)
-                offs = torch.where(adj_ids < 4 * num_refines, offs, 0)
-
-                adj_ids = adj_ids - offs
-                adj_ids = adj_ids.flatten(0, 1)
-                used_ids, adj_ids = adj_ids.unique(sorted=True, return_inverse=True)
+                id_map_01 = torch.stack([id_map_0, id_map_1], dim=3).flatten(2)
+                id_map_23 = torch.stack([id_map_2, id_map_3], dim=3).flatten(2)
+                id_map = torch.stack([id_map_01, id_map_23], dim=2).flatten(1, 2)
 
                 # Update core and auxiliary features
                 aux_feats = torch.cat([aux_feats, core_feats[~refine_mask]], dim=0)
                 core_feats = core_feats[refine_mask]
-
-                used_aux_ids = used_ids[num_core_feats:] - num_core_feats
-                aux_feats = aux_feats[used_aux_ids]
 
                 # Update map indices
                 map_ids = torch.clamp(map_ids-1, min=0)
                 map_ids = map_ids[refine_mask].repeat_interleave(4, dim=0)
                 max_map_id = max(max_map_id-1, 0)
 
-                # Update query indices
-                qry_ids = qry_ids[refine_mask].repeat_interleave(4, dim=0)
-                qry_ids_list.append(qry_ids)
+                # Update RoI indices
+                roi_ids = roi_ids[refine_mask].repeat_interleave(4, dim=0)
+                roi_ids_list.append(roi_ids)
 
                 # Update batch indices
                 batch_ids = batch_ids[refine_mask].repeat_interleave(4, dim=0)
@@ -1199,7 +1172,7 @@ class TopDownSegHead(nn.Module):
                 pos_wh = 2**(-i-1) * torch.tensor([1/rW, 1/rH], device=device)
                 pos_xy = 0.5*pos_wh + pos_ids * pos_wh
 
-                seg_boxes_i = seg_boxes[qry_ids]
+                seg_boxes_i = seg_boxes[roi_ids]
                 seg_xy = seg_boxes_i[:, :2] + pos_xy * seg_boxes_i[:, 2:]
 
                 for j in range(batch_size):
@@ -1221,11 +1194,12 @@ class TopDownSegHead(nn.Module):
                 aux_feats = self.trans[i](aux_feats)
 
                 # Update core features
-                core_feats = self.proc[i](core_feats, aux_feats=aux_feats, adj_ids=adj_ids)
+                id_kwargs = {'id_map': id_map, 'roi_ids': roi_ids, 'pos_ids': pos_ids}
+                core_feats = self.proc[i](core_feats, aux_feats=aux_feats, **id_kwargs)
 
         # Store desired items in storage dictionary
         storage_dict['roi_size'] = (rH, rW)
-        storage_dict['qry_ids_list'] = qry_ids_list
+        storage_dict['roi_ids_list'] = roi_ids_list
         storage_dict['pos_ids_list'] = pos_ids_list
         storage_dict['seg_logits_list'] = seg_logits_list
         storage_dict['ref_logits_list'] = ref_logits_list
@@ -1360,7 +1334,7 @@ class TopDownSegHead(nn.Module):
         self.get_preds(qry_feats, storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
-        qry_ids_list = storage_dict['qry_ids_list']
+        roi_ids_list = storage_dict['roi_ids_list']
         pos_ids_list = storage_dict['pos_ids_list']
         seg_logits_list = storage_dict['seg_logits_list']
         ref_logits_list = storage_dict['ref_logits_list']
@@ -1388,10 +1362,10 @@ class TopDownSegHead(nn.Module):
                 tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
 
             # Get target values and segmentation mask
-            qry_ids = qry_ids_list[i]
+            roi_ids = roi_ids_list[i]
             pos_ids = pos_ids_list[i]
 
-            tgt_vals = tgt_maps[qry_ids, 0, pos_ids[:, 1], pos_ids[:, 0]]
+            tgt_vals = tgt_maps[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]]
             seg_mask = (tgt_vals == 0) | (tgt_vals == 1)
 
             # Get segmentation loss
