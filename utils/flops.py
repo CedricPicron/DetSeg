@@ -30,7 +30,7 @@ def adj_conv2d_flop_jit(inputs, outputs):
     """
 
     # Get weight from list with inputs
-    weight = inputs[1]
+    weight = inputs[3]
 
     # Get number of 2D adjacency convolution FLOPs
     flops = get_shape(weight)[1] * prod(get_shape(outputs[0]))
