@@ -17,22 +17,22 @@ from fvcore.nn.jit_handles import get_shape
 from torch.jit import TracerWarning
 
 
-def adj_conv2d_flop_jit(inputs, outputs):
+def id_conv2d_flop_jit(inputs, outputs):
     """
-    Function counting the number of 2D adjacency convolution FLOPs.
+    Function counting the number of 2D index-based convolution FLOPs.
 
     Args:
-        inputs (List): List with inputs of the 2D adjacency convolution operation.
-        outputs (List): List with outputs of the 2D adjacency convolution operation.
+        inputs (List): List with inputs of the 2D index-based convolution operation.
+        outputs (List): List with outputs of the 2D index-based convolution operation.
 
     Returns:
-        flops (Counter): Counter dictionary containing the number of 2D adjacency convolution FLOPs.
+        flops (Counter): Counter dictionary containing the number of 2D index-based convolution FLOPs.
     """
 
     # Get weight from list with inputs
-    weight = inputs[1]
+    weight = inputs[3]
 
-    # Get number of 2D adjacency convolution FLOPs
+    # Get number of 2D index-based convolution FLOPs
     flops = get_shape(weight)[1] * prod(get_shape(outputs[0]))
     flops = Counter({'adj_conv2d': flops})
 
