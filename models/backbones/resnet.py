@@ -59,7 +59,7 @@ class ResNet(nn.Module):
         self.register_buffer('in_norm_std', torch.tensor([0.229, 0.224, 0.225]))
 
         # Load ImageNet pretrained ResNet model from torchvision
-        resnet_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'pretrained': True}
+        resnet_kwargs = {'replace_stride_with_dilation': [False, False, dilation], 'weights': 'IMAGENET1K_V1'}
         resnet_kwargs = {**resnet_kwargs, 'norm_layer': FrozenBatchNorm2d}
         resnet = getattr(torchvision.models, name)(**resnet_kwargs)
 

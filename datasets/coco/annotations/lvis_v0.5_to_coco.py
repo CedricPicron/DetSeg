@@ -66,8 +66,8 @@ for lvis_ann in lvis_val_json['annotations']:
     coco_val_json['annotations'].append(coco_ann)
 
 # Save COCO training and validation jsons
-coco_train_path = 'coco_train_lvis_v0.5.json'
-coco_val_path = 'coco_val_lvis_v0.5.json'
+coco_train_path = 'instances_train_lvis_v0.5.json'
+coco_val_path = 'instances_val_lvis_v0.5.json'
 
 with open(coco_train_path, 'w') as json_file:
     json.dump(coco_train_json, json_file)

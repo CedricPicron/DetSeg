@@ -19,16 +19,15 @@ def get_extensions():
     define_macros = []
     extra_compile_args = {'cxx': []}
 
-    if torch.cuda.is_available() and CUDA_HOME is not None:
-        extension = CUDAExtension
-        sources += glob.glob(os.path.join(src_dir, 'cuda', '*.cu'))
-        define_macros += [('WITH_CUDA', None)]
-        extra_compile_args['nvcc'] = [
-            '-DCUDA_HAS_FP16=1',
-            '-D__CUDA_NO_HALF_OPERATORS__',
-            '-D__CUDA_NO_HALF_CONVERSIONS__',
-            '-D__CUDA_NO_HALF2_OPERATORS__',
-        ]
+    extension = CUDAExtension
+    sources += glob.glob(os.path.join(src_dir, 'cuda', '*.cu'))
+    define_macros += [('WITH_CUDA', None)]
+    extra_compile_args['nvcc'] = [
+        '-DCUDA_HAS_FP16=1',
+        '-D__CUDA_NO_HALF_OPERATORS__',
+        '-D__CUDA_NO_HALF_CONVERSIONS__',
+        '-D__CUDA_NO_HALF2_OPERATORS__',
+    ]
 
     ext_kwargs = {'include_dirs': [src_dir], 'define_macros': define_macros, 'extra_compile_args': extra_compile_args}
     ext_modules = [extension('deformable', sources, **ext_kwargs)]

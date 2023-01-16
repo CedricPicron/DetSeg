@@ -193,8 +193,9 @@ class AnchorSelector(nn.Module):
         if 'top_qry_ids' in storage_dict:
             top_old_ids = storage_dict['top_qry_ids']
 
-            max_old_id = max(sel_ids.amax().item(), top_old_ids.amax().item())
             num_selecs = len(sel_ids)
+            max_old_id = sel_ids.amax().item() if num_selecs > 0 else 0
+            max_old_id = max(max_old_id, top_old_ids.amax().item()) if top_old_ids.numel() > 0 else max_old_id
 
             new_ids = torch.full(size=[max_old_id+1], fill_value=-1, dtype=torch.int64, device=device)
             new_ids[sel_ids] = torch.arange(num_selecs, device=device)
