@@ -4,6 +4,7 @@ Collection of container-type modules.
 from copy import deepcopy
 from inspect import signature
 
+import torch
 from torch import nn
 
 from models.build import build_model, MODELS
@@ -144,6 +145,58 @@ class ModuleSum(nn.Module):
         output = sum(sub_module(*args, **kwargs) for sub_module in self.sub_modules)
 
         return output
+
+
+@MODELS.register_module()
+class ModuleWeightedSum(nn.Module):
+    """
+    Class implementing the ModuleWeightedSum module.
+
+    The ModuleWeightedSum module contains a list of sub-modules, where each of the sub-modules are applied on the input
+    and where the resulting outputs are added using a weighted sum with weights computed from the input tensor.
+
+    Attributes:
+        sub_modules (nn.ModuleList): List of size [num_sub_modules] containing the sub-modules.
+        weight (nn.Module): Module computing the weights from the input tensor.
+    """
+
+    def __init__(self, sub_module_cfgs, weight_cfg):
+        """
+        Initializes the ModuleWeightedSum module.
+
+        Args:
+            sub_module_cfgs (List): List of configuration dictionaries specifying the sub-modules.
+            weight_cfg (Dict): Configuration dictionary specifying the weight module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build list with sub-modules
+        self.sub_modules = nn.ModuleList([build_model(sub_module_cfg) for sub_module_cfg in sub_module_cfgs])
+
+        # Build weight module
+        self.weight = build_model(weight_cfg)
+
+    def forward(self, in_tensor, *args, **kwargs):
+        """
+        Forward method of the ModuleWeightedSum module.
+
+        Args:
+            in_tensor (FloatTensor): Input tensor of shape [num_feats, *].
+            args (Tuple): Tuple containing additional positional arguments.
+            kwargs (Dict): Dictionary containing keyword arguments.
+
+        Returns:
+            out_tensor (FloatTensor): Output tensor of shape [num_feats, *].
+        """
+
+        # Get output tensor
+        terms = torch.stack([sub_module(in_tensor, *args, **kwargs) for sub_module in self.sub_modules], dim=2)
+        weights = self.weight(in_tensor)[:, None, :]
+        out_tensor = (weights * terms).sum(dim=2)
+
+        return out_tensor
 
 
 @MODELS.register_module()
