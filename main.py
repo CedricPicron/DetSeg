@@ -13,6 +13,7 @@ from datasets.build import build_dataset
 from engine import evaluate, save_checkpoint, save_log, train
 from models.archs.build import build_arch
 from utils.analysis import analyze_model
+from utils.comparison import compare_models
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
 from utils.profiling import profile_model
@@ -57,6 +58,11 @@ def get_parser():
     parser.add_argument('--analysis_samples', default=100, type=int, help='number of samples used for model analysis')
     parser.add_argument('--analysis_train_only', action='store_true', help='only analyze model in training mode')
     parser.add_argument('--analysis_inf_only', action='store_true', help='only analyze model in inference mode')
+
+    # * Comparison
+    parser.add_argument('--comp_res_file1', default='', type=str, help='path to first result file to be compared')
+    parser.add_argument('--comp_res_file2', default='', type=str, help='path to second result file to be compared')
+    parser.add_argument('--comp_save_name', default='', type=str, help='name of file saving comparison results')
 
     # * Performance
     parser.add_argument('--perf_save_res', action='store_true', help='save results even when having annotations')
@@ -361,10 +367,18 @@ def main(args):
 
     Raises:
         ValueError: Error when in distributed mode for the 'analysis' evaluation task.
+        ValueError: Error when in distributed mode for the 'profile' evaluation task.
         ValueError: Error when no output directory could be determined for the 'visualize' evaluation task.
         ValueError: Error when in distributed mode for the 'visualize' evaluation task.
         ValueError: Error when an unknown evaluation task is provided.
     """
+
+    # Compare two models if requested and return
+    if args.eval_task == 'comparison':
+        output_dir = Path(('/').join(args.comp_res_file1.split('/')[:-1]))
+        save_name = args.comp_save_name
+        compare_models(args.dataset, args.eval_split, args.comp_res_file1, args.comp_res_file2, output_dir, save_name)
+        return
 
     # Initialize distributed mode if needed
     distributed.init_distributed_mode(args)

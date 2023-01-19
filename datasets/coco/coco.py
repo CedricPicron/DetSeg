@@ -30,6 +30,29 @@ from structures.masks import mask_inv_transform, mask_to_rle
 import utils.distributed as distributed
 
 
+# Add splits with LVIS annotations
+SPLITS['coco']['coco_lvis_v0.5_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v0.5.json')
+SPLITS['coco']['coco_lvis_v0.5_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v0.5.json')
+SPLITS['coco']['coco_lvis_v1_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v1.json')
+SPLITS['coco']['coco_lvis_v1_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
+
+SPLITS['lvis'] = {}
+SPLITS['lvis']['lvis_v0.5_val_cocofied'] = ('coco/val2017', 'coco/annotations/lvis_v0.5_val_cocofied.json')
+
+names = ('coco_lvis_v0.5_train', 'coco_lvis_v0.5_val', 'coco_lvis_v1_train', 'coco_lvis_v1_val')
+thing_dataset_id_to_contiguous_id = MetadataCatalog.get('coco_2017_train').thing_dataset_id_to_contiguous_id
+thing_classes = MetadataCatalog.get('coco_2017_train').thing_classes
+thing_colors = MetadataCatalog.get('coco_2017_train').thing_colors
+
+for name in names:
+    MetadataCatalog.get(name).json_file = f"datasets/{SPLITS['coco'][name][1]}"
+    MetadataCatalog.get(name).image_root = f"dataset/{SPLITS['coco'][name][0]}"
+    MetadataCatalog.get(name).evaluator_type = 'coco'
+    MetadataCatalog.get(name).thing_dataset_id_to_contiguous_id = thing_dataset_id_to_contiguous_id
+    MetadataCatalog.get(name).thing_classes = thing_classes
+    MetadataCatalog.get(name).thing_colors = thing_colors
+
+
 class CocoDataset(Dataset):
     """
     Class implementing the CocoDataset dataset.
@@ -522,28 +545,6 @@ def build_coco(args):
 
         evaluator (CocoEvaluator): Object capable of computing evaluations from predictions and storing them.
     """
-
-    # Add splits with LVIS annotations
-    SPLITS['coco']['coco_lvis_v0.5_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v0.5.json')
-    SPLITS['coco']['coco_lvis_v0.5_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v0.5.json')
-    SPLITS['coco']['coco_lvis_v1_train'] = ('coco/train2017', 'coco/annotations/instances_train_lvis_v1.json')
-    SPLITS['coco']['coco_lvis_v1_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
-
-    SPLITS['lvis'] = {}
-    SPLITS['lvis']['lvis_v0.5_val_cocofied'] = ('coco/val2017', 'coco/annotations/lvis_v0.5_val_cocofied.json')
-
-    names = ('coco_lvis_v0.5_train', 'coco_lvis_v0.5_val', 'coco_lvis_v1_train', 'coco_lvis_v1_val')
-    thing_dataset_id_to_contiguous_id = MetadataCatalog.get('coco_2017_train').thing_dataset_id_to_contiguous_id
-    thing_classes = MetadataCatalog.get('coco_2017_train').thing_classes
-    thing_colors = MetadataCatalog.get('coco_2017_train').thing_colors
-
-    for name in names:
-        MetadataCatalog.get(name).json_file = f"datasets/{SPLITS['coco'][name][1]}"
-        MetadataCatalog.get(name).image_root = f"dataset/{SPLITS['coco'][name][0]}"
-        MetadataCatalog.get(name).evaluator_type = 'coco'
-        MetadataCatalog.get(name).thing_dataset_id_to_contiguous_id = thing_dataset_id_to_contiguous_id
-        MetadataCatalog.get(name).thing_classes = thing_classes
-        MetadataCatalog.get(name).thing_colors = thing_colors
 
     # Get root directory containing datasets
     root = Path() / 'datasets'
