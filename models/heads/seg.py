@@ -610,7 +610,7 @@ class TopDownSegHead(nn.Module):
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
-        tgt_roi_ext (nn.Module): Module extracting the RoI-based target segmentation masks from image-based masks.
+        tgt_roi_ext (nn.ModuleList): List [seg_iters] of modules extracting the RoI-based target segmentation masks.
         seg_loss (nn.Module): Module computing the segmentation loss.
         seg_loss_weights (Tuple): Tuple of size [seg_iters] containing the segmentation loss weights.
         ref_loss (nn.Module): Module computing the refinement loss.
@@ -682,10 +682,13 @@ class TopDownSegHead(nn.Module):
         # Build target RoI extractor
         tgt_roi_ext_cfg = dict(type='mmdet.SingleRoIExtractor')
         tgt_roi_ext_cfg['roi_layer'] = dict(type='RoIAlign', sampling_ratio=0)
-        tgt_roi_ext_cfg['roi_layer']['output_size'] = 2**(seg_iters-1) * roi_ext_cfg['roi_layer']['output_size']
         tgt_roi_ext_cfg['out_channels'] = 1
         tgt_roi_ext_cfg['featmap_strides'] = [1]
-        self.tgt_roi_ext = build_model(tgt_roi_ext_cfg)
+        self.tgt_roi_ext = nn.ModuleList()
+
+        for i in range(seg_iters):
+            tgt_roi_ext_cfg['roi_layer']['output_size'] = 2**i * roi_ext_cfg['roi_layer']['output_size']
+            self.tgt_roi_ext.append(build_model(tgt_roi_ext_cfg))
 
         # Build segmentation and refinement loss modules
         self.seg_loss = build_model(seg_loss_cfg)
@@ -1342,35 +1345,30 @@ class TopDownSegHead(nn.Module):
         # Get initial target maps
         images = storage_dict['images']
         pred_boxes = storage_dict['pred_boxes'].clone()
+        tgt_maps = tgt_dict['masks'][:, None, :, :].float()
 
         roi_boxes = pred_boxes[matched_qry_ids]
         roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images[0]).boxes.detach()
         roi_boxes = torch.cat([matched_tgt_ids[:, None], roi_boxes], dim=1)
-
-        tgt_maps = [tgt_dict['masks'][:, None, :, :].float()]
-        tgt_maps = self.tgt_roi_ext(tgt_maps, roi_boxes)
 
         # Initialize segmentation and refinement loss
         seg_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
         ref_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
 
         # Get segmentation and refinement losses and accuracies
-        for i in range(self.seg_iters-1, -1, -1):
+        for i in range(self.seg_iters):
 
-            # Update target maps if needed
-            if i < self.seg_iters-1:
-                tgt_maps = F.avg_pool2d(tgt_maps, kernel_size=2, stride=2, ceil_mode=True)
+            # Get target maps
+            tgt_maps_i = self.tgt_roi_ext[i]([tgt_maps], roi_boxes)
 
             # Get target values and segmentation mask
             roi_ids = roi_ids_list[i]
             pos_ids = pos_ids_list[i]
-
-            tgt_vals = tgt_maps[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]]
-            seg_mask = (tgt_vals == 0) | (tgt_vals == 1)
+            tgt_vals = tgt_maps_i[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]]
 
             # Get segmentation loss
-            seg_logits = seg_logits_list[i][seg_mask]
-            seg_targets = tgt_vals[seg_mask]
+            seg_logits = seg_logits_list[i]
+            seg_targets = (tgt_vals > 0.5).float()
 
             if len(seg_logits) > 0:
                 seg_loss_i = self.seg_loss(seg_logits, seg_targets)
@@ -1398,7 +1396,7 @@ class TopDownSegHead(nn.Module):
 
             # Get refinement loss
             ref_logits = ref_logits_list[i]
-            ref_targets = (~seg_mask).float()
+            ref_targets = ((tgt_vals > 0) & (tgt_vals < 1)).float()
 
             if len(ref_logits) > 0:
                 ref_loss_i = self.ref_loss(ref_logits, ref_targets)
