@@ -1,6 +1,7 @@
 """
 COCO dataset/evaluator and build function.
 """
+from collections import defaultdict
 import contextlib
 import json
 import logging
@@ -66,7 +67,8 @@ class CocoDataset(Dataset):
         image_paths (List): List [num_images] with image paths.
     """
 
-    def __init__(self, image_dir, transforms, metadata, annotation_file=None, info_file=None, requires_masks=False):
+    def __init__(self, image_dir, transforms, metadata, ann_file=None, info_file=None, requires_masks=False,
+                 seg_ann_file=None, match_iou_thr=0.75):
         """
         Initializes the CocoDataset dataset.
 
@@ -74,9 +76,11 @@ class CocoDataset(Dataset):
             image_dir (Path): Path to directory with COCO images.
             transforms (List): List [num_transforms] of transforms applied to image (and targets if available).
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
-            annotation_file (Path): Path to annotation file with COCO annotations (default=None).
+            ann_file (Path): Path to annotation file with COCO annotations (default=None).
             info_file (Path): Path to file with additional image information, but no annotations (default=None).
             requires_masks (bool): Boolean indicating whether target dictionaries require masks (default=False).
+            seg_ann_file (Path): Path to annotation file with custom segmentation annotations (default=None).
+            match_iou_thr (float): Value containing the IoU threshold when matching annotations (default=0.75).
 
         Raises:
             ValueError: Error when no annotation or info file is provided.
@@ -88,12 +92,60 @@ class CocoDataset(Dataset):
         self.requires_masks = requires_masks
 
         # Process annotation or info file
-        if annotation_file is not None:
+        if ann_file is not None:
             with open(os.devnull, 'w') as devnull:
                 with contextlib.redirect_stdout(devnull):
-                    self.coco = COCO(annotation_file)
+                    self.coco = COCO(ann_file)
                     self.coco.img_ids = self.image_ids = list(sorted(self.coco.imgs.keys()))
                     self.image_paths = [f'{image_dir}/{img_id:012}.jpg' for img_id in self.image_ids]
+
+            if seg_ann_file is not None:
+                with open(os.devnull, 'w') as devnull:
+                    with contextlib.redirect_stdout(devnull):
+                        seg_coco = COCO(seg_ann_file)
+
+                coco_ann_dicts = self.coco.dataset['annotations']
+                seg_ann_dicts = seg_coco.dataset['annotations']
+                ann_dicts_list = [coco_ann_dicts, seg_ann_dicts]
+
+                coco_img_cat_dicts = defaultdict(list)
+                seg_img_cat_dicts = defaultdict(list)
+                img_cat_dicts_list = [coco_img_cat_dicts, seg_img_cat_dicts]
+
+                for ann_dicts, img_cat_dicts in zip(ann_dicts_list, img_cat_dicts_list):
+                    for ann_dict in ann_dicts:
+                        img_id = ann_dict['image_id']
+                        cat_id = ann_dict['category_id']
+                        img_cat_dicts[img_id, cat_id].append(ann_dict)
+
+                for img_id in self.coco.img_ids:
+                    for cat_id in self.coco.getCatIds():
+                        coco_dicts = coco_img_cat_dicts[img_id, cat_id]
+                        seg_dicts = seg_img_cat_dicts[img_id, cat_id]
+
+                        if len(coco_dicts) == 0:
+                            continue
+
+                        if len(seg_dicts) == 0:
+                            for coco_dict in coco_dicts:
+                                coco_dict['segmentation'] = None
+                            continue
+
+                        coco_boxes = [coco_dict['bbox'] for coco_dict in coco_dicts]
+                        seg_boxes = [seg_dict['bbox'] for seg_dict in seg_dicts]
+                        iscrowd = [0] * len(coco_dicts)
+
+                        ious = coco_mask.iou(coco_boxes, seg_boxes, iscrowd)
+                        max_ious, matched_seg_ids = torch.tensor(ious).max(dim=1)
+
+                        max_ious = max_ious.tolist()
+                        matched_seg_ids = matched_seg_ids.tolist()
+
+                        for i, coco_dict in enumerate(coco_dicts):
+                            if max_ious[i] > match_iou_thr:
+                                coco_dict['segmentation'] = seg_dicts[matched_seg_ids[i]]['segmentation']
+                            else:
+                                coco_dict['segmentation'] = None
 
         elif info_file is not None:
             with open(info_file) as json_file:
@@ -119,21 +171,29 @@ class CocoDataset(Dataset):
 
         Returns:
             masks (BoolTensor): Tensor containing the segmentation masks of shape [num_targets, iH, iW].
+            valid_masks (BoolTensor): Tensor indicating which targets have a valid mask [num_targets].
         """
 
         # Get segmentations with each segmentation represented as a list of polygons
         segmentations = [annotation['segmentation'] for annotation in annotations]
 
         # Get segmentation masks corresponding to each segmentation
-        masks = torch.empty(len(segmentations), iH, iW, dtype=torch.bool)
+        num_targets = len(segmentations)
+        masks = torch.zeros(num_targets, iH, iW, dtype=torch.bool)
+        valid_masks = torch.zeros(num_targets, dtype=torch.bool)
 
         for i, polygons in enumerate(segmentations):
+            if polygons is None:
+                continue
+
             rle_objs = coco_mask.frPyObjects(polygons, iH, iW)
             mask = coco_mask.decode(rle_objs)
             mask = mask[:, :, None] if len(mask.shape) == 2 else mask
-            masks[i] = torch.as_tensor(mask, dtype=torch.bool).any(dim=2)
 
-        return masks
+            masks[i] = torch.as_tensor(mask, dtype=torch.bool).any(dim=2)
+            valid_masks[i] = True
+
+        return masks, valid_masks
 
     def __getitem__(self, index):
         """
@@ -148,7 +208,8 @@ class CocoDataset(Dataset):
             tgt_dict (Dict): Target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
         """
 
         # Load image and place it into Images structure
@@ -188,8 +249,9 @@ class CocoDataset(Dataset):
             # Get segmentation masks if required and add to target dictionary
             if self.requires_masks:
                 iW, iH = image.size()
-                masks = self.get_masks(annotations, iH, iW)
+                masks, valid_masks = self.get_masks(annotations, iH, iW)
                 tgt_dict['masks'] = masks[well_defined]
+                tgt_dict['valid_masks'] = valid_masks[well_defined]
 
         # Perform image and target dictionary transformations
         transform = self.transforms[index % len(self.transforms)]
@@ -200,7 +262,7 @@ class CocoDataset(Dataset):
             well_defined = tgt_dict['boxes'].well_defined()
 
             for key in tgt_dict.keys():
-                if key in ['labels', 'boxes', 'masks']:
+                if key in ['labels', 'boxes', 'masks', 'valid_masks']:
                     tgt_dict[key] = tgt_dict[key][well_defined]
 
         return image, tgt_dict
@@ -557,18 +619,21 @@ def build_coco(args):
         image_dir = root / SPLITS['coco'][f'coco_{args.train_split}'][0]
         train_transforms = get_train_transforms(f'coco_{args.train_transforms_type}')
         metadata = MetadataCatalog.get(f'coco_{args.train_split}')
-        annotation_file = root / SPLITS['coco'][f'coco_{args.train_split}'][1]
-        datasets['train'] = CocoDataset(image_dir, train_transforms, metadata, annotation_file=annotation_file)
+        ann_file = root / SPLITS['coco'][f'coco_{args.train_split}'][1]
+        kwargs = dict()
+
+        if args.seg_anns != 'default':
+            kwargs['seg_ann_file'] = root / SPLITS['coco'][f'coco_{args.seg_anns}_train'][1]
+
+        datasets['train'] = CocoDataset(image_dir, train_transforms, metadata, ann_file=ann_file, **kwargs)
 
     # Get evaluation dataset
     image_dir = root / SPLITS['coco'][f'coco_{args.eval_split}'][0]
     eval_transforms = get_eval_transforms(f'coco_{args.eval_transforms_type}')
     metadata = MetadataCatalog.get(f'coco_{args.eval_split}')
-    annotation_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
+    ann_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'val' in args.eval_split else None
     info_file = root / SPLITS['coco'][f'coco_{args.eval_split}'][1] if 'test' in args.eval_split else None
-
-    file_kwargs = {'annotation_file': annotation_file, 'info_file': info_file}
-    datasets['eval'] = CocoDataset(image_dir, eval_transforms, metadata, **file_kwargs)
+    datasets['eval'] = CocoDataset(image_dir, eval_transforms, metadata, ann_file=ann_file, info_file=info_file)
 
     # Get evaluator
     if 'lvis' in args.eval_split and 'val' in args.eval_split:

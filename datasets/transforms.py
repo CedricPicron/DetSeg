@@ -20,7 +20,8 @@ def crop(image, tgt_dict, crop_region):
         tgt_dict (Dict): Target dictionary corresponding to the image, potentially containing following keys:
             - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width].
+            - masks (BoolTensor): segmentation masks of shape [num_targets, height, width];
+            - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
         crop_region (Tuple): Tuple delineating the cropped region in (left, top, right, bottom) format.
 
@@ -45,7 +46,7 @@ def crop(image, tgt_dict, crop_region):
     # Remove targets that no longer appear in the cropped image
     if 'boxes' in tgt_dict or 'masks' in tgt_dict:
         for key in tgt_dict.keys():
-            if key in ['labels', 'boxes', 'masks']:
+            if key in ['labels', 'boxes', 'masks', 'valid_masks']:
                 tgt_dict[key] = tgt_dict[key][well_defined]
 
     return image, tgt_dict

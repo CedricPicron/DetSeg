@@ -21,7 +21,8 @@ def collate_fn(batch):
             - tgt_dict (Dict): target dictionary potentially containing following keys (empty when no annotations):
                 - labels (LongTensor): tensor of shape [num_targets] containing the class indices;
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets];
-                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
     Returns:
         images (Images): New Images structure containing the concatenated Images structures across batch entries.
@@ -30,7 +31,8 @@ def collate_fn(batch):
             - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
             - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
             - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-            - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
+            - masks (ByteTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW];
+            - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets_total].
     """
 
     # Get batch images and target dictionaries
@@ -62,6 +64,10 @@ def collate_fn(batch):
         masks = [old_tgt_dict['masks'] for old_tgt_dict in tgt_dicts]
         padded_masks = [F.pad(mask, (0, max_iW-mask.shape[-1], 0, max_iH-mask.shape[-2])) for mask in masks]
         tgt_dict['masks'] = torch.cat(padded_masks, dim=0)
+
+    # Concatenate valid masks if provided and add to target dictionary
+    if 'valid_masks' in tgt_dicts[0]:
+        tgt_dict['valid_masks'] = torch.cat([old_tgt_dict['valid_masks'] for old_tgt_dict in tgt_dicts], dim=0)
 
     return images, tgt_dict
 
