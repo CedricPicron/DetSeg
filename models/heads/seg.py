@@ -445,7 +445,8 @@ class BaseSegHead(nn.Module):
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
@@ -472,11 +473,20 @@ class BaseSegHead(nn.Module):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        # Get device
-        device = seg_logits.device
+        # Get device and number of original matches
+        device = matched_qry_ids.device
+        num_orig_matches = len(matched_qry_ids)
+
+        # Only keep matches with a valid target mask
+        valid_masks = tgt_dict['valid_masks']
+        match_mask = valid_masks[matched_tgt_ids]
+
+        matched_qry_ids = matched_qry_ids[match_mask]
+        matched_tgt_ids = matched_tgt_ids[match_mask]
+        num_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
-        if len(matched_qry_ids) == 0:
+        if num_matches == 0:
 
             # Get segmentation loss
             seg_loss = 0.0 * seg_logits.sum()
@@ -530,7 +540,7 @@ class BaseSegHead(nn.Module):
         seg_targets = self.point_sample(seg_targets, sample_pts, align_corners=False)
 
         # Get segmentation loss
-        seg_loss = self.loss(seg_logits, seg_targets)
+        seg_loss = (num_orig_matches/num_matches) * self.loss(seg_logits, seg_targets)
         key_name = f'seg_loss_{id}' if id is not None else 'seg_loss'
         loss_dict[key_name] = seg_loss
 
@@ -1443,7 +1453,8 @@ class TopDownSegHead(nn.Module):
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
-                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses.
@@ -1467,9 +1478,6 @@ class TopDownSegHead(nn.Module):
             ValueError: Error when a single query is matched with multiple targets.
         """
 
-        # Get device
-        device = qry_feats.device
-
         # Perform matching if matcher is available
         if self.matcher is not None:
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
@@ -1478,7 +1486,16 @@ class TopDownSegHead(nn.Module):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        # Get number of positive matches
+        # Get device and number of original matches
+        device = matched_qry_ids.device
+        num_orig_matches = len(matched_qry_ids)
+
+        # Only keep matches with a valid target mask
+        valid_masks = tgt_dict['valid_masks']
+        match_mask = valid_masks[matched_tgt_ids]
+
+        matched_qry_ids = matched_qry_ids[match_mask]
+        matched_tgt_ids = matched_tgt_ids[match_mask]
         num_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
@@ -1601,7 +1618,7 @@ class TopDownSegHead(nn.Module):
 
             if len(seg_logits_i) > 0:
                 seg_loss_i = self.seg_loss(seg_logits_i, seg_targets_i)
-                seg_loss_i *= self.seg_loss_weights[i] * num_matches
+                seg_loss_i *= self.seg_loss_weights[i] * num_orig_matches
                 seg_loss += seg_loss_i
 
             else:
@@ -1624,7 +1641,7 @@ class TopDownSegHead(nn.Module):
 
             if len(ref_logits_i) > 0:
                 ref_loss_i = self.ref_loss(ref_logits_i, ref_targets_i)
-                ref_loss_i *= self.ref_loss_weights[i] * num_matches
+                ref_loss_i *= self.ref_loss_weights[i] * num_orig_matches
                 ref_loss += ref_loss_i
 
             else:

@@ -432,7 +432,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        # Get device and get number of original matches
+        # Get device and number of original matches
         device = matched_qry_ids.device
         num_orig_matches = len(matched_qry_ids)
 
@@ -781,7 +781,8 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): target class indices of shape [num_targets];
-                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
@@ -810,12 +811,20 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        # Get device and number of positive matches
+        # Get device and number of original matches
         device = matched_qry_ids.device
-        num_pos_matches = len(matched_qry_ids)
+        num_orig_matches = len(matched_qry_ids)
+
+        # Only keep matches with a valid target mask
+        valid_masks = tgt_dict['valid_masks']
+        match_mask = valid_masks[matched_tgt_ids]
+
+        matched_qry_ids = matched_qry_ids[match_mask]
+        matched_tgt_ids = matched_tgt_ids[match_mask]
+        num_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
-        if num_pos_matches == 0:
+        if num_matches == 0:
 
             # Get mask loss
             mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
@@ -881,7 +890,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         mask_logits = self.mask_head(roi_feats)
 
         tgt_labels = tgt_dict['labels'][matched_tgt_ids]
-        cls_mask_logits = mask_logits[range(num_pos_matches), tgt_labels]
+        cls_mask_logits = mask_logits[range(num_matches), tgt_labels]
 
         # Get mask targets
         tgt_masks = tgt_dict['masks'].cpu().numpy()
@@ -908,7 +917,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         coarse_feats = point_sample(mask_logits, roi_pts)
         point_logits = self.point_head(fine_feats, coarse_feats)
-        point_logits = point_logits[range(num_pos_matches), tgt_labels]
+        point_logits = point_logits[range(num_matches), tgt_labels]
 
         # Get point targets
         target_single_args = (roi_boxes, roi_pts, matched_tgt_ids, tgt_masks, self.train_cfg)
@@ -916,7 +925,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         # Get point loss
         point_loss = self.point_head.loss_point(point_logits, point_targets)
-        point_loss = point_loss / self.train_cfg['num_points']
+        point_loss = (num_orig_matches/num_matches) * point_loss / self.train_cfg['num_points']
 
         key_name = f'point_loss_{id}' if id is not None else 'point_loss'
         loss_dict[key_name] = point_loss
@@ -1139,7 +1148,8 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             tgt_dict (Dict): Target dictionary containing at least following keys:
                 - labels (LongTensor): target class indices of shape [num_targets];
-                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
+                - valid_masks (BoolTensor): tensor indicating which targets have a valid mask [num_targets].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
@@ -1166,12 +1176,20 @@ class RefineMaskRoIHead(StandardRoIHead):
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        # Get device and number of positive matches
+        # Get device and number of original matches
         device = matched_qry_ids.device
-        num_pos_matches = len(matched_qry_ids)
+        num_orig_matches = len(matched_qry_ids)
+
+        # Only keep matches with a valid target mask
+        valid_masks = tgt_dict['valid_masks']
+        match_mask = valid_masks[matched_tgt_ids]
+
+        matched_qry_ids = matched_qry_ids[match_mask]
+        matched_tgt_ids = matched_tgt_ids[match_mask]
+        num_matches = len(matched_qry_ids)
 
         # Handle case where there are no positive matches
-        if num_pos_matches == 0:
+        if num_matches == 0:
 
             # Get mask loss
             mask_loss = sum(0.0 * feat_map.flatten()[0] for feat_map in feat_maps)
@@ -1232,7 +1250,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         # Get mask loss
         mask_loss = self.mask_head.loss(mask_logits, mask_targets)['loss_instance']
-        mask_loss = num_pos_matches * mask_loss
+        mask_loss = num_orig_matches * mask_loss
 
         key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
         loss_dict[key_name] = mask_loss
