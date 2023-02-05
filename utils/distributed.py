@@ -124,9 +124,6 @@ class DistributedDataParallel(DistributedDataParallel):
 
     The module assumes all module's parameters which require gradient, receive a gradient in each forward pass.
     As such, we do not support setting the 'find_unused_parameters' to True.
-
-    Note that we only support single process single device (SPSD) mode, which is the recommended mode for using the
-    PyTorch 'DistributedDataParallel' module.
     """
 
     def __init__(self, module, device_id):
@@ -138,7 +135,7 @@ class DistributedDataParallel(DistributedDataParallel):
             device_id (int or torch.device): Device on which the module should reside (for this process).
         """
 
-        # Initialize PyTorch 'DistributedDataParallel' module in SPSD mode
+        # Initialize PyTorch 'DistributedDataParallel' module
         super().__init__(module, device_ids=[device_id])
 
     def forward(self, *inputs, **kwargs):
@@ -153,13 +150,20 @@ class DistributedDataParallel(DistributedDataParallel):
             outputs (Tuple): Tuple containing the module outputs.
         """
 
+        # Collect statistics
+        if torch.is_grad_enabled() and self.require_backward_grad_sync:
+            self.logger.set_runtime_stats_and_log()
+            self.num_iterations += 1
+            self.reducer.prepare_for_forward()
+
         # Rebuild buckets (happens only once after first iteration)
-        if self.reducer._rebuild_buckets():
+        if torch.is_grad_enabled() and self.reducer._rebuild_buckets():
             logging.info("Reducer buckets have been rebuilt in this iteration.")
+            self._has_rebuilt_buckets = True
 
         # Synchronize buffers across processes
-        if self.require_forward_param_sync:
-            self._sync_params()
+        if self.will_sync_module_buffers():
+            self._sync_buffers()
 
         # Prepare and reset underlying framework for backward calls
         if torch.is_grad_enabled() and self.require_backward_grad_sync:
