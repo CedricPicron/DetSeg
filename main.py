@@ -139,6 +139,9 @@ def get_parser():
     parser.add_argument('--dc_no_ffn', action='store_true', help='whether core should not contain FFN layers')
     parser.add_argument('--dc_ffn_hidden_size', default=1024, type=int, help='hidden size of core FFN layers')
 
+    # * DINO neck
+    parser.add_argument('--dino_neck_cfg_path', default='', type=str, help='path to DINO neck config')
+
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
     parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')

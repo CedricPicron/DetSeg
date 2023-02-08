@@ -2,11 +2,14 @@
 General build function for core modules.
 """
 
+from mmcv import Config
+
 from .bifpn import BiFPN
 from .dc import DeformableCore
 from .fpn import FPN
 from .gc import GC
 from .mmdet import MMDetCore
+from models.build import build_model
 
 
 def build_core(args):
@@ -54,6 +57,10 @@ def build_core(args):
         core_kwargs = {**core_kwargs, 'scale_encs': args.dc_scale_encs, 'scale_invariant': args.dc_scale_invariant}
         core_kwargs = {**core_kwargs, 'with_ffn': not args.dc_no_ffn, 'ffn_hidden_size': args.dc_ffn_hidden_size}
         core = DeformableCore(in_ids, in_sizes, core_ids, feat_size, num_layers, da_dict, **core_kwargs)
+
+    elif args.core_type == 'dino':
+        dino_neck_cfg = Config.fromfile(args.dino_neck_cfg_path)
+        core = build_model(dino_neck_cfg.model)
 
     elif args.core_type == 'fpn':
         in_ids = args.backbone_out_ids
