@@ -31,7 +31,14 @@ def build_heads(args):
     # Build head modules
     for head_type in args.heads:
 
-        if head_type == 'dod':
+        if head_type == 'dino':
+            dino_head_cfg = Config.fromfile(args.dino_head_cfg_path)
+            args.requires_masks = dino_head_cfg.model.pop('requires_masks', True)
+
+            dino_head = build_model(dino_head_cfg.model, metadata=args.metadata)
+            heads[head_type] = dino_head
+
+        elif head_type == 'dod':
             in_feat_size = args.core_out_sizes[0]
             assert all(in_feat_size == core_out_size for core_out_size in args.core_out_sizes)
             map_ids = args.core_out_ids

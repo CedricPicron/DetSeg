@@ -155,6 +155,9 @@ def get_parser():
     # Heads
     parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
 
+    # * DINO neck
+    parser.add_argument('--dino_head_cfg_path', default='', type=str, help='path to DINO head config')
+
     # * Dense Object Discovery (DOD) head
     parser.add_argument('--dod_feat_size', default=256, type=int, help='DOD hidden feature size')
     parser.add_argument('--dod_norm', default='group', type=str, help='normalization type of DOD head')

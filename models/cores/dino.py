@@ -221,7 +221,7 @@ class PositionEmbeddingSine(nn.Module):
             x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
 
         dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+        dim_t = self.temperature ** (2 * dim_t.div(2, rounding_mode='floor') / self.num_pos_feats)
 
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t
@@ -261,6 +261,7 @@ class DinoNeck(nn.Module):
         transformer_dim_feedforward: int,
         transformer_enc_layers: int,
         conv_dim: int,
+        mask_dim: int,
         transformer_in_ids: List[int],
         common_stride: int,
         num_feature_levels: int,
@@ -278,7 +279,8 @@ class DinoNeck(nn.Module):
             transformer_nheads: number of heads in transformer
             transformer_dim_feedforward: dimension of feedforward network
             transformer_enc_layers: number of transformer encoder layers
-            conv_dims: number of output channels for the intermediate conv layers
+            conv_dim: number of output channels for the intermediate conv layers
+            mask_dim: number of output channels for the final conv layer
             transformer_in_ids: list with transform input indices
             num_feature_levels: feature scales used
             total_num_feature_levels: total feautre scales used (include the downsampled features)
@@ -342,6 +344,16 @@ class DinoNeck(nn.Module):
         N_steps = conv_dim // 2
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
 
+        self.mask_dim = mask_dim
+        # use 1x1 conv instead
+        self.mask_features = Conv2d(
+            conv_dim,
+            mask_dim,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+        weight_init.c2_xavier_fill(self.mask_features)
         # extra fpn levels
         stride = min(self.transformer_feature_strides)
         self.num_fpn_levels = max(int(np.log2(stride) - np.log2(self.common_stride)), 1)
@@ -437,5 +449,8 @@ class DinoNeck(nn.Module):
                                         align_corners=False)
             y = output_conv(y)
             out.append(y)
+
+        out[-1] = self.mask_features(out[-1])
         out.reverse()
+
         return out
