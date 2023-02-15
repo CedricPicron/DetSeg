@@ -105,7 +105,8 @@ def get_parser():
     parser.add_argument('--resnet_dilation', action='store_true', help='whether to use dilation for last ResNet layer')
 
     # Core
-    parser.add_argument('--core_type', default='fpn', type=str, help='type of core module')
+    parser.add_argument('--cores', nargs='*', default='', type=str, help='names of desired cores')
+    parser.add_argument('--core_cfg_paths', nargs='*', default='', type=str, help='paths to core configs')
     parser.add_argument('--core_ids', nargs='*', default=[3, 4, 5, 6, 7], type=int, help='core feature map indices')
 
     # * BiFPN (Bidirectional FPN)
@@ -138,9 +139,6 @@ def get_parser():
     parser.add_argument('--dc_scale_invariant', action='store_true', help='whether core should be scale invariant')
     parser.add_argument('--dc_no_ffn', action='store_true', help='whether core should not contain FFN layers')
     parser.add_argument('--dc_ffn_hidden_size', default=1024, type=int, help='hidden size of core FFN layers')
-
-    # * DINO neck
-    parser.add_argument('--dino_neck_cfg_path', default='', type=str, help='path to DINO neck config')
 
     # * FPN (Feature Pyramid Network)
     parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')

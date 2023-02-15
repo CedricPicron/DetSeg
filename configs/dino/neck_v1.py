@@ -1,4 +1,4 @@
-model = dict(
+dino = dict(
     type='DinoNeck',
     in_channels=[256, 512, 1024, 2048],
     in_strides=[4, 8, 16, 32],
@@ -13,7 +13,7 @@ model = dict(
     num_feature_levels=3,
     total_num_feature_levels=3,
     feature_order='high2low',
-    out_ids=(2, 3, 4, 5, 6, 7),
-    out_sizes=(256, 256, 256, 256, 256, 256),
     norm='GN',
+    out_ids=(2, 3, 4, 5),
+    out_sizes=(256, 256, 256, 256),
 )

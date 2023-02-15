@@ -5,7 +5,7 @@ Code was adapted from https://github.com/IDEA-Research/MaskDINO.
 """
 import copy
 import math
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Union
 
 from deformable_detr.models.ops.modules import MSDeformAttn
 from detectron2.layers import Conv2d, get_norm
@@ -267,8 +267,6 @@ class DinoNeck(nn.Module):
         num_feature_levels: int,
         total_num_feature_levels: int,
         feature_order: str,
-        out_ids: Tuple[int],
-        out_sizes: Tuple[int],
         norm: Optional[Union[str, Callable]] = None,
     ):
         """
@@ -285,8 +283,6 @@ class DinoNeck(nn.Module):
             num_feature_levels: feature scales used
             total_num_feature_levels: total feautre scales used (include the downsampled features)
             feature_order: 'low2high' or 'high2low', 'low2high' means low-resolution features are put in the first
-            out_ids: tuple with output indices
-            out_sizes: tuple with output sizes
             norm (str or callable): normalization for all conv layers (default=None)
         """
         super().__init__()
@@ -390,9 +386,6 @@ class DinoNeck(nn.Module):
         # to make the top-down computation in forward clearer.
         self.lateral_convs = lateral_convs[::-1]
         self.output_convs = output_convs[::-1]
-
-        self.out_ids = out_ids
-        self.out_sizes = out_sizes
 
     @autocast(enabled=False)
     def forward(self, features, masks=None, **kwargs):

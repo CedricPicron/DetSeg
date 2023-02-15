@@ -53,6 +53,49 @@ class ApplyAll(nn.Module):
 
 
 @MODELS.register_module()
+class ApplyOneToOne(nn.Module):
+    """
+    Class implementing the ApplyOneToOne module.
+
+    The ApplyOneToOne module applies one specific sub-module to each input from the input list.
+
+    Attributes:
+        sub_modules (nn.ModuleList): List [num_sub_modules] of sub-modules applied to inputs from input list.
+    """
+
+    def __init__(self, sub_module_cfgs):
+        """
+        Initializes the ApplyOneToOne module.
+
+        Args:
+            sub_module_cfgs (List): List [num_sub_modules] of configuration dictionaries specifying the sub-modules.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build sub-modules
+        self.sub_modules = nn.ModuleList([build_model(cfg_i, sequential=True) for cfg_i in sub_module_cfgs])
+
+    def forward(self, in_list, **kwargs):
+        """
+        Forward method of the ApplyOneToOne module.
+
+        Args:
+            in_list (List): List with inputs to be processed by the sub-module.
+            kwargs (Dict): Dictionary of keyword arguments passed to each sub-module.
+
+        Returns:
+            out_list (List): List with resulting outputs of the sub-modules.
+        """
+
+        # Apply sub-modules to inputs from input list
+        out_list = [module_i(in_i) for in_i, module_i in zip(in_list, self.sub_modules)]
+
+        return out_list
+
+
+@MODELS.register_module()
 class BottomUp(nn.Module):
     """
     Class implementing the BottomUp module.
@@ -99,8 +142,8 @@ class GetApplyInsert(nn.Module):
     """
     Class implementing the GetApplyInsert module.
 
-    The ApplyAll module applies its underlying module to the selected input from the given input list, and inserts the
-    resulting output back into the given input list.
+    The GetApplyInsert module applies its underlying module to the selected input from the given input list, and
+    inserts the resulting output back into the given input list.
 
     Attributes:
         get_id (int): Index selecting the input for the underlying module from a given input list.

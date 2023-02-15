@@ -20,6 +20,9 @@ def build_heads(args):
 
     Returns:
         heads (Dict): Dictionary with specified head modules.
+
+    Raises:
+        ValueError: Error when an unknown head type was provided.
     """
 
     # Initialize empty dictionary of head modules
