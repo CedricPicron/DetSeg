@@ -318,34 +318,38 @@ class CustomStep(Function):
         return grad_in_tensor, grad_left_zero_grad_thr, grad_right_zero_grad_thr
 
 
-class IdConv2d(Function):
+class IdDeformConv2d(Function):
     """
-    Class implementing the IdConv2d autograd function.
+    Class implementing the IdDeformConv2d autograd function.
 
     This custom autograd function avoids keeping intermediate data structures in memory.
     """
 
     @staticmethod
-    def forward(ctx, in_core_feats, aux_feats, conv_ids, weight, bias):
+    def forward(ctx, in_core_feats, aux_feats, conv_ids, conv_weights, weight, bias):
         """
-        Forward method of the IdConv2d autograd function.
+        Forward method of the IdDeformConv2d autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
             in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
             aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
-            conv_ids (LongTensor): Indices selecting convolution features of shape [num_core_feats, kH * kW].
-            weight (FloatTensor): Tensor with convolution weights of shape [out_channels, kH * kW * in_channels].
-            bias (FloatTensor): Tensor with the convolution biases of shape [out_channels].
+            conv_ids (LongTensor): Indices selecting convolution features of shape [num_core_feats, kH * kW, 4].
+            conv_weights (FloatTensor): Values weighting the convolution features of shape [num_core_feats, kH * kW, 4].
+            weight (FloatTensor): Weight parameters of shape [out_channels, kH * kW * in_channels].
+            bias (FloatTensor): Bias parameters of shape [out_channels].
 
         Returns:
             out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
         """
 
-        # Compute intermediate data structures
+        # Get concatenated features
         pad_feat = in_core_feats.new_zeros([1, in_core_feats.size()[1]])
         cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
-        conv_feats = cat_feats[conv_ids].flatten(1)
+
+        # Get weighted convolution features
+        conv_feats = conv_weights[:, :, :, None] * cat_feats[conv_ids]
+        conv_feats = conv_feats.sum(dim=2).flatten(1)
 
         # Get output core features
         out_core_feats = torch.mm(conv_feats, weight.t())
@@ -354,7 +358,7 @@ class IdConv2d(Function):
             out_core_feats += bias
 
         # Save input tensors for backward pass
-        ctx.save_for_backward(in_core_feats, aux_feats, conv_ids, weight, bias)
+        ctx.save_for_backward(in_core_feats, aux_feats, conv_ids, conv_weights, weight, bias)
 
         return out_core_feats
 
@@ -362,7 +366,7 @@ class IdConv2d(Function):
     @once_differentiable
     def backward(ctx, grad_out_core_feats):
         """
-        Backward method of the IdConv2d autograd function.
+        Backward method of the IdDeformableConv2d autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
@@ -372,17 +376,22 @@ class IdConv2d(Function):
             grad_in_core_feats (FloatTensor): Input core features gradient of shape [num_core_feats, in_channels].
             grad_aux_feats (FloatTensor): Auxiliary features gradient of shape [num_aux_feats, in_channels].
             grad_conv_ids (None): None.
-            grad_weight (FloatTensor): Convolution weights gradient of shape [out_channels, kH * kW * in_channels].
-            grad_bias (FloatTensor): Convolution biases gradient of shape [out_channels] or None.
+            grad_conv_weights (FloatTensor): Convolution weights gradient of shape [num_core_feats, kH * kW, 4].
+            grad_weight (FloatTensor): Weight parameter gradient of shape [out_channels, kH * kW * in_channels].
+            grad_bias (FloatTensor): Bias parameter gradient of shape [out_channels] or None.
         """
 
         # Recover input tensors from forward method
-        in_core_feats, aux_feats, conv_ids, weight, bias = ctx.saved_tensors
+        in_core_feats, aux_feats, conv_ids, conv_weights, weight, bias = ctx.saved_tensors
 
-        # Recompute intermediate data structures
+        # Recompute concatenated features
         pad_feat = aux_feats.new_zeros([1, aux_feats.size()[1]])
         cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
-        conv_feats = cat_feats[conv_ids].flatten(1)
+
+        # Recompute weighted convolution features
+        sel_conv_feats = cat_feats[conv_ids]
+        conv_feats = conv_weights[:, :, :, None] * sel_conv_feats
+        conv_feats = conv_feats.sum(dim=2).flatten(1)
 
         # Get gradient tensors
         grad_conv_feats = torch.mm(grad_out_core_feats, weight)
@@ -390,14 +399,20 @@ class IdConv2d(Function):
         grad_bias = grad_out_core_feats.sum(dim=0) if bias is not None else None
 
         num_core_feats, in_channels = in_core_feats.size()
+        grad_conv_feats = grad_conv_feats.view(num_core_feats, -1, in_channels)
+        grad_conv_feats = grad_conv_feats[:, :, None, :].expand(-1, -1, 4, -1)
+
+        grad_conv_weights = (grad_conv_feats * sel_conv_feats).sum(dim=3)
+        grad_conv_feats = grad_conv_feats * conv_weights[:, :, :, None]
+        grad_conv_ids = None
+
         grad_conv_feats = grad_conv_feats.view(-1, in_channels)
         grad_cat_feats = torch.zeros_like(cat_feats).index_add_(0, conv_ids.flatten(), grad_conv_feats)
 
         grad_in_core_feats = grad_cat_feats[:num_core_feats]
         grad_aux_feats = grad_cat_feats[num_core_feats:-1]
-        grad_conv_ids = None
 
-        return grad_in_core_feats, grad_aux_feats, grad_conv_ids, grad_weight, grad_bias
+        return grad_in_core_feats, grad_aux_feats, grad_conv_ids, grad_conv_weights, grad_weight, grad_bias
 
 
 class NodeToEdgePyCustom(Function):

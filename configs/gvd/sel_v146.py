@@ -383,7 +383,7 @@ model = dict(
                     type='ModuleSum',
                     sub_module_cfgs=[[
                         dict(
-                            type='IdConv2d',
+                            type='IdDeformConv2d',
                             in_channels=2**(7-i),
                             out_channels=2**(7-i),
                             kernel_size=3,

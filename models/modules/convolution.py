@@ -10,7 +10,7 @@ from torch.nn.modules.utils import _pair as pair
 from torch.nn.parameter import Parameter
 
 from models.build import MODELS
-from models.functional.convolution import conv_transpose2d, id_conv2d
+from models.functional.convolution import conv_transpose2d, id_deform_conv2d
 
 
 @MODELS.register_module()
@@ -144,20 +144,19 @@ class ConvTranspose2d(nn.ConvTranspose2d):
 
 
 @MODELS.register_module()
-class IdConv2d(nn.Module):
+class IdDeformConv2d(nn.Module):
     """
-    Class implementing the IdConv2d module.
+    Class implementing the IdDeformConv2d module.
 
     Attributes:
-        kernel_size (Tuple): Tuple of size [2] containing the convolution kernel sizes in (H, W) format.
-        dilation (Tuple): Tuple of size [2] containing the convolution dilations in (H, W) format.
+        conv_offsets (nn.Linear): Linear layer computing the convolution offsets.
         weight (Parameter): Parameter with convolution weights of shape [out_channels, kH * kW * in_channels].
         bias (Parameter): Optional parameter with convolution biases of shape [out_channels].
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, dilation=1, bias=True):
         """
-        Initializes the IdConv2d module.
+        Initializes the IdDeformConv2d module.
 
         Args:
             in_channels (int): Integer containing the number of input channels.
@@ -173,17 +172,24 @@ class IdConv2d(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set convolution attributes
-        self.kernel_size = pair(kernel_size)
-        self.dilation = pair(dilation)
+        # Get kernel size and dilation in pair format
+        kH, kW = pair(kernel_size)
+        dH, dW = pair(dilation)
 
-        # Check kernel size
-        if (self.kernel_size[0] % 2 == 0) or (self.kernel_size[1] % 2 == 0):
-            error_msg = f"Even kernel sizes are not allowed in either dimension (got {self.kernel_size})."
-            raise ValueError(error_msg)
+        # Initialize convolution offsets module
+        self.conv_offsets = nn.Linear(in_channels, kH * kW * 2)
+        nn.init.zeros_(self.conv_offsets.weight)
+
+        init_offs_x = (kW-1)/2 * dW
+        init_offs_y = (kH-1)/2 * dH
+
+        init_offs_x = torch.linspace(-init_offs_x, init_offs_x, steps=kW)[None, :].expand(kH, -1)
+        init_offs_y = torch.linspace(-init_offs_y, init_offs_y, steps=kH)[:, None].expand(-1, kW)
+
+        init_offs = torch.stack([init_offs_x, init_offs_y], dim=2)
+        self.conv_offsets.bias = nn.Parameter(init_offs.view(-1))
 
         # Initialize weight parameter
-        kH, kW = self.kernel_size
         self.weight = Parameter(torch.empty(out_channels, kH * kW * in_channels))
         torch.nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
@@ -201,7 +207,7 @@ class IdConv2d(nn.Module):
 
     def forward(self, in_core_feats, aux_feats, id_map, roi_ids, pos_ids, **kwargs):
         """
-        Forward method of the IdConv2d module.
+        Forward method of the IdDeformConv2d module.
 
         Args:
             in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
@@ -215,32 +221,46 @@ class IdConv2d(nn.Module):
             out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_channels].
         """
 
+        # Get device and number of core features
+        device = in_core_feats.device
+        num_core_feats = len(in_core_feats)
+
+        # Get convolution locations
+        conv_xy = self.conv_offsets(in_core_feats)
+        conv_xy = conv_xy.view(num_core_feats, -1, 2)
+
         # Get convolution indices
-        kH, kW = self.kernel_size
-        dH, dW = self.dilation
+        floor_xy = conv_xy.floor()
 
-        off_y = (kH-1)//2 * dH
-        off_x = (kW-1)//2 * dW
+        conv_ids = floor_xy.int()
+        grid_ids = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], device=device)
+        conv_ids = conv_ids[:, :, None, :] + grid_ids
 
-        device = aux_feats.device
-        offs_y = torch.arange(-off_y, off_y+1, step=dH, device=device)[:, None].expand(-1, kW).flatten()
-        offs_x = torch.arange(-off_x, off_x+1, step=dW, device=device)[None, :].expand(kH, -1).flatten()
-
-        pos_y = pos_ids[:, 1, None] + offs_y
-        pos_x = pos_ids[:, 0, None] + offs_x
+        conv_ids_x = conv_ids[:, :, :, 0]
+        conv_ids_y = conv_ids[:, :, :, 1]
 
         rH, rW = id_map.size()[1:]
-        pad_mask = (pos_y < 0) | (pos_y >= rH) | (pos_x < 0) | (pos_x >= rW)
+        pad_mask = (conv_ids_x < 0) | (conv_ids_y < 0) | (conv_ids_x >= rW) | (conv_ids_y >= rH)
 
-        roi_ids = roi_ids[:, None].expand(-1, kH*kW)
-        pos_y = pos_y.clamp_(min=0, max=rH-1)
-        pos_x = pos_x.clamp_(min=0, max=rW-1)
+        conv_ids_x = conv_ids_x.clamp_(min=0, max=rW-1)
+        conv_ids_y = conv_ids_y.clamp_(min=0, max=rH-1)
 
-        conv_ids = id_map[roi_ids, pos_y, pos_x]
+        num_kernel_elems = conv_xy.size(dim=1)
+        roi_ids = roi_ids[:, None, None].expand(-1, num_kernel_elems, 4)
+
+        conv_ids = id_map[roi_ids, conv_ids_y, conv_ids_x]
         conv_ids[pad_mask] = len(in_core_feats) + len(aux_feats)
 
-        # Perform 2D index-based convolution
-        out_core_feats = id_conv2d(in_core_feats, aux_feats, conv_ids, self.weight, self.bias)
+        # Get convolution weights
+        delta_xy = conv_xy - floor_xy
+        delta_xy = torch.stack([delta_xy, 1-delta_xy], dim=3)
+
+        x_ids = torch.tensor([1, 0, 1, 0], device=device)
+        y_ids = torch.tensor([1, 1, 0, 0], device=device)
+        conv_weights = delta_xy[:, :, 0, x_ids] * delta_xy[:, :, 1, y_ids]
+
+        # Perform 2D index-based deformable convolution
+        out_core_feats = id_deform_conv2d(in_core_feats, aux_feats, conv_ids, conv_weights, self.weight, self.bias)
 
         return out_core_feats
 
