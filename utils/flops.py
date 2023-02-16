@@ -17,24 +17,27 @@ from fvcore.nn.jit_handles import get_shape
 from torch.jit import TracerWarning
 
 
-def id_conv2d_flop_jit(inputs, outputs):
+def id_deform_conv2d_flop_jit(inputs, outputs):
     """
-    Function counting the number of 2D index-based convolution FLOPs.
+    Function counting the number of 2D index-based deformable convolution FLOPs.
 
     Args:
         inputs (List): List with inputs of the 2D index-based convolution operation.
         outputs (List): List with outputs of the 2D index-based convolution operation.
 
     Returns:
-        flops (Counter): Counter dictionary containing the number of 2D index-based convolution FLOPs.
+        flops (Counter): Counter dictionary containing the number of 2D index-based deformable convolution FLOPs.
     """
 
-    # Get weight from list with inputs
-    weight = inputs[3]
+    # Get desired entries from inputs list
+    in_core_feats = inputs[0]
+    conv_weights = inputs[3]
+    weight = inputs[4]
 
-    # Get number of 2D index-based convolution FLOPs
-    flops = get_shape(weight)[1] * prod(get_shape(outputs[0]))
-    flops = Counter({'id_conv2d': flops})
+    # Get number of 2D index-based deformable convolution FLOPs
+    flops = prod(get_shape(conv_weights)) * get_shape(in_core_feats)[1]
+    flops += get_shape(weight)[1] * prod(get_shape(outputs[0]))
+    flops = Counter({'id_deform_conv2d': flops})
 
     return flops
 

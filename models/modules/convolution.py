@@ -150,12 +150,13 @@ class IdDeformConv2d(nn.Module):
 
     Attributes:
         conv_offsets (nn.Linear): Linear layer computing the convolution offsets.
-        conv_weights (nn.Linear): Optional linear layer computing the unnormalized convoltion weights.
+        point_weights (nn.Linear): Optional linear layer computing the unnormalized point weights.
+        mod_weights (nn.Linear): Optional linear layer computing the unnormalized modulated weights.
         weight (Parameter): Parameter with convolution weights of shape [out_channels, kH * kW * in_channels].
         bias (Parameter): Optional parameter with convolution biases of shape [out_channels].
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, bias=True, modulated=False):
+    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, dilations=None, bias=True, modulated=False):
         """
         Initializes the IdDeformConv2d module.
 
@@ -164,6 +165,7 @@ class IdDeformConv2d(nn.Module):
             out_channels (int): Integer containing the number of output channels.
             kernel_size (int or Tuple): Integer ot tuple containing the size of the convolving kernel.
             dilation (int or Tuple): Integer or tuple containing the convolution dilation (default=1).
+            dilations (List): List containing one or multiple convolution dilations (default=None).
             bias (bool): Boolean indicating whether learnable bias is added to the output (default=True).
             modulated (bool): Boolean indicating whether to perform modulated convolutions (default=False).
 
@@ -174,31 +176,48 @@ class IdDeformConv2d(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Get kernel size and dilation in pair format
+        # Get kernel size and dilations in pair format
         kH, kW = pair(kernel_size)
-        dH, dW = pair(dilation)
+        dilations = [pair(dilation)] if dilations is None else [pair(dilation) for dilation in dilations]
+
+        # Set number of points attribute
+        self.num_points = len(dilations)
 
         # Initialize convolution offsets module
-        self.conv_offsets = nn.Linear(in_channels, kH * kW * 2)
+        self.conv_offsets = nn.Linear(in_channels, kH * kW * self.num_points * 2)
         nn.init.zeros_(self.conv_offsets.weight)
+        init_offs_list = []
 
-        init_offs_x = (kW-1)/2 * dW
-        init_offs_y = (kH-1)/2 * dH
+        for dH, dW in dilations:
+            init_offs_x = (kW-1)/2 * dW
+            init_offs_y = (kH-1)/2 * dH
 
-        init_offs_x = torch.linspace(-init_offs_x, init_offs_x, steps=kW)[None, :].expand(kH, -1)
-        init_offs_y = torch.linspace(-init_offs_y, init_offs_y, steps=kH)[:, None].expand(-1, kW)
+            init_offs_x = torch.linspace(-init_offs_x, init_offs_x, steps=kW)[None, :].expand(kH, -1)
+            init_offs_y = torch.linspace(-init_offs_y, init_offs_y, steps=kH)[:, None].expand(-1, kW)
 
-        init_offs = torch.stack([init_offs_x, init_offs_y], dim=2)
+            init_offs = torch.stack([init_offs_x, init_offs_y], dim=2)
+            init_offs_list.append(init_offs)
+
+        init_offs = torch.stack(init_offs_list, dim=2)
         self.conv_offsets.bias = nn.Parameter(init_offs.view(-1))
 
-        # Initialize convolution weights module if needed
-        if modulated:
-            self.conv_weights = nn.Linear(in_channels, kH * kW)
-            nn.init.zeros_(self.conv_weights.weight)
-            nn.init.zeros_(self.conv_weights.bias)
+        # Initialize point weights module if needed
+        if self.num_points > 1:
+            self.point_weights = nn.Linear(in_channels, kH * kW * self.num_points)
+            nn.init.zeros_(self.point_weights.weight)
+            nn.init.zeros_(self.point_weights.bias)
 
         else:
-            self.register_parameter('conv_weights', None)
+            self.register_parameter('point_weights', None)
+
+        # Initialize modulation weights module if needed
+        if modulated:
+            self.mod_weights = nn.Linear(in_channels, kH * kW)
+            nn.init.zeros_(self.mod_weights.weight)
+            nn.init.zeros_(self.mod_weights.bias)
+
+        else:
+            self.register_parameter('mod_weights', None)
 
         # Initialize weight parameter
         self.weight = Parameter(torch.empty(out_channels, kH * kW * in_channels))
@@ -238,18 +257,18 @@ class IdDeformConv2d(nn.Module):
 
         # Get convolution locations
         conv_xy = self.conv_offsets(in_core_feats)
-        conv_xy = conv_xy.view(num_core_feats, -1, 2)
-        conv_xy = pos_ids[:, None, :] + conv_xy
+        conv_xy = conv_xy.view(num_core_feats, -1, self.num_points, 2)
+        conv_xy = pos_ids[:, None, None, :] + conv_xy
 
         # Get convolution indices
         floor_xy = conv_xy.floor()
 
         conv_ids = floor_xy.int()
         grid_ids = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], device=device)
-        conv_ids = conv_ids[:, :, None, :] + grid_ids
+        conv_ids = conv_ids[:, :, :, None, :] + grid_ids
 
-        conv_ids_x = conv_ids[:, :, :, 0]
-        conv_ids_y = conv_ids[:, :, :, 1]
+        conv_ids_x = conv_ids[:, :, :, :, 0]
+        conv_ids_y = conv_ids[:, :, :, :, 1]
 
         rH, rW = id_map.size()[1:]
         pad_mask = (conv_ids_x < 0) | (conv_ids_y < 0) | (conv_ids_x >= rW) | (conv_ids_y >= rH)
@@ -257,9 +276,7 @@ class IdDeformConv2d(nn.Module):
         conv_ids_x = conv_ids_x.clamp_(min=0, max=rW-1)
         conv_ids_y = conv_ids_y.clamp_(min=0, max=rH-1)
 
-        num_kernel_elems = conv_xy.size(dim=1)
-        roi_ids = roi_ids[:, None, None].expand(-1, num_kernel_elems, 4)
-
+        roi_ids = roi_ids[:, None, None, None].expand_as(conv_ids_x)
         conv_ids = id_map[roi_ids, conv_ids_y, conv_ids_x]
         conv_ids[pad_mask] = len(in_core_feats) + len(aux_feats)
 
@@ -269,11 +286,16 @@ class IdDeformConv2d(nn.Module):
 
         x_ids = torch.tensor([1, 0, 1, 0], device=device)
         y_ids = torch.tensor([1, 1, 0, 0], device=device)
-        conv_weights = delta_xy[:, :, 0, x_ids] * delta_xy[:, :, 1, y_ids]
+        conv_weights = delta_xy[:, :, :, 0, x_ids] * delta_xy[:, :, :, 1, y_ids]
 
-        if self.conv_weights is not None:
-            mod_weights = self.conv_weights(in_core_feats).sigmoid()
-            conv_weights = mod_weights[:, :, None] * conv_weights
+        if self.point_weights is not None:
+            point_weights = self.point_weights(in_core_feats).view(num_core_feats, -1, self.num_points)
+            point_weights = F.softmax(point_weights, dim=2)
+            conv_weights = point_weights[:, :, :, None] * conv_weights
+
+        if self.mod_weights is not None:
+            mod_weights = self.mod_weights(in_core_feats).sigmoid()
+            conv_weights = mod_weights[:, :, None, None] * conv_weights
 
         # Perform 2D index-based deformable convolution
         out_core_feats = id_deform_conv2d(in_core_feats, aux_feats, conv_ids, conv_weights, self.weight, self.bias)

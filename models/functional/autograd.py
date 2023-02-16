@@ -334,8 +334,8 @@ class IdDeformConv2d(Function):
             ctx (FunctionCtx): Context object storing additional data.
             in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
             aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
-            conv_ids (LongTensor): Indices selecting convolution features of shape [num_core_feats, kH * kW, 4].
-            conv_weights (FloatTensor): Values weighting the convolution features of shape [num_core_feats, kH * kW, 4].
+            conv_ids (LongTensor): Convolution indices of shape [num_core_feats, kH * kW, num_points, 4].
+            conv_weights (FloatTensor): Convolution weights of shape [num_core_feats, kH * kW, num_points, 4].
             weight (FloatTensor): Weight parameters of shape [out_channels, kH * kW * in_channels].
             bias (FloatTensor): Bias parameters of shape [out_channels].
 
@@ -348,8 +348,8 @@ class IdDeformConv2d(Function):
         cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
 
         # Get weighted convolution features
-        conv_feats = conv_weights[:, :, :, None] * cat_feats[conv_ids]
-        conv_feats = conv_feats.sum(dim=2).flatten(1)
+        conv_feats = conv_weights[:, :, :, :, None] * cat_feats[conv_ids]
+        conv_feats = conv_feats.flatten(2, 3).sum(dim=2).flatten(1)
 
         # Get output core features
         out_core_feats = torch.mm(conv_feats, weight.t())
@@ -366,7 +366,7 @@ class IdDeformConv2d(Function):
     @once_differentiable
     def backward(ctx, grad_out_core_feats):
         """
-        Backward method of the IdDeformableConv2d autograd function.
+        Backward method of the IdDeformConv2d autograd function.
 
         Args:
             ctx (FunctionCtx): Context object storing additional data.
@@ -376,7 +376,7 @@ class IdDeformConv2d(Function):
             grad_in_core_feats (FloatTensor): Input core features gradient of shape [num_core_feats, in_channels].
             grad_aux_feats (FloatTensor): Auxiliary features gradient of shape [num_aux_feats, in_channels].
             grad_conv_ids (None): None.
-            grad_conv_weights (FloatTensor): Convolution weights gradient of shape [num_core_feats, kH * kW, 4].
+            grad_conv_weights (FloatTensor): Conv. weights gradient of shape [num_core_feats, kH * kW, num_points, 4].
             grad_weight (FloatTensor): Weight parameter gradient of shape [out_channels, kH * kW * in_channels].
             grad_bias (FloatTensor): Bias parameter gradient of shape [out_channels] or None.
         """
@@ -390,8 +390,8 @@ class IdDeformConv2d(Function):
 
         # Recompute weighted convolution features
         sel_conv_feats = cat_feats[conv_ids]
-        conv_feats = conv_weights[:, :, :, None] * sel_conv_feats
-        conv_feats = conv_feats.sum(dim=2).flatten(1)
+        conv_feats = conv_weights[:, :, :, :, None] * sel_conv_feats
+        conv_feats = conv_feats.flatten(2, 3).sum(dim=2).flatten(1)
 
         # Get gradient tensors
         grad_conv_feats = torch.mm(grad_out_core_feats, weight)
@@ -399,11 +399,13 @@ class IdDeformConv2d(Function):
         grad_bias = grad_out_core_feats.sum(dim=0) if bias is not None else None
 
         num_core_feats, in_channels = in_core_feats.size()
-        grad_conv_feats = grad_conv_feats.view(num_core_feats, -1, in_channels)
-        grad_conv_feats = grad_conv_feats[:, :, None, :].expand(-1, -1, 4, -1)
+        num_points = conv_ids.size(dim=2)
 
-        grad_conv_weights = (grad_conv_feats * sel_conv_feats).sum(dim=3)
-        grad_conv_feats = grad_conv_feats * conv_weights[:, :, :, None]
+        grad_conv_feats = grad_conv_feats.view(num_core_feats, -1, in_channels)
+        grad_conv_feats = grad_conv_feats[:, :, None, None, :].expand(-1, -1, num_points, 4, -1)
+
+        grad_conv_weights = (grad_conv_feats * sel_conv_feats).sum(dim=4)
+        grad_conv_feats = grad_conv_feats * conv_weights[:, :, :, :, None]
         grad_conv_ids = None
 
         grad_conv_feats = grad_conv_feats.view(-1, in_channels)

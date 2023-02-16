@@ -85,8 +85,8 @@ def id_deform_conv2d(in_core_feats, aux_feats, conv_ids, conv_weights, weight, b
     Args:
         in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_channels].
         aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_channels].
-        conv_ids (LongTensor): Indices selecting convolution features of shape [num_core_feats, kH * kW, 4].
-        conv_weights (FloatTensor): Values weighting the convolution features of shape [num_core_feats, kH * kW, 4].
+        conv_ids (LongTensor): Convolution indices of shape [num_core_feats, kH * kW, num_points, 4].
+        conv_weights (FloatTensor): Convolution weights of shape [num_core_feats, kH * kW, num_points, 4].
         weight (FloatTensor): Weight parameters of shape [out_channels, kH * kW * in_channels].
         bias (FloatTensor): Bias parameters of shape [out_channels].
 

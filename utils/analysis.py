@@ -6,7 +6,7 @@ import json
 import torch
 from torch.utils.benchmark import Timer
 
-from utils.flops import FlopCountAnalysis, id_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
+from utils.flops import FlopCountAnalysis, id_deform_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
 
 EXTRA_OPS = {
     'aten::abs': None,
@@ -36,7 +36,7 @@ EXTRA_OPS = {
     'aten::topk': None,
     'aten::_unique2': None,
     'aten::where': None,
-    'prim::PythonOp.IdConv2d': id_conv2d_flop_jit,
+    'prim::PythonOp.IdDeformConv2d': id_deform_conv2d_flop_jit,
     'prim::PythonOp.MSDeformAttnFunction': msda_flop_jit,
     'prim::PythonOp.RoIAlignFunction': roi_align_mmcv_flop_jit,
 }
