@@ -377,9 +377,26 @@ model = dict(
                     inplace=True,
                 ),
                 dict(
+                    type='ModuleSum',
+                    sub_module_cfgs=[[
+                        dict(
+                            type='IdDeformConv2d',
+                            in_channels=2**(7-i),
+                            out_channels=2**(7-i),
+                            kernel_size=3,
+                            dilation=dilation,
+                            modulated=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                    ] for dilation in (1, 3, 5)],
+                ),
+                dict(
                     type='nn.Linear',
                     in_features=2**(7-i),
-                    out_features=2**(9-i),
+                    out_features=2**(7-i),
                     bias=True,
                 ),
                 dict(
@@ -388,7 +405,7 @@ model = dict(
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=2**(9-i),
+                    in_features=2**(7-i),
                     out_features=2**(7-i),
                     bias=True,
                 ),

@@ -367,10 +367,11 @@ model = dict(
             ] for i in range(3)],
             proc_cfg=[[
                 dict(
-                    type='nn.Linear',
-                    in_features=2**(7-i),
-                    out_features=2**(7-i),
-                    bias=True,
+                    type='IdDeformConv2d',
+                    in_channels=2**(7-i),
+                    out_channels=2**(7-i),
+                    kernel_size=3,
+                    modulated=True,
                 ),
                 dict(
                     type='nn.LayerNorm',

@@ -150,11 +150,12 @@ class IdDeformConv2d(nn.Module):
 
     Attributes:
         conv_offsets (nn.Linear): Linear layer computing the convolution offsets.
+        conv_weights (nn.Linear): Optional linear layer computing the unnormalized convoltion weights.
         weight (Parameter): Parameter with convolution weights of shape [out_channels, kH * kW * in_channels].
         bias (Parameter): Optional parameter with convolution biases of shape [out_channels].
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, dilation=1, bias=True, modulated=False):
         """
         Initializes the IdDeformConv2d module.
 
@@ -164,6 +165,7 @@ class IdDeformConv2d(nn.Module):
             kernel_size (int or Tuple): Integer ot tuple containing the size of the convolving kernel.
             dilation (int or Tuple): Integer or tuple containing the convolution dilation (default=1).
             bias (bool): Boolean indicating whether learnable bias is added to the output (default=True).
+            modulated (bool): Boolean indicating whether to perform modulated convolutions (default=False).
 
         Raises:
             ValueError: Error when an even kernel size is provided in either dimension.
@@ -188,6 +190,15 @@ class IdDeformConv2d(nn.Module):
 
         init_offs = torch.stack([init_offs_x, init_offs_y], dim=2)
         self.conv_offsets.bias = nn.Parameter(init_offs.view(-1))
+
+        # Initialize convolution weights module if needed
+        if modulated:
+            self.conv_weights = nn.Linear(in_channels, kH * kW)
+            nn.init.zeros_(self.conv_weights.weight)
+            nn.init.zeros_(self.conv_weights.bias)
+
+        else:
+            self.register_parameter('conv_weights', None)
 
         # Initialize weight parameter
         self.weight = Parameter(torch.empty(out_channels, kH * kW * in_channels))
@@ -228,6 +239,7 @@ class IdDeformConv2d(nn.Module):
         # Get convolution locations
         conv_xy = self.conv_offsets(in_core_feats)
         conv_xy = conv_xy.view(num_core_feats, -1, 2)
+        conv_xy = pos_ids[:, None, :] + conv_xy
 
         # Get convolution indices
         floor_xy = conv_xy.floor()
@@ -258,6 +270,10 @@ class IdDeformConv2d(nn.Module):
         x_ids = torch.tensor([1, 0, 1, 0], device=device)
         y_ids = torch.tensor([1, 1, 0, 0], device=device)
         conv_weights = delta_xy[:, :, 0, x_ids] * delta_xy[:, :, 1, y_ids]
+
+        if self.conv_weights is not None:
+            mod_weights = self.conv_weights(in_core_feats).sigmoid()
+            conv_weights = mod_weights[:, :, None] * conv_weights
 
         # Perform 2D index-based deformable convolution
         out_core_feats = id_deform_conv2d(in_core_feats, aux_feats, conv_ids, conv_weights, self.weight, self.bias)
