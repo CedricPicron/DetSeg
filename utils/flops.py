@@ -34,7 +34,7 @@ def id_conv2d_flop_jit(inputs, outputs):
 
     # Get number of 2D index-based convolution FLOPs
     flops = get_shape(weight)[1] * prod(get_shape(outputs[0]))
-    flops = Counter({'adj_conv2d': flops})
+    flops = Counter({'id_conv2d': flops})
 
     return flops
 
