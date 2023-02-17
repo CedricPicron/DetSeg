@@ -14,6 +14,7 @@ from models.build import build_model, MODELS
 from models.extensions.deformable.modules import MSDA3D
 from models.extensions.deformable.python.insert import pytorch_maps_insert_2d, pytorch_maps_insert_3d
 from models.extensions.deformable.python.sample import pytorch_maps_sample_2d, pytorch_maps_sample_3d
+from models.functional.attention import id_deform_attn2d
 from structures.boxes import Boxes
 
 
@@ -541,6 +542,149 @@ class DeformableAttn(nn.Module):
         out_feats = in_feats + delta_feats if self.skip else delta_feats
 
         return out_feats
+
+
+@MODELS.register_module()
+class IdDeformAttn2d(nn.Module):
+    """
+    Class implementing the IdDeformAttn2d module.
+
+    Attributes:
+        num_heads (int): Integer containing the number of attention heads.
+        num_points (int): Integer containing the number of sampling points per head.
+
+        sample_offsets (nn.Linear): Linear layer computing the sampling offsets.
+        attn_weights (nn.Linear): Linear layer computing the unnormalized attention weights.
+        val_proj (nn.Linear): Linear layer computing the value features from input features.
+        out_proj (nn.Linear): Linear layer computing the output feature from weighted value features.
+    """
+
+    def __init__(self, in_size, out_size, num_heads=8, point_offsets=None, val_size=-1):
+        """
+        Initializes the IdDeformAttn2d module.
+
+        Args:
+            in_size (int): Integer containing input feature size.
+            out_size (int): Integer containing output feature size.
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            point_offsets (List): List of size [num_points] containing the point offsets (default=None).
+            val_size (int): Integer containing the value feature size (default=-1).
+
+        Raises:
+            ValueError: Error when the value feature size is not divisible by the number of heads.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Get default list of point offsets if missing
+        if point_offsets is None:
+            point_offsets = [1, 2, 3, 4]
+
+        # Set number of heads and number of points attributes
+        self.num_heads = num_heads
+        self.num_points = len(point_offsets)
+
+        # Initialize module computing the sample offsets
+        self.sample_offsets = nn.Linear(in_size, num_heads * self.num_points * 2)
+        nn.init.zeros_(self.sample_offsets.weight)
+
+        thetas = torch.arange(num_heads, dtype=torch.float) * (2.0 * math.pi / num_heads)
+        grid_init = torch.stack([thetas.cos(), thetas.sin()], dim=1)
+        grid_init = grid_init / grid_init.abs().max(dim=1, keepdim=True)[0]
+
+        point_offsets = torch.tensor(point_offsets, dtype=torch.float)
+        grid_init = point_offsets[None, :, None] * grid_init[:, None, :]
+        self.sample_offsets.bias = nn.Parameter(grid_init.view(-1))
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(in_size, num_heads * self.num_points)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Get and check size of value features
+        if val_size == -1:
+            val_size = in_size
+
+        if val_size % num_heads != 0:
+            error_msg = f"The value feature size ({val_size}) must be divisible by the number of heads ({num_heads})."
+            raise ValueError(error_msg)
+
+        # Initialize module computing the value features
+        self.val_proj = nn.Linear(in_size, val_size)
+        nn.init.xavier_uniform_(self.val_proj.weight)
+        nn.init.zeros_(self.val_proj.bias)
+
+        # Initialize module computing the output features
+        self.out_proj = nn.Linear(val_size, out_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+    def forward(self, in_core_feats, aux_feats, id_map, roi_ids, pos_ids, **kwargs):
+        """
+        Forward method of the IdDeformAttn2d module.
+
+        Args:
+            in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_size].
+            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_size].
+            id_map (LongTensor): Index map with feature indices of shape [num_rois, rH, rW].
+            roi_ids (LongTensor): RoI indices of core features of shape [num_core_feats].
+            pos_ids (LongTensor): RoI-based core position indices in (X, Y) format of shape [num_core_feats, 2].
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_core_feats (FloatTensor): Output core features of shape [num_core_feats, out_size].
+        """
+
+        # Get device and number of core features
+        device = in_core_feats.device
+        num_core_feats = len(in_core_feats)
+
+        # Get sample locations
+        sample_xy = self.sample_offsets(in_core_feats)
+        sample_xy = sample_xy.view(num_core_feats, self.num_heads, self.num_points, 2)
+        sample_xy = pos_ids[:, None, None, :] + sample_xy
+
+        # Get sample indices
+        floor_xy = sample_xy.floor()
+
+        sample_ids = floor_xy.int()
+        grid_ids = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], device=device)
+        sample_ids = sample_ids[:, :, :, None, :] + grid_ids
+
+        sample_ids_x = sample_ids[:, :, :, :, 0]
+        sample_ids_y = sample_ids[:, :, :, :, 1]
+
+        rH, rW = id_map.size()[1:]
+        pad_mask = (sample_ids_x < 0) | (sample_ids_y < 0) | (sample_ids_x >= rW) | (sample_ids_y >= rH)
+
+        sample_ids_x = sample_ids_x.clamp_(min=0, max=rW-1)
+        sample_ids_y = sample_ids_y.clamp_(min=0, max=rH-1)
+
+        roi_ids = roi_ids[:, None, None, None].expand_as(sample_ids_x)
+        sample_ids = id_map[roi_ids, sample_ids_y, sample_ids_x]
+        sample_ids[pad_mask] = len(in_core_feats) + len(aux_feats)
+
+        # Get sample weights
+        delta_xy = sample_xy - floor_xy
+        delta_xy = torch.stack([delta_xy, 1-delta_xy], dim=3)
+
+        x_ids = torch.tensor([1, 0, 1, 0], device=device)
+        y_ids = torch.tensor([1, 1, 0, 0], device=device)
+        sample_weights = delta_xy[:, :, :, 0, x_ids] * delta_xy[:, :, :, 1, y_ids]
+
+        attn_weights = self.attn_weights(in_core_feats).view(num_core_feats, self.num_heads, self.num_points)
+        attn_weights = F.softmax(attn_weights, dim=2)
+        sample_weights = attn_weights[:, :, :, None] * sample_weights
+
+        # Perform 2D index-based deformable attention
+        weight = self.val_proj.weight
+        bias = self.val_proj.bias
+
+        val_core_feats = id_deform_attn2d(in_core_feats, aux_feats, sample_ids, sample_weights, weight, bias)
+        out_core_feats = self.out_proj(val_core_feats)
+
+        return out_core_feats
 
 
 @MODELS.register_module()

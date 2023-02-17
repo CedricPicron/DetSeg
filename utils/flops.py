@@ -17,6 +17,31 @@ from fvcore.nn.jit_handles import get_shape
 from torch.jit import TracerWarning
 
 
+def id_deform_attn2d_flop_jit(inputs, outputs):
+    """
+    Function counting the number of 2D index-based deformable attention FLOPs.
+
+    Args:
+        inputs (List): List with inputs of the 2D index-based attention operation.
+        outputs (List): List with outputs of the 2D index-based attention operation.
+
+    Returns:
+        flops (Counter): Counter dictionary containing the number of 2D index-based deformable attention FLOPs.
+    """
+
+    # Get desired entries from inputs list
+    in_core_feats = inputs[0]
+    sample_weights = inputs[3]
+
+    # Get number of 2D index-based deformable attention FLOPs
+    in_size = get_shape(in_core_feats)[1]
+    flops = prod(get_shape(sample_weights)) * in_size
+    flops += in_size * prod(get_shape(outputs[0]))
+    flops = Counter({'id_deform_attn2d': flops})
+
+    return flops
+
+
 def id_deform_conv2d_flop_jit(inputs, outputs):
     """
     Function counting the number of 2D index-based deformable convolution FLOPs.

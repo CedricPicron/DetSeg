@@ -318,6 +318,111 @@ class CustomStep(Function):
         return grad_in_tensor, grad_left_zero_grad_thr, grad_right_zero_grad_thr
 
 
+class IdDeformAttn2d(Function):
+    """
+    Class implementing the IdDeformAttn2d autograd function.
+
+    This custom autograd function avoids keeping intermediate data structures in memory.
+    """
+
+    @staticmethod
+    def forward(ctx, in_core_feats, aux_feats, sample_ids, sample_weights, weight, bias):
+        """
+        Forward method of the IdDeformAttn2d autograd function.
+
+        Args:
+            in_core_feats (FloatTensor): Input core features of shape [num_core_feats, in_size].
+            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, in_size].
+            sample_ids (LongTensor): Sample indices of shape [num_core_feats, num_heads, num_points, 4].
+            sample_weights (FloatTensor): Sample weights of shape [num_core_feats, num_heads, num_points, 4].
+            weight (FloatTensor): Weight parameters of shape [val_size, in_size].
+            bias (FloatTensor): Bias parameters of shape [val_size].
+
+        Returns:
+            val_core_feats (FloatTensor): Value core features of shape [num_core_feats, val_size].
+        """
+
+        # Get concatenated features
+        pad_feat = in_core_feats.new_zeros([1, in_core_feats.size()[1]])
+        cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
+
+        # Get weighted sample features
+        sample_feats = sample_weights[:, :, :, :, None] * cat_feats[sample_ids]
+        sample_feats = sample_feats.flatten(2, 3).sum(dim=2, keepdim=True)
+
+        # Get value core features
+        num_heads = sample_ids.size(dim=1)
+        val_size, in_size = weight.size()
+
+        matmul_weight = weight.view(num_heads, val_size // num_heads, in_size).transpose(1, 2).contiguous()
+        val_core_feats = torch.matmul(sample_feats, matmul_weight).flatten(1)
+
+        if bias is not None:
+            val_core_feats += bias
+
+        # Save input tensors for backward pass
+        ctx.save_for_backward(in_core_feats, aux_feats, sample_ids, sample_weights, weight, bias)
+
+        return val_core_feats
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_val_core_feats):
+        """
+        Backward method of the IdDeformAttn2d autograd function.
+
+        Args:
+            ctx (FunctionCtx): Context object storing additional data.
+            grad_val_core_feats (FloatTensor): Value core features gradient of shape [num_core_feats, val_size].
+
+        Returns:
+            grad_in_core_feats (FloatTensor): Input core features gradient of shape [num_core_feats, in_size].
+            grad_aux_feats (FloatTensor): Auxiliary features gradient of shape [num_aux_feats, in_size].
+            grad_sample_ids (None): None.
+            grad_sample_weights (FloatTensor): Sample weights grad. of shape [num_core_feats, num_heads, num_points, 4].
+            grad_weight (FloatTensor): Weight parameter gradient of shape [val_size, in_size].
+            grad_bias (FloatTensor): Bias parameter gradient of shape [val_size] or None.
+        """
+
+        # Recover input tensors from forward method
+        in_core_feats, aux_feats, sample_ids, sample_weights, weight, bias = ctx.saved_tensors
+
+        # Recompute concatenated features
+        pad_feat = in_core_feats.new_zeros([1, in_core_feats.size()[1]])
+        cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
+
+        # Recompute weighted sample features
+        sel_sample_feats = cat_feats[sample_ids]
+        sample_feats = sample_weights[:, :, :, :, None] * sel_sample_feats
+        sample_feats = sample_feats.flatten(2, 3).sum(dim=2, keepdim=True)
+
+        # Get gradient tensors
+        grad_bias = grad_val_core_feats.sum(dim=0) if bias is not None else None
+
+        num_core_feats, num_heads, num_points = sample_ids.size()[:3]
+        val_size, in_size = weight.size()
+
+        grad_val_core_feats = grad_val_core_feats.view(num_core_feats, num_heads, 1, val_size // num_heads)
+        weight = weight.view(num_heads, val_size // num_heads, in_size)
+
+        grad_sample_feats = torch.matmul(grad_val_core_feats, weight)
+        grad_weight = torch.matmul(grad_val_core_feats.transpose(2, 3), sample_feats)
+        grad_weight = grad_weight.sum(dim=0).flatten(0, 1)
+
+        grad_sample_feats = grad_sample_feats[:, :, :, None, :].expand(-1, -1, num_points, 4, -1)
+        grad_sample_weights = (grad_sample_feats * sel_sample_feats).sum(dim=4)
+        grad_sample_feats = grad_sample_feats * sample_weights[:, :, :, :, None]
+        grad_sample_ids = None
+
+        grad_sample_feats = grad_sample_feats.view(-1, in_size)
+        grad_cat_feats = torch.zeros_like(cat_feats).index_add_(0, sample_ids.flatten(), grad_sample_feats)
+
+        grad_in_core_feats = grad_cat_feats[:num_core_feats]
+        grad_aux_feats = grad_cat_feats[num_core_feats:-1]
+
+        return grad_in_core_feats, grad_aux_feats, grad_sample_ids, grad_sample_weights, grad_weight, grad_bias
+
+
 class IdDeformConv2d(Function):
     """
     Class implementing the IdDeformConv2d autograd function.
@@ -385,7 +490,7 @@ class IdDeformConv2d(Function):
         in_core_feats, aux_feats, conv_ids, conv_weights, weight, bias = ctx.saved_tensors
 
         # Recompute concatenated features
-        pad_feat = aux_feats.new_zeros([1, aux_feats.size()[1]])
+        pad_feat = in_core_feats.new_zeros([1, in_core_feats.size()[1]])
         cat_feats = torch.cat([in_core_feats, aux_feats, pad_feat], dim=0)
 
         # Recompute weighted convolution features

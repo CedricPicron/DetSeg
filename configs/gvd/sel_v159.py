@@ -154,7 +154,7 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=9,
+                    out_features=81,
                     bias=True,
                 ),
             ],
@@ -377,20 +377,15 @@ model = dict(
                     inplace=True,
                 ),
                 dict(
-                    type='ModuleSum',
-                    sub_module_cfgs=[[
-                        dict(
-                            type='IdConv2d',
-                            in_channels=2**(7-i),
-                            out_channels=2**(7-i),
-                            kernel_size=3,
-                            dilation=dilation,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                    ] for dilation in (1, 3, 5)],
+                    type='IdDeformAttn2d',
+                    in_size=2**(7-i),
+                    out_size=2**(7-i),
+                    num_heads=8,
+                    point_offsets=[1, 3, 5],
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
                 ),
                 dict(
                     type='nn.Linear',

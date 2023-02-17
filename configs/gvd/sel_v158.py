@@ -154,7 +154,7 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=9,
+                    out_features=81,
                     bias=True,
                 ),
             ],
@@ -218,12 +218,16 @@ model = dict(
             ),
         ),
         dict(
-            type='RefineMaskRoIHead',
-            mask_roi_extractor=dict(
+            type='TopDownSegHead',
+            roi_ext_cfg=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
                 out_channels=256,
                 featmap_strides=[4, 8, 16, 32],
+            ),
+            pos_enc_cfg=dict(
+                type='SinePosEncoder2d',
+                feat_size=256,
             ),
             qry_cfg=[
                 dict(
@@ -257,37 +261,181 @@ model = dict(
                     bias=True,
                 ),
             ],
-            mask_head=dict(
-                type='SimpleRefineMaskHead',
-                num_convs_instance=2,
-                num_convs_semantic=4,
-                conv_in_channels_instance=256,
-                conv_in_channels_semantic=256,
-                conv_kernel_size_instance=3,
-                conv_kernel_size_semantic=3,
-                conv_out_channels_instance=256,
-                conv_out_channels_semantic=256,
-                conv_cfg=None,
-                norm_cfg=None,
-                fusion_type='MultiBranchFusionAvg',
-                dilations=[1, 3, 5],
-                semantic_out_stride=4,
-                stage_num_classes=[8, 8, 8, 1],
-                stage_sup_size=[14, 28, 56, 112],
-                pre_upsample_last_stage=False,
-                upsample_cfg=dict(type='bilinear', scale_factor=2),
-                loss_cfg=dict(
-                    type='BARCrossEntropyLoss',
-                    stage_instance_loss_weight=[0.5, 0.75, 0.75, 1.0],
-                    boundary_width=2,
-                    start_stage=1),
+            roi_ins_cfg=dict(
+                type='mmcv.ConvModule',
+                num_layers=4,
+                in_channels=256,
+                out_channels=256,
+                kernel_size=3,
+                padding=1,
             ),
+            seg_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=1,
+                    bias=True,
+                ),
+                dict(
+                    type='View',
+                    out_shape=(-1,),
+                ),
+            ] for i in range(4)],
+            ref_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=1,
+                    bias=True,
+                ),
+                dict(
+                    type='View',
+                    out_shape=(-1,),
+                ),
+            ] for i in range(4)],
+            fuse_td_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(10-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='View',
+                    out_shape=(-1, 2**(8-i)),
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
+                    bias=True,
+                ),
+            ] for i in range(3)],
+            fuse_key_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=256 + 2**(8-i),
+                    out_features=2**(8-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(8-i),
+                    bias=True,
+                ),
+            ] for i in range(3)],
+            trans_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(8-i),
+                    out_features=2**(7-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ] for i in range(3)],
+            proc_cfg=[[
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(7-i),
+                    out_features=2**(7-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='IdDeformAttn2d',
+                    in_size=2**(7-i),
+                    out_size=2**(7-i),
+                    num_heads=8,
+                    point_offsets=[1, 3, 5],
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(7-i),
+                    out_features=2**(7-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=2**(7-i),
+                    out_features=2**(7-i),
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ] for i in range(3)],
+            map_offset=1,
+            key_min_id=2,
+            key_max_id=7,
+            seg_iters=4,
+            refines_per_iter=10000,
+            get_segs=True,
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
                 nms_thr=0.5,
             ),
             max_segs=100,
+            mask_thr=0.5,
+            matcher_cfg=None,
+            seg_loss_cfg=dict(
+                type='mmdet.CrossEntropyLoss',
+                use_sigmoid=True,
+                reduction='mean',
+                loss_weight=1.0,
+            ),
+            seg_loss_weights=(0.25, 0.375, 0.375, 0.5),
+            ref_loss_cfg=dict(
+                type='mmdet.CrossEntropyLoss',
+                use_sigmoid=True,
+                reduction='mean',
+                loss_weight=1.0,
+            ),
+            ref_loss_weights=(0.25, 0.25, 0.25, 0.25),
         ),
     ],
     head_apply_ids=[6],

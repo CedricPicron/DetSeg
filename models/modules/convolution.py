@@ -168,9 +168,6 @@ class IdDeformConv2d(nn.Module):
             dilations (List): List containing one or multiple convolution dilations (default=None).
             bias (bool): Boolean indicating whether learnable bias is added to the output (default=True).
             modulated (bool): Boolean indicating whether to perform modulated convolutions (default=False).
-
-        Raises:
-            ValueError: Error when an even kernel size is provided in either dimension.
         """
 
         # Initialization of default nn.Module
