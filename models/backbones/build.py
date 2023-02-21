@@ -17,7 +17,7 @@ def build_backbone(args):
         backbone (nn.Module): The specified backbone module.
 
     Raises:
-        ValueError: Error when unknown backbone type was provided.
+        ValueError: Error when an unknown backbone type was provided.
     """
 
     # Build backbone module
@@ -28,7 +28,7 @@ def build_backbone(args):
         backbone = ResNet(args.resnet_name, args.resnet_out_ids, args.resnet_dilation)
 
     else:
-        raise ValueError(f"Unknown backbone type {args.backbone_type} was provided.")
+        raise ValueError(f"Unknown backbone type '{args.backbone_type}' was provided.")
 
     # Add backbone output indices and output feature sizes to args
     args.backbone_out_ids = backbone.out_ids

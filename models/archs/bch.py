@@ -27,7 +27,7 @@ class BCH(nn.Module):
 
         Args:
             backbone (nn.Module): Module implementing the backbone.
-            core (nn.Module or List): Module or list of modules [num_cores] implementing the core.
+            core (nn.Module): Module implementing the core.
             heads (Dict): Dictionary of size [num_heads] with head modules.
         """
 
@@ -36,7 +36,7 @@ class BCH(nn.Module):
 
         # Set backbone, core and heads attributes
         self.backbone = backbone
-        self.core = list(core.values())[0] if len(core) == 1 else nn.ModuleDict(core)
+        self.core = core
         self.heads = nn.ModuleDict(heads)
 
     @staticmethod
@@ -84,10 +84,7 @@ class BCH(nn.Module):
         feat_maps = self.backbone(images)
 
         # Apply core
-        cores = list(self.core.values()) if isinstance(self.core, nn.ModuleDict) else [self.core]
-
-        for core in cores:
-            feat_maps = core(feat_maps, images=images)
+        feat_maps = self.core(feat_maps, images=images)
 
         # Apply heads and merge non-prediction dictionaries originating from different heads
         head_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'visualize': visualize, **kwargs}

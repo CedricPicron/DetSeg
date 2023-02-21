@@ -1,6 +1,7 @@
 """
 General build function for core modules.
 """
+from collections import OrderedDict
 
 from mmcv import Config
 
@@ -10,6 +11,7 @@ from .fpn import FPN
 from .gc import GC
 from .mmdet import MMDetCore
 from models.build import build_model
+from models.modules.container import Sequential
 
 
 def build_core(args):
@@ -20,20 +22,20 @@ def build_core(args):
         args (argparse.Namespace): Command-line arguments.
 
     Returns:
-        cores (Dict): Dictionary with specified core modules.
+        core (nn.Module): The specified core module.
 
     Raises:
-        ValueError: Error when unknown core type was provided.
+        ValueError: Error when an unknown core type was provided.
     """
 
     # Initialize empty dictionary of core modules
-    cores = {}
+    cores = OrderedDict()
 
     # Get input indices and input sizes
     in_ids = args.backbone_out_ids
     in_sizes = args.backbone_out_sizes
 
-    # Inirialize configuration index
+    # Initialize configuration index
     cfg_id = 0
 
     # Build core modules
@@ -106,7 +108,7 @@ def build_core(args):
             cores[core_type] = core
 
         else:
-            raise ValueError(f"Unknown core type {core_type} was provided.")
+            raise ValueError(f"Unknown core type '{core_type}' was provided.")
 
         # Update input indices and input sizes
         in_ids = core.out_ids
@@ -116,4 +118,7 @@ def build_core(args):
     args.core_out_ids = core.out_ids
     args.core_out_sizes = core.out_sizes
 
-    return cores
+    # Get final core module from dictionary of core modules
+    core = list(cores.values())[0] if len(cores) == 1 else Sequential(cores)
+
+    return core
