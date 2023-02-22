@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from mmcv.cnn import initialize
 from mmcv.cnn.bricks import ACTIVATION_LAYERS, CONV_LAYERS, NORM_LAYERS, PADDING_LAYERS, PLUGIN_LAYERS, UPSAMPLE_LAYERS
+from mmcv.cnn.bricks.transformer import POSITIONAL_ENCODING
 from mmcv.cnn.builder import MODELS as MMCV_MODELS
 from mmcv.cnn.utils import INITIALIZERS
 from mmcv.utils import build_from_cfg, Registry
@@ -71,6 +72,7 @@ MODELS = Registry('models', build_func=build_model_from_cfg)
 [MMCV_MODELS.register_module(name, module=module) for name, module in PADDING_LAYERS.module_dict.items()]
 [MMCV_MODELS.register_module(name, module=module) for name, module in PLUGIN_LAYERS.module_dict.items()]
 [MMCV_MODELS.register_module(name, module=module, force=True) for name, module in UPSAMPLE_LAYERS.module_dict.items()]
+[MMCV_MODELS.register_module(name, module=module) for name, module in POSITIONAL_ENCODING.module_dict.items()]
 [MMCV_MODELS.register_module(name, module=module) for name, module in INITIALIZERS.module_dict.items()]
 MODELS._add_children(MMCV_MODELS)
 
