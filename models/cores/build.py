@@ -3,7 +3,7 @@ General build function for core modules.
 """
 from collections import OrderedDict
 
-from mmcv import Config
+from mmengine.config import Config
 
 from .bifpn import BiFPN
 from .dc import DeformableCore

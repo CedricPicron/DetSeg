@@ -247,7 +247,7 @@ model = dict(
                 type='ApplyAll',
                 module_cfg=[
                     dict(
-                        type='mmcv.ConvModule',
+                        type='mmdet.ConvModule',
                         num_layers=4,
                         in_channels=256,
                         out_channels=256,

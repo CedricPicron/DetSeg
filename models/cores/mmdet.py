@@ -2,8 +2,8 @@
 Module building cores from MMDetection.
 """
 
-from mmcv import Config
-from mmdet.models import build_neck as build_core
+from mmengine.config import Config
+from mmengine.registry import build_model_from_cfg
 from torch import nn
 
 from models.build import MODELS
@@ -40,7 +40,7 @@ class MMDetCore(nn.Module):
         self.out_sizes = cfg.core.pop('out_sizes')
 
         # Get core body
-        self.body = build_core(cfg.core)
+        self.body = build_model_from_cfg(cfg.core)
         self.body.init_weights()
 
     def forward(self, in_feat_maps, **kwargs):

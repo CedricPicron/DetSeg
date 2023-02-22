@@ -6,9 +6,6 @@ Only slight modifications were made to fit the code inside the 120 line length l
 
 from mmcv.cnn import build_upsample_layer, ConvModule
 from mmcv.ops import SimpleRoIAlign
-from mmdet.models.builder import build_loss
-from mmdet.models.builder import LOSSES as MMDET_LOSSES
-from mmdet.models.builder import MODELS as MMDET_MODELS
 from mmdet.models.losses.cross_entropy_loss import binary_cross_entropy
 from mmdet.models.roi_heads.mask_heads.fcn_mask_head import BYTES_PER_FLOAT, _do_paste_mask, GPU_MEM_LIMIT
 import numpy as np
@@ -17,7 +14,7 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.modules.utils import _pair
 
-from models.build import MODELS
+from models.build import build_model, MODELS
 
 
 def generate_block_target(mask_target, boundary_width=3):
@@ -55,7 +52,6 @@ def generate_block_target(mask_target, boundary_width=3):
     return block_target
 
 
-@MMDET_LOSSES.register_module()
 @MODELS.register_module()
 class BARCrossEntropyLoss(nn.Module):
 
@@ -207,7 +203,6 @@ class SimpleSFMStage(nn.Module):
         return fused_feats
 
 
-@MMDET_MODELS.register_module()
 @MODELS.register_module()
 class SimpleRefineMaskHead(nn.Module):
 
@@ -256,7 +251,7 @@ class SimpleRefineMaskHead(nn.Module):
 
         self._build_conv_layer('instance')
         self._build_conv_layer('semantic')
-        self.loss_func = build_loss(loss_cfg)
+        self.loss_func = build_model(loss_cfg)
 
         assert len(self.stage_sup_size) > 1
         self.stages = nn.ModuleList()

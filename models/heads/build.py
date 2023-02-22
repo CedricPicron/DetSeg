@@ -3,7 +3,7 @@ General build function for heads.
 """
 from copy import deepcopy
 
-from mmcv import Config
+from mmengine.config import Config
 
 from .dod import DOD
 from models.build import build_model

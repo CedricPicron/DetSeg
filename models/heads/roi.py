@@ -5,13 +5,13 @@ Collection of RoI (Region of Interest) heads.
 from detectron2.layers import batched_nms
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
-from mmcv import Config
 from mmcv.ops import point_sample
-from mmdet.core import BitmapMasks
-from mmdet.core.mask.mask_target import mask_target_single
+from mmdet.structures.mask import BitmapMasks
+from mmdet.structures.mask.mask_target import mask_target_single
 from mmdet.models.roi_heads import StandardRoIHead as MMDetStandardRoIHead
 from mmdet.models.roi_heads.mask_heads.fcn_mask_head import _do_paste_mask
 from mmdet.models.roi_heads.point_rend_roi_head import PointRendRoIHead as MMDetPointRendRoIHead
+from mmengine.config import Config
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as T

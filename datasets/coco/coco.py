@@ -343,7 +343,7 @@ class CocoEvaluator(object):
 
         # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
-        image_ids = image_ids[batch_ids]
+        image_ids = image_ids[batch_ids.cpu()]
 
         # Convert labels to original non-contiguous id space
         orig_ids = list(self.metadata.thing_dataset_id_to_contiguous_id.keys())

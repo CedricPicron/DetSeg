@@ -12,7 +12,6 @@ from .loss import *  # noqa: F401, F403
 from .matcher import *  # noqa: F401, F403
 from .math import *  # noqa: F401, F403
 from .mlp import *  # noqa: F401, F403
-from .mmdet import *  # noqa: F401, F403
 from .normalization import *  # noqa: F401, F403
 from .policy import *  # noqa: F401, F403
 from .position import *  # noqa: F401, F403

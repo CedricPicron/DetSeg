@@ -2,8 +2,8 @@
 Module building backbones from MMDetection.
 """
 
-from mmcv import Config
-from mmdet.models import build_backbone
+from mmengine.config import Config
+from mmengine.registry import build_model_from_cfg
 import torch
 from torch import nn
 
@@ -48,7 +48,7 @@ class MMDetBackbone(nn.Module):
         self.out_sizes = cfg.backbone.pop('out_sizes')
 
         # Get backbone body
-        self.body = build_backbone(cfg.backbone)
+        self.body = build_model_from_cfg(cfg.backbone)
         self.body.init_weights()
 
     def forward(self, images):

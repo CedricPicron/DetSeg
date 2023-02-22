@@ -1,7 +1,7 @@
 deform_encoder = dict(
     type='DeformEncoder',
     pos_embed_cfg=dict(
-        type='mmcv.SinePositionalEncoding',
+        type='mmdet.SinePositionalEncoding',
         num_feats=128,
         temperature=20,
         normalize=True,

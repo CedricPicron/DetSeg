@@ -2,7 +2,7 @@
 General build function for architecture modules.
 """
 
-from mmcv import Config
+from mmengine.config import Config
 
 from .bch import BCH
 from .bvn import BVN

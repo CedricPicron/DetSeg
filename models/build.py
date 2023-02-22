@@ -3,17 +3,9 @@ Function building registered models.
 """
 from copy import deepcopy
 
-from mmcv.cnn import initialize
-from mmcv.cnn.bricks import ACTIVATION_LAYERS, CONV_LAYERS, NORM_LAYERS, PADDING_LAYERS, PLUGIN_LAYERS, UPSAMPLE_LAYERS
-from mmcv.cnn.bricks.transformer import POSITIONAL_ENCODING
-from mmcv.cnn.builder import MODELS as MMCV_MODELS
-from mmcv.cnn.utils import INITIALIZERS
-from mmcv.utils import build_from_cfg, Registry
-from mmdet.core.anchor.builder import PRIOR_GENERATORS
-from mmdet.core.bbox.builder import BBOX_ASSIGNERS, BBOX_SAMPLERS, BBOX_CODERS
-from mmdet.core.bbox.iou_calculators.builder import IOU_CALCULATORS
-from mmdet.core.bbox.match_costs.builder import MATCH_COST
-from mmdet.models.builder import MODELS as MMDET_MODELS
+from mmdet.registry import MODELS as MMDET_MODELS
+from mmengine.model import initialize
+from mmengine.registry import build_from_cfg, Registry
 from torch import nn
 
 
@@ -21,7 +13,7 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
     """
     Build model from one or multiple configuration dictionaries.
 
-    It extends the default 'build_from_cfg' from MMCV by:
+    It extends the default 'build_from_cfg' from MMEngine by:
         1) allowing a list of configuration dictionaries specifying various sub-modules to be concatenated;
         2) allowing a 'num_layers' key specifying multiple consecutive instances of the same sub-module.
 
@@ -29,7 +21,7 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
         cfg (Dict, List[Dict]): One or multiple configuration dictionaries specifying the model to be built.
         registry (Registry): A registry containing various model types.
         sequential (bool): Boolean indicating whether the model should be an instance of Sequential (default=False).
-        kwargs (Dict): Dictionary of keyword arguments passed to the underlying 'build_from_cfg' function from MMCV.
+        kwargs (Dict): Dictionary of keyword arguments passed to underlying 'build_from_cfg' function from MMEngine.
 
     Returns:
         model (nn.Module): Model built from the given configuration dictionary.
@@ -65,31 +57,14 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
 # Create registry
 MODELS = Registry('models', build_func=build_model_from_cfg)
 
-# Add modules from MMCV
-[MMCV_MODELS.register_module(name, module=module) for name, module in ACTIVATION_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in CONV_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in NORM_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in PADDING_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in PLUGIN_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module, force=True) for name, module in UPSAMPLE_LAYERS.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in POSITIONAL_ENCODING.module_dict.items()]
-[MMCV_MODELS.register_module(name, module=module) for name, module in INITIALIZERS.module_dict.items()]
-MODELS._add_children(MMCV_MODELS)
-
 # Add modules from MMDetection
-[MMDET_MODELS.register_module(name, module=module) for name, module in PRIOR_GENERATORS.module_dict.items()]
-[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_ASSIGNERS.module_dict.items()]
-[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_SAMPLERS.module_dict.items()]
-[MMDET_MODELS.register_module(name, module=module) for name, module in BBOX_CODERS.module_dict.items()]
-[MMDET_MODELS.register_module(name, module=module) for name, module in IOU_CALCULATORS.module_dict.items()]
-[MMDET_MODELS.register_module(name, module=module) for name, module in MATCH_COST.module_dict.items()]
-MODELS._add_children(MMDET_MODELS)
+MODELS._add_child(MMDET_MODELS)
 
 # Add modules from torch.nn
 NN_MODELS = Registry('models')
 NN_MODELS._scope = 'nn'
-[NN_MODELS.register_module(nn.modules.__dict__[name]) for name in nn.modules.__all__]
-MODELS._add_children(NN_MODELS)
+[NN_MODELS.register_module(module=nn.modules.__dict__[name]) for name in nn.modules.__all__]
+MODELS._add_child(NN_MODELS)
 
 
 def build_model(cfg, sequential=False, **kwargs):

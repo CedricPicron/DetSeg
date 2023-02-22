@@ -2,9 +2,9 @@
 Module building cores from MMDetection.
 """
 
-from mmcv import Config
-from mmdet.core.mask.structures import BitmapMasks
-from mmdet.models import build_detector as build_arch
+from mmdet.structures.mask import BitmapMasks
+from mmengine.config import Config
+from mmengine.registry import build_model_from_cfg
 import numpy as np
 import torch
 from torch import nn
@@ -47,7 +47,7 @@ class MMDetArch(nn.Module):
         self.requires_masks = cfg.model.pop('requires_masks')
 
         # Get architecture
-        self.arch = build_arch(cfg.model)
+        self.arch = build_model_from_cfg(cfg.model)
         self.arch.init_weights()
 
         # Replace backbone and core/neck with given input modules if requested
