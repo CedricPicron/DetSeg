@@ -465,7 +465,7 @@ def build_cityscapes(args):
     """
 
     # Get root directory containing datasets
-    root = Path() / 'datasets'
+    root = Path(args.data_root)
 
     # Initialize empty datasets dictionary
     datasets = {}

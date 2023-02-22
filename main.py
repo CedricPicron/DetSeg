@@ -33,6 +33,7 @@ def get_parser():
     parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
 
     # Dataset
+    parser.add_argument('--data_root', default='./datasets', type=str, help='path to root directory with datasets')
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
     parser.add_argument('--train_split', default='2017_train', type=str, help='name of the training split')
     parser.add_argument('--eval_split', default='2017_val', type=str, help='name of the evaluation split')
