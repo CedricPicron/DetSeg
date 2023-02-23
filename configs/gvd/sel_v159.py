@@ -381,7 +381,7 @@ model = dict(
                     in_size=2**(7-i),
                     out_size=2**(7-i),
                     num_heads=8,
-                    point_offsets=[1, 3, 5],
+                    point_offsets=[1, 2, 3, 4],
                 ),
                 dict(
                     type='nn.ReLU',

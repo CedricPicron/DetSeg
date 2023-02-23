@@ -154,7 +154,7 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=9,
+                    out_features=81,
                     bias=True,
                 ),
             ],
@@ -367,35 +367,20 @@ model = dict(
             ] for i in range(3)],
             proc_cfg=[[
                 dict(
-                    type='nn.Linear',
-                    in_features=2**(7-i),
-                    out_features=2**(7-i),
-                    bias=True,
+                    type='IdDeformAttn2d',
+                    in_channels=2**(7-i),
+                    out_channels=2**(7-i),
+                    num_heads=8,
+                    point_offsets=[1],
                 ),
                 dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-                dict(
-                    type='ModuleSum',
-                    sub_module_cfgs=[[
-                        dict(
-                            type='IdConv2d',
-                            in_channels=2**(7-i),
-                            out_channels=2**(7-i),
-                            kernel_size=3,
-                            dilation=dilation,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                    ] for dilation in (1, 3, 5)],
+                    type='nn.LayerNorm',
+                    normalized_shape=2**(7-i),
                 ),
                 dict(
                     type='nn.Linear',
                     in_features=2**(7-i),
-                    out_features=2**(7-i),
+                    out_features=2**(9-i),
                     bias=True,
                 ),
                 dict(
@@ -404,20 +389,16 @@ model = dict(
                 ),
                 dict(
                     type='nn.Linear',
-                    in_features=2**(7-i),
+                    in_features=2**(9-i),
                     out_features=2**(7-i),
                     bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
                 ),
             ] for i in range(3)],
             map_offset=1,
             key_min_id=2,
             key_max_id=7,
             seg_iters=4,
-            refines_per_iter=15000,
+            refines_per_iter=10000,
             get_segs=True,
             dup_attrs=dict(
                 type='nms',
