@@ -372,8 +372,8 @@ model = dict(
                 ),
                 dict(
                     type='IdDeformAttn2d',
-                    in_channels=2**(7-i),
-                    out_channels=2**(7-i),
+                    in_size=2**(7-i),
+                    out_size=2**(7-i),
                     num_heads=8,
                     point_offsets=[1],
                 ),
