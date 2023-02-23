@@ -1,4 +1,4 @@
-proj = dict(
+in_proj = dict(
     type='mmdet.ChannelMapper',
     in_channels=[512, 1024, 2048],
     kernel_size=1,

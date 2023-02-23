@@ -42,7 +42,10 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
         cfg_i = deepcopy(cfg_i)
         init_cfg = cfg_i.pop('init_cfg', None)
 
-        for _ in range(cfg_i.pop('num_layers', 1)):
+        pop_num_layers = cfg_i.pop('pop_num_layers', True)
+        num_layers = cfg_i.pop('num_layers', 1) if pop_num_layers else 1
+
+        for _ in range(num_layers):
             module = build_from_cfg(cfg_i, registry, kwargs)
             initialize(module, init_cfg) if init_cfg is not None else None
             modules.append(module)
