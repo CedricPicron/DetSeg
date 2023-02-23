@@ -547,7 +547,7 @@ def build_coco(args):
     """
 
     # Get root directory containing datasets
-    root = Path(args.data_root)
+    root = Path() / 'datasets'
 
     # Initialize empty datasets dictionary
     datasets = {}
