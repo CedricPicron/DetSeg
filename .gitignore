@@ -11,5 +11,6 @@ datasets/coco/val2017/*
 datasets/lvis/annotations/*.json
 outputs/*
 plots/*/*
+slurm/*
 test/*
 .vscode
