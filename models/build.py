@@ -2,8 +2,10 @@
 Function building registered models.
 """
 from copy import deepcopy
+from inspect import isclass
 
 from mmdet.registry import MODELS as MMDET_MODELS
+from mmdet.models import layers as mmdet_layers
 from mmengine.model import initialize
 from mmengine.registry import build_from_cfg, Registry
 from torch import nn
@@ -61,6 +63,12 @@ def build_model_from_cfg(cfg, registry, sequential=False, **kwargs):
 MODELS = Registry('models', build_func=build_model_from_cfg)
 
 # Add modules from MMDetection
+for name, obj in mmdet_layers.__dict__.items():
+    if isclass(obj):
+        if issubclass(obj, nn.Module):
+            if name not in MMDET_MODELS:
+                MMDET_MODELS.register_module(module=obj)
+
 MODELS._add_child(MMDET_MODELS)
 
 # Add modules from torch.nn

@@ -42,7 +42,7 @@ class DeformEncoder(nn.Module):
 
         # Initialize level embeddings if needed
         if with_lvl_embed:
-            self.lvl_embed = nn.Parameter(torch.tensor(num_levels, feat_size))
+            self.lvl_embed = nn.Parameter(torch.empty(num_levels, feat_size))
             nn.init.normal_(self.lvl_embed)
 
         else:
@@ -84,8 +84,8 @@ class DeformEncoder(nn.Module):
             base_pad_mask[i, :iH, :iW] = 0.0
 
         in_feats_list = []
-        pad_masks = []
         embeds_list = []
+        pad_masks = []
         spatial_shapes = []
         valid_ratios = []
 
@@ -104,21 +104,22 @@ class DeformEncoder(nn.Module):
                 embeds += self.lvl_embed[i]
 
             in_feats_list.append(in_feats)
-            pad_masks.append(pad_mask.flatten(1))
             embeds_list.append(embeds)
+            pad_masks.append(pad_mask.flatten(1))
             spatial_shapes.append(spatial_shape)
             valid_ratios.append(valid_ratio)
 
         in_feats = torch.cat(in_feats_list, dim=1)
-        pad_mask = torch.cat(pad_masks, dim=1)
         embeds = torch.cat(embeds_list, dim=1)
+        pad_mask = torch.cat(pad_masks, dim=1)
         spatial_shapes = torch.tensor(spatial_shapes, dtype=torch.long, device=device)
         lvl_start_ids = torch.cat([spatial_shapes.new_zeros([1]), spatial_shapes.prod(dim=1).cumsum(dim=0)[:-1]])
         valid_ratios = torch.stack(valid_ratios, dim=1)
 
         # Apply encoder
-        input_dict = {'feat': in_feats, 'feat_mask': pad_mask, 'feat_pos': embeds, 'spatial_shapes': spatial_shapes}
-        input_dict = {**input_dict, 'level_start_index': lvl_start_ids, 'valid_ratios': valid_ratios}
+        input_dict = {'query': in_feats, 'query_pos': embeds, 'key_padding_mask': pad_mask}
+        input_dict = {**input_dict, 'spatial_shapes': spatial_shapes, 'level_start_index': lvl_start_ids}
+        input_dict = {**input_dict, 'valid_ratios': valid_ratios}
         out_feats = self.encoder(**input_dict)
 
         # Get output feature maps

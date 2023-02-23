@@ -6,4 +6,6 @@ in_proj = dict(
     act_cfg=None,
     norm_cfg=dict(type='GN', num_groups=32),
     num_outs=5,
+    out_ids=(3, 4, 5, 6, 7),
+    out_sizes=(256, 256, 256, 256, 256),
 )

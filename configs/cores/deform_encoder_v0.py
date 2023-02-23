@@ -27,4 +27,6 @@ deform_encoder = dict(
             ),
         ),
     ),
+    out_ids=(3, 4, 5, 6, 7),
+    out_sizes=(256, 256, 256, 256, 256),
 )
