@@ -221,6 +221,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
             pred_masks_i = mask_scores_i > 0.5
 
+            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
+            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
             pred_dict['masks'].append(pred_masks_i)
@@ -741,6 +744,9 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
             pred_masks_i = mask_scores_i > 0.5
 
+            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
+            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
             pred_dict['masks'].append(pred_masks_i)
@@ -1098,6 +1104,9 @@ class RefineMaskRoIHead(StandardRoIHead):
             mask_scores_i = mask_logits_i[-1].sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
             pred_masks_i = mask_scores_i > 0.5
+
+            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
+            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
