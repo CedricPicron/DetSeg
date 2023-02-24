@@ -842,7 +842,11 @@ class TopDownSegHead(nn.Module):
             pred_boxes_i = pred_boxes[seg_qry_ids]
 
             mask_scores = _do_paste_mask(mask_scores, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_scores[pred_inv_ids] > self.mask_thr
+            mask_scores = mask_scores[pred_inv_ids]
+            pred_masks_i = mask_scores > self.mask_thr
+
+            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores).flatten(1).sum(dim=1)
+            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
