@@ -26,6 +26,7 @@ def get_parser():
     parser.add_argument('--device', default='cuda', type=str, help='name of device to use')
     parser.add_argument('--checkpoint_full', default='', type=str, help='path with full checkpoint to resume from')
     parser.add_argument('--checkpoint_model', default='', type=str, help='path with model checkpoint to resume from')
+    parser.add_argument('--disable_strict_loading', action='store_true', help='disable strict model loading')
     parser.add_argument('--output_dir', default='', type=str, help='path to output directory')
 
     # Distributed
@@ -58,6 +59,7 @@ def get_parser():
     parser.add_argument('--analysis_samples', default=100, type=int, help='number of samples used for model analysis')
     parser.add_argument('--analysis_train_only', action='store_true', help='only analyze model in training mode')
     parser.add_argument('--analysis_inf_only', action='store_true', help='only analyze model in inference mode')
+    parser.add_argument('--analysis_save', action='store_true', help='whether to save analysis results')
 
     # * Comparison
     parser.add_argument('--comp_res_file1', default='', type=str, help='path to first result file to be compared')
@@ -414,7 +416,8 @@ def main(args):
 
     # Load model from checkpoint if present
     if checkpoint_path:
-        model.load_state_dict(checkpoint['model'])
+        strict = not args.disable_strict_loading
+        model.load_state_dict(checkpoint['model'], strict=strict)
 
     # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
@@ -506,6 +509,7 @@ def main(args):
 
             analyze_train = args.analysis_train_only or not args.analysis_inf_only
             analyze_inf = args.analysis_inf_only or not args.analysis_train_only
+            output_dir = output_dir if args.analysis_save else None
 
             analysis_kwargs = {'num_samples': args.analysis_samples, 'analyze_train': analyze_train}
             analysis_kwargs = {**analysis_kwargs, 'analyze_inf': analyze_inf, 'output_dir': output_dir}
