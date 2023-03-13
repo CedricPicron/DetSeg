@@ -9,6 +9,7 @@ import sys
 
 from PIL import Image
 import torch
+from torch.nn.utils import clip_grad_norm_
 
 from utils.logging import MetricLogger
 import utils.distributed as distributed
@@ -45,8 +46,19 @@ def train(model, dataloader, optimizer, epoch, max_grad_norm=-1, print_freq=10):
         images = images.to(device)
         tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
-        # Train model with optimizer and report loss and analysis dictionaries
-        loss_dict, analysis_dict = model(images, tgt_dict, optimizer, max_grad_norm=max_grad_norm)
+        # Get loss and analysis dictionaries
+        loss_dict, analysis_dict = model(images, tgt_dict)
+
+        # Update model parameters
+        optimizer.zero_grad(set_to_none=True)
+
+        loss = sum(loss_dict.values())
+        loss.backward()
+
+        if max_grad_norm > 0:
+            clip_grad_norm_(model.parameters(), max_grad_norm)
+
+        optimizer.step()
 
         # Average analysis and loss dictionaries over all GPUs for logging purposes
         analysis_dict = distributed.reduce_dict(analysis_dict)

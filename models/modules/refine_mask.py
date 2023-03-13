@@ -8,6 +8,7 @@ from mmcv.cnn import build_upsample_layer, ConvModule
 from mmcv.ops import SimpleRoIAlign
 from mmdet.models.losses.cross_entropy_loss import binary_cross_entropy
 from mmdet.models.roi_heads.mask_heads.fcn_mask_head import BYTES_PER_FLOAT, _do_paste_mask, GPU_MEM_LIMIT
+from mmdet.registry import MODELS as MMDET_MODELS
 import numpy as np
 import torch
 from torch import nn
@@ -141,7 +142,6 @@ class MultiBranchFusionAvg(MultiBranchFusion):
         return out_feat
 
 
-@MODELS.register_module()
 class SimpleSFMStage(nn.Module):
 
     def __init__(self,
@@ -203,7 +203,7 @@ class SimpleSFMStage(nn.Module):
         return fused_feats
 
 
-@MODELS.register_module()
+@MMDET_MODELS.register_module()
 class SimpleRefineMaskHead(nn.Module):
 
     def __init__(self,

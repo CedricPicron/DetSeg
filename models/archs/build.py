@@ -2,13 +2,9 @@
 General build function for architecture modules.
 """
 
-from mmengine.config import Config
-
 from .bch import BCH
-from .bvn import BVN
 from .mmdet import MMDetArch
 
-from models.build import build_model
 from models.backbones.build import build_backbone
 from models.cores.build import build_core
 from models.heads.build import build_heads
@@ -34,17 +30,6 @@ def build_arch(args):
         core = build_core(args)
         heads = build_heads(args)
         arch = BCH(backbone, core, heads)
-
-    elif args.arch_type == 'bvn':
-        backbone = build_backbone(args)
-        core = build_core(args)
-        heads = build_heads(args)
-        arch = BVN(backbone, core, args.bvn_step_mode, heads, args.bvn_sync_heads)
-
-    elif args.arch_type == 'gct':
-        arch_cfg = Config.fromfile(args.gct_cfg_path)
-        args.requires_masks = arch_cfg.model.pop('requires_masks', False)
-        arch = build_model(arch_cfg.model)
 
     elif args.arch_type == 'mmdet':
         backbone = build_backbone(args)

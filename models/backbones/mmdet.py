@@ -2,6 +2,7 @@
 Module building backbones from MMDetection.
 """
 
+from mmdet.registry import MODELS as MMDET_MODELS
 from mmengine.config import Config
 from mmengine.registry import build_model_from_cfg
 import torch
@@ -48,7 +49,7 @@ class MMDetBackbone(nn.Module):
         self.out_sizes = cfg.backbone.pop('out_sizes')
 
         # Get backbone body
-        self.body = build_model_from_cfg(cfg.backbone)
+        self.body = build_model_from_cfg(cfg.backbone, registry=MMDET_MODELS)
         self.body.init_weights()
 
     def forward(self, images):

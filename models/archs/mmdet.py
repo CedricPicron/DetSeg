@@ -2,6 +2,7 @@
 Module building cores from MMDetection.
 """
 
+from mmdet.registry import MODELS as MMDET_MODELS
 from mmdet.structures.mask import BitmapMasks
 from mmengine.config import Config
 from mmengine.registry import build_model_from_cfg
@@ -9,7 +10,6 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch.nn.utils import clip_grad_norm_
 
 from models.build import MODELS
 from structures.boxes import Boxes
@@ -47,7 +47,7 @@ class MMDetArch(nn.Module):
         self.requires_masks = cfg.model.pop('requires_masks')
 
         # Get architecture
-        self.arch = build_model_from_cfg(cfg.model)
+        self.arch = build_model_from_cfg(cfg.model, registry=MMDET_MODELS)
         self.arch.init_weights()
 
         # Replace backbone and core/neck with given input modules if requested
@@ -68,7 +68,7 @@ class MMDetArch(nn.Module):
 
         return ['backbone', 'neck']
 
-    def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
+    def forward(self, images, tgt_dict=None, visualize=False, **kwargs):
         """
         Forward method of the MMDetArch module.
 
@@ -81,8 +81,6 @@ class MMDetArch(nn.Module):
                 - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
                 - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
 
-            optimizer (torch.optim.Optimizer): Optimizer updating the model parameters during training (default=None).
-            max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
@@ -195,16 +193,6 @@ class MMDetArch(nn.Module):
             pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'boxes'})
             pred_dict['boxes'] = Boxes.cat(pred_dict['boxes'])
             pred_dicts = [pred_dict]
-
-        # Update model parameters during training
-        if optimizer is not None:
-            optimizer.zero_grad(set_to_none=True)
-
-            loss = sum(loss_dict.values())
-            loss.backward()
-
-            clip_grad_norm_(self.parameters(), max_grad_norm) if max_grad_norm > 0 else None
-            optimizer.step()
 
         # Get architecture output dictionaries
         if self.training:

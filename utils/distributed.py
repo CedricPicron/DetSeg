@@ -3,12 +3,10 @@ Distributed utilities.
 """
 import builtins
 import datetime
-import logging
 import os
 import pickle
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
 
 
 def init_distributed_mode(args):
@@ -113,70 +111,6 @@ def is_main_process():
     """
 
     return get_rank() == 0
-
-
-class DistributedDataParallel(DistributedDataParallel):
-    """
-    Altered version of the PyTorch 'DistributedDataParallel' module.
-
-    It runs 'prepare_for_backward' before the module's forward method instead of after. This allows losses to be
-    backpropagted inside the module's forward method instead of only after and outside the method.
-
-    The module assumes all module's parameters which require gradient, receive a gradient in each forward pass.
-    As such, we do not support setting the 'find_unused_parameters' to True.
-    """
-
-    def __init__(self, module, device_id):
-        """
-        Initializes our DistributedDataParallel module.
-
-        Args:
-            module (torch.nn.Module): Module to be parallelized.
-            device_id (int or torch.device): Device on which the module should reside (for this process).
-        """
-
-        # Initialize PyTorch 'DistributedDataParallel' module
-        super().__init__(module, device_ids=[device_id])
-
-    def forward(self, *inputs, **kwargs):
-        """
-        Forward method of our DistributedDataParallel module.
-
-        Args:
-            inputs (Tuple): Tuple containing the module inputs.
-            kwargs (Dict): Dictionary containing the module keyword arguments.
-
-        Returns:
-            outputs (Tuple): Tuple containing the module outputs.
-        """
-
-        # Collect statistics
-        if torch.is_grad_enabled() and self.require_backward_grad_sync:
-            self.logger.set_runtime_stats_and_log()
-            self.num_iterations += 1
-            self.reducer.prepare_for_forward()
-
-        # Rebuild buckets (happens only once after first iteration)
-        if torch.is_grad_enabled() and self.reducer._rebuild_buckets():
-            logging.info("Reducer buckets have been rebuilt in this iteration.")
-            self._has_rebuilt_buckets = True
-
-        # Synchronize buffers across processes
-        if self.will_sync_module_buffers():
-            self._sync_buffers()
-
-        # Prepare and reset underlying framework for backward calls
-        if torch.is_grad_enabled() and self.require_backward_grad_sync:
-            self.require_forward_param_sync = True
-            self.reducer.prepare_for_backward([])
-        else:
-            self.require_forward_param_sync = False
-
-        # Get module outputs from given inputs and keyword arguments
-        inputs, kwargs = self.scatter(inputs, kwargs, self.device_ids)
-        outputs = self.module(*inputs[0], **kwargs[0])
-
-        return outputs
 
 
 @torch.no_grad()

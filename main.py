@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 
 import torch
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
 from datasets.build import build_dataset
@@ -421,7 +422,7 @@ def main(args):
 
     # Wrap model into DistributedDataParallel (DDP) if needed
     if args.distributed:
-        model = distributed.DistributedDataParallel(model, device_id=args.gpu)
+        model = DistributedDataParallel(model, device_ids=[args.gpu])
 
     # Set 'requires_masks' attribute of datasets
     for dataset in datasets.values():

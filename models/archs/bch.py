@@ -5,7 +5,6 @@ from collections import ChainMap
 from itertools import chain
 
 from torch import nn
-from torch.nn.utils import clip_grad_norm_
 
 from models.build import MODELS
 
@@ -50,15 +49,13 @@ class BCH(nn.Module):
 
         return ['backbone', 'core', 'heads']
 
-    def forward(self, images, tgt_dict=None, optimizer=None, max_grad_norm=-1, visualize=False, **kwargs):
+    def forward(self, images, tgt_dict=None, visualize=False, **kwargs):
         """
         Forward method of the BCH module.
 
         Args:
             images (Images): Images structure containing the batched images.
             tgt_dict (Dict): Target dictionary with ground-truth information used during trainval (default=None).
-            optimizer (torch.optim.Optimizer): Optimizer updating the BCH parameters during training (default=None).
-            max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
 
             kwargs (Dict): Dictionary of keyword arguments, potentially containing following key:
@@ -70,15 +67,7 @@ class BCH(nn.Module):
                 - loss_dict (Dict): dictionary of different loss terms used for backpropagation during training;
                 - analysis_dict (Dict): dictionary of different analyses used for logging purposes only;
                 - images_dict (Dict): dictionary of different annotated images based on predictions and targets.
-
-        Raises:
-            TypeError: Error when an optimizer is provided, but no target dictionary.
         """
-
-        # Check inputs
-        if tgt_dict is None and optimizer is not None:
-            error_msg = "A target dictionary must be provided together with the provided optimizer."
-            raise TypeError(error_msg)
 
         # Apply backbone
         feat_maps = self.backbone(images)
@@ -97,16 +86,5 @@ class BCH(nn.Module):
             pred_dicts = list(chain.from_iterable(zipped_dicts[0]))
             non_pred_dicts = [dict(ChainMap(*dicts)) for dicts in zipped_dicts[1:]]
             output_dicts = [pred_dicts, *non_pred_dicts]
-
-        # Update model parameters and return loss and analysis dictionaries during training
-        if optimizer is not None:
-            optimizer.zero_grad(set_to_none=True)
-
-            loss_dict = output_dicts[0]
-            loss = sum(loss_dict.values())
-            loss.backward()
-
-            clip_grad_norm_(self.parameters(), max_grad_norm) if max_grad_norm > 0 else None
-            optimizer.step()
 
         return output_dicts

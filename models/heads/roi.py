@@ -12,6 +12,7 @@ from mmdet.models.roi_heads import StandardRoIHead as MMDetStandardRoIHead
 from mmdet.models.roi_heads.mask_heads.fcn_mask_head import _do_paste_mask
 from mmdet.models.roi_heads.point_rend_roi_head import PointRendRoIHead as MMDetPointRendRoIHead
 from mmengine.config import Config
+from mmengine.structures import InstanceData
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as T
@@ -732,10 +733,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                 roi_feats_i = roi_feats_i + self.fuse_qry(fuse_qry_feats_i)
 
             mask_logits_i = self.mask_head(roi_feats_i)
-            img_metas = [None for _ in range(batch_size)]
-
-            point_test_args = (feat_maps, roi_boxes_i, pred_labels_i, mask_logits_i, img_metas)
-            mask_logits_i = self._mask_point_forward_test(*point_test_args)
+            mask_logits_i = self._mask_point_forward_test(feat_maps, roi_boxes_i, pred_labels_i, mask_logits_i)
 
             mask_logits_i = mask_logits_i[range(len(mask_logits_i)), pred_labels_i]
             mask_logits_i = mask_logits_i[:, None]
@@ -900,16 +898,16 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         roi_pts = self.point_head.get_roi_rel_points_train(mask_logits, tgt_labels, self.train_cfg)
 
         feat_maps = storage_dict['feat_maps']
-        img_metas = [None for _ in range(len(feat_maps[0]))]
-        fine_feats = self._get_fine_grained_point_feats(feat_maps, roi_boxes, roi_pts, img_metas)
+        fine_feats = self._get_fine_grained_point_feats(feat_maps, roi_boxes, roi_pts)
 
         coarse_feats = point_sample(mask_logits, roi_pts)
         point_logits = self.point_head(fine_feats, coarse_feats)
         point_logits = point_logits[range(num_pos_matches), tgt_labels]
 
         # Get point targets
-        target_single_args = (roi_boxes, roi_pts, matched_tgt_ids, tgt_masks, self.train_cfg)
-        point_targets = self.point_head._get_target_single(*target_single_args)
+        gt_instances = InstanceData(masks=tgt_masks)
+        target_single_args = (roi_boxes, roi_pts, matched_tgt_ids, gt_instances, self.train_cfg)
+        point_targets = self.point_head._get_targets_single(*target_single_args)
 
         # Get point loss
         point_loss = self.point_head.loss_point(point_logits, point_targets)
