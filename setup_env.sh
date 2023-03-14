@@ -8,9 +8,10 @@ export TORCH_CUDA_ARCH_LIST="5.2 6.0 6.1 7.0 7.5 8.0 8.6+PTX"
 conda create --name pytorch1.13
 conda activate pytorch1.13
 
-# Intall Pytorch, TorchVision and PyG
+# Intall Pytorch, TorchVision, PyG and Shapely
 conda install pytorch torchvision pytorch-cuda=11.7 -c pytorch -c nvidia
 conda install pyg -c pyg
+conda install -c conda-forge shapely
 
 # Deactivate and reactivate environment such that correct python path is used
 conda deactivate
