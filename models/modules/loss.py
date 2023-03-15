@@ -502,6 +502,9 @@ class SmoothL1Loss(nn.Module):
         """
 
         # Get weighted smooth L1 loss
-        loss = self.weight * F.smooth_l1_loss(predictions, targets, beta=self.beta, reduction=self.reduction)
+        if self.beta == 0:
+            loss = self.weight * F.l1_loss(predictions, targets, reduction=self.reduction)
+        else:
+            loss = self.weight * F.smooth_l1_loss(predictions, targets, beta=self.beta, reduction=self.reduction)
 
         return loss
