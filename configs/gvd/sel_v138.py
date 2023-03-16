@@ -1,6 +1,7 @@
 model = dict(
     type='GVD',
-    requires_masks='True',
+name='gvd',
+    requires_masks=True,
     group_init_cfg=dict(
         mode='selected',
         sel_cfg=dict(

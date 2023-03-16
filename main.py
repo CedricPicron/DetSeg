@@ -148,12 +148,7 @@ def get_parser():
 
     # Heads
     parser.add_argument('--heads', nargs='*', default='', type=str, help='names of desired heads')
-
-    # * DINO head
-    parser.add_argument('--dino_head_cfg_path', default='', type=str, help='path to DINO head config')
-
-    # * General Vision Decoder (GVD) head
-    parser.add_argument('--gvd_cfg_path', default='', type=str, help='path to GVD head config')
+    parser.add_argument('--head_cfg_paths', nargs='*', default='', type=str, help='paths to head configs')
 
     # Optimizer
     parser.add_argument('--max_grad_norm', default=-1, type=float, help='maximum gradient norm during training')

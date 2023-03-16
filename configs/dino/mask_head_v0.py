@@ -1,5 +1,6 @@
 model = dict(
     type='DinoHead',
+    name='dino',
     requires_masks=True,
     in_channels=256,
     num_classes=80,

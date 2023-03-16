@@ -27,22 +27,21 @@ def build_heads(args):
     # Initialize 'requires_masks' command-line argument
     args.requires_masks = False
 
+    # Initialize configuration index
+    cfg_id = 0
+
     # Build head modules
     for head_type in args.heads:
 
-        if head_type == 'dino':
-            dino_head_cfg = Config.fromfile(args.dino_head_cfg_path)
-            args.requires_masks = dino_head_cfg.model.pop('requires_masks', True)
+        if head_type == 'cfg':
+            head_cfg_path = args.head_cfg_paths[cfg_id]
+            head_cfg = Config.fromfile(head_cfg_path)
 
-            dino_head = build_model(dino_head_cfg.model, metadata=args.metadata)
-            heads[head_type] = dino_head
+            head_name = head_cfg.model.pop('name', str(cfg_id))
+            args.requires_masks |= head_cfg.model.pop('requires_masks', False)
 
-        elif head_type == 'gvd':
-            gvd_cfg = Config.fromfile(args.gvd_cfg_path)
-            args.requires_masks = gvd_cfg.model.pop('requires_masks', True)
-
-            gvd_head = build_model(gvd_cfg.model, metadata=args.metadata)
-            heads[head_type] = gvd_head
+            heads[head_name] = build_model(head_cfg.model, metadata=args.metadata)
+            cfg_id += 1
 
         else:
             raise ValueError(f"Unknown head type '{head_type}' was provided.")
