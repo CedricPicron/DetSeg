@@ -86,13 +86,6 @@ def get_parser():
     # Architecture
     parser.add_argument('--arch_type', default='bch', type=str, help='type of architecture module')
 
-    # * BVN (Bidirectional Vision Network)
-    parser.add_argument('--bvn_step_mode', default='single', choices=['multi', 'single'], help='BVN step mode')
-    parser.add_argument('--bvn_sync_heads', action='store_true', help='synchronize heads copies in multi-step mode')
-
-    # * GCT (Graph-Connecting Trees)
-    parser.add_argument('--gct_cfg_path', default='', type=str, help='path to GCT architecture config')
-
     # * MMDetection architecture
     parser.add_argument('--mmdet_arch_cfg_path', default='', type=str, help='path to MMDetection architecture config')
 
@@ -336,18 +329,12 @@ def get_parser():
     parser.add_argument('--lr_default', default=1e-4, type=float, help='default learning rate')
     parser.add_argument('--lr_backbone', default=1e-5, type=float, help='backbone learning rate')
 
-    # * Learning rates (BCH and BVN)
+    # * Learning rates (BCH)
     parser.add_argument('--lr_core', default=1e-4, type=float, help='core learning rate')
-
-    # * Learning rates (BCH, BVN and GCT)
     parser.add_argument('--lr_heads', default=1e-4, type=float, help='heads learning rate')
 
     # * Learning rates (Deformable DETR)
     parser.add_argument('--lr_reference_points', default=1e-5, type=float, help='reference points learning rate')
-
-    # * Learning rates (GCT)
-    parser.add_argument('--lr_map', default=1e-5, type=float, help='GCT map learning rate')
-    parser.add_argument('--lr_graph', default=1e-4, type=float, help='GCT graph learning rate')
 
     # * Learning rates (MMDetArch)
     parser.add_argument('--lr_neck', default=1e-4, type=float, help='neck learning rate')
@@ -359,8 +346,8 @@ def get_parser():
     parser.add_argument('--lr_steps', default=1e-4, type=float, help='PA sample steps learning rate')
 
     # Scheduler
-    parser.add_argument('--epochs', default=36, type=int, help='total number of training epochs')
-    parser.add_argument('--lr_drops', nargs='*', default=[27, 33], type=int, help='epochs of learning rate drops')
+    parser.add_argument('--epochs', default=12, type=int, help='total number of training epochs')
+    parser.add_argument('--lr_drops', nargs='*', default=[9], type=int, help='epochs of learning rate drops')
 
     return parser
 
