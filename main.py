@@ -171,9 +171,6 @@ def get_parser():
     # * Learning rates (MSDA)
     parser.add_argument('--lr_offset', default=1e-5, type=float, help='learning rate of deformable offsets')
 
-    # * Learning rates (PA)
-    parser.add_argument('--lr_steps', default=1e-4, type=float, help='PA sample steps learning rate')
-
     # Scheduler
     parser.add_argument('--epochs', default=12, type=int, help='total number of training epochs')
     parser.add_argument('--lr_drops', nargs='*', default=[9], type=int, help='epochs of learning rate drops')
@@ -268,7 +265,7 @@ def main(args):
 
     # Get default optimizer and scheduler
     param_families = model.module.get_param_families() if args.distributed else model.get_param_families()
-    param_families = ['offset', 'steps', 'reference_points', *param_families, 'default']
+    param_families = ['offset', 'reference_points', *param_families, 'default']
     param_dicts = {family: {'params': [], 'lr': getattr(args, f'lr_{family}')} for family in param_families}
 
     for param_name, parameter in model.named_parameters():
