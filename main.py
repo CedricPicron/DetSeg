@@ -25,8 +25,8 @@ def get_parser():
 
     # General
     parser.add_argument('--device', default='cuda', type=str, help='name of device to use')
-    parser.add_argument('--checkpoint_full', default='', type=str, help='path with full checkpoint to resume from')
-    parser.add_argument('--checkpoint_model', default='', type=str, help='path with model checkpoint to resume from')
+    parser.add_argument('--checkpoint_full', default='', type=str, help='path to checkpoint to fully resume from')
+    parser.add_argument('--checkpoint_part', default='', type=str, help='path to checkpoint to partly resume from')
     parser.add_argument('--disable_strict_loading', action='store_true', help='disable strict model loading')
     parser.add_argument('--output_dir', default='', type=str, help='path to output directory')
 
@@ -406,14 +406,14 @@ def main(args):
         try:
             checkpoint = torch.load(args.checkpoint_full, map_location='cpu')
             checkpoint_path = args.checkpoint_full
-            load_model_only = False
+            change_scheduler = False
         except FileNotFoundError:
             pass
 
-    if not checkpoint_path and args.checkpoint_model:
-        checkpoint = torch.load(args.checkpoint_model, map_location='cpu')
-        checkpoint_path = args.checkpoint_model
-        load_model_only = True
+    if not checkpoint_path and args.checkpoint_part:
+        checkpoint = torch.load(args.checkpoint_part, map_location='cpu')
+        checkpoint_path = args.checkpoint_part
+        change_scheduler = True
 
     # Load model from checkpoint if present
     if checkpoint_path:
@@ -478,13 +478,15 @@ def main(args):
 
     # Update default optimizer and/or scheduler based on checkpoint
     if checkpoint_path:
-        if load_model_only:
-            for group in optimizer.param_groups:
-                for p in group['params']:
-                    p.grad = torch.zeros_like(p)
+        if change_scheduler:
+            for param_group in checkpoint['optimizer']['param_groups']:
+                param_group['lr'] = param_group['initial_lr']
 
+            optimizer.load_state_dict(checkpoint['optimizer'])
             optimizer.step()
-            [scheduler.step() for _ in range(checkpoint['epoch'])]
+
+            for _ in range(checkpoint['epoch']):
+                scheduler.step()
 
         else:
             optimizer.load_state_dict(checkpoint['optimizer'])
