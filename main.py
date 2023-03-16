@@ -105,41 +105,6 @@ def get_parser():
     parser.add_argument('--core_cfg_paths', nargs='*', default='', type=str, help='paths to core configs')
     parser.add_argument('--core_ids', nargs='*', default=[3, 4, 5, 6, 7], type=int, help='core feature map indices')
 
-    # * BiFPN (Bidirectional FPN)
-    parser.add_argument('--bifpn_feat_size', default=256, type=int, help='feature size of BiFPN output maps')
-    parser.add_argument('--bifpn_num_layers', default=7, type=int, help='number of consecutive BiFPN layers')
-    parser.add_argument('--bifpn_norm_type', default='batch', type=str, help='type of BiFPN normalization layer')
-    parser.add_argument('--bifpn_separable_conv', action='store_true', help='whether to use separable convolutions')
-
-    # * DC (Deformable Core)
-    parser.add_argument('--dc_feat_size', default=256, type=int, help='feature size of DC output maps')
-    parser.add_argument('--dc_num_layers', default=6, type=int, help='number of consecutive DC layers')
-
-    parser.add_argument('--dc_da_norm', default='layer', type=str, help='normalization type of DA network')
-    parser.add_argument('--dc_da_act_fn', default='', type=str, help='activation function of DA network')
-    parser.add_argument('--dc_da_version', default=0, type=int, help='version of DA network')
-    parser.add_argument('--dc_da_num_heads', default=8, type=int, help='number of DA attention heads')
-    parser.add_argument('--dc_da_num_points', default=4, type=int, help='number of DA points')
-    parser.add_argument('--dc_da_rad_pts', default=4, type=int, help='number of DA radial points')
-    parser.add_argument('--dc_da_ang_pts', default=1, type=int, help='number of DA angular points')
-    parser.add_argument('--dc_da_lvl_pts', default=1, type=int, help='number of DA level points')
-    parser.add_argument('--dc_da_dup_pts', default=1, type=int, help='number of DA duplicate points')
-    parser.add_argument('--dc_da_qk_size', default=256, type=int, help='size of DA query and key features')
-    parser.add_argument('--dc_da_val_size', default=256, type=int, help='size of DA value features')
-    parser.add_argument('--dc_da_val_with_pos', action='store_true', help='adds position info to DA value features')
-    parser.add_argument('--dc_da_norm_z', default=1.0, type=float, help='Z-normalizer of DA sample offsets')
-
-    parser.add_argument('--dc_prior_type', default='location', type=str, help='type of used sample priors')
-    parser.add_argument('--dc_prior_factor', default=2.0, type=float, help='factor scaling box-type sample priors')
-    parser.add_argument('--dc_scale_encs', action='store_true', help='whether to use scale encodings')
-    parser.add_argument('--dc_scale_invariant', action='store_true', help='whether core should be scale invariant')
-    parser.add_argument('--dc_no_ffn', action='store_true', help='whether core should not contain FFN layers')
-    parser.add_argument('--dc_ffn_hidden_size', default=1024, type=int, help='hidden size of core FFN layers')
-
-    # * FPN (Feature Pyramid Network)
-    parser.add_argument('--fpn_feat_size', default=256, type=int, help='feature size of FPN output maps')
-    parser.add_argument('--fpn_fuse_type', default='sum', choices=['avg', 'sum'], help='FPN fusing operation')
-
     # * GC (Generalized Core)
     parser.add_argument('--gc_yaml', default='', type=str, help='path to yaml-file with GC specification')
 

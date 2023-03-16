@@ -8,7 +8,7 @@ from torch import nn
 from yaml import safe_load
 
 from models.build import MODELS
-from models.cores.utils.gc_operations import initialize_operation
+from models.functional.gc import initialize_operation
 
 
 @MODELS.register_module()
