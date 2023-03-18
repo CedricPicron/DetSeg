@@ -37,7 +37,7 @@ SPLITS['coco']['coco_lvis_v1_train'] = ('coco/train2017', 'coco/annotations/inst
 SPLITS['coco']['coco_lvis_v1_val'] = ('coco/val2017', 'coco/annotations/instances_val_lvis_v1.json')
 
 SPLITS['lvis'] = {}
-SPLITS['lvis']['lvis_v0.5_val_cocofied'] = ('coco/val2017', 'lvis/annotations/lvis_v0.5_val_cocofied.json')
+SPLITS['lvis']['lvis_v0.5_val_cocofied'] = ('coco/val2017', 'coco/annotations/lvis_v0.5_val_cocofied.json')
 
 names = ('coco_lvis_v0.5_train', 'coco_lvis_v0.5_val', 'coco_lvis_v1_train', 'coco_lvis_v1_val')
 thing_dataset_id_to_contiguous_id = MetadataCatalog.get('coco_2017_train').thing_dataset_id_to_contiguous_id
