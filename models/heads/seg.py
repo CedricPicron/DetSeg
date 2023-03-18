@@ -42,10 +42,11 @@ class BaseSegHead(nn.Module):
             - importance_sample_ratio (float): ratio of importance sampling during PointRend sampling.
 
         loss (nn.Module): Module computing the segmentation loss.
+        apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, qry_cfg, key_cfg, metadata, sample_attrs, loss_cfg, get_segs=True, dup_attrs=None,
-                 max_segs=None, matcher_cfg=None, **kwargs):
+                 max_segs=None, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
@@ -59,6 +60,7 @@ class BaseSegHead(nn.Module):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
@@ -83,6 +85,7 @@ class BaseSegHead(nn.Module):
         self.max_segs = max_segs
         self.metadata = metadata
         self.sample_attrs = sample_attrs
+        self.apply_ids = apply_ids
 
     @torch.no_grad()
     def compute_segs(self, storage_dict, pred_dicts, **kwargs):
@@ -615,13 +618,14 @@ class TopDownSegHead(nn.Module):
         seg_loss_weights (Tuple): Tuple of size [seg_iters] containing the segmentation loss weights.
         ref_loss (nn.Module): Module computing the refinement loss.
         ref_loss_weights (Tuple): Tuple of size [seg_iters] containing the refinement loss weights.
+        apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, map_offset,
                  key_min_id, key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg,
                  seg_loss_weights, ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None,
                  fuse_qry_cfg=None, roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
-                 **kwargs):
+                 apply_ids=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -653,6 +657,7 @@ class TopDownSegHead(nn.Module):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
@@ -707,6 +712,7 @@ class TopDownSegHead(nn.Module):
         self.metadata = metadata
         self.seg_loss_weights = seg_loss_weights
         self.ref_loss_weights = ref_loss_weights
+        self.apply_ids = apply_ids
 
     @torch.no_grad()
     def compute_segs(self, qry_feats, storage_dict, pred_dicts, **kwargs):

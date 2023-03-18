@@ -86,7 +86,7 @@ class BottleneckConv(nn.Module):
         """
 
         # Place inputs into common structure
-        if isinstance(map_input, list):
+        if isinstance(map_input, (list, tuple)):
             in_feat_maps = map_input
         elif torch.is_tensor(map_input):
             in_feat_maps = [map_input]
@@ -106,7 +106,7 @@ class BottleneckConv(nn.Module):
             out_feat_maps.append(out_feat_map)
 
         # Get output in desired format depending on input
-        if isinstance(map_input, list):
+        if isinstance(map_input, (list, tuple)):
             map_output = out_feat_maps
         elif torch.is_tensor(map_input):
             map_output = out_feat_maps[0]
@@ -339,7 +339,7 @@ class ProjConv(nn.Module):
         """
 
         # Place inputs into common structure
-        if isinstance(map_input, list):
+        if isinstance(map_input, (list, tuple)):
             in_feat_maps = map_input
         elif torch.is_tensor(map_input):
             in_feat_maps = [map_input]
@@ -359,7 +359,7 @@ class ProjConv(nn.Module):
             out_feat_maps.append(out_feat_map)
 
         # Get output in desired format depending on input
-        if isinstance(map_input, list):
+        if isinstance(map_input, (list, tuple)):
             map_output = out_feat_maps
         elif torch.is_tensor(map_input):
             map_output = out_feat_maps[0]

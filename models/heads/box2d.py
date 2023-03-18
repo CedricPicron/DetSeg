@@ -21,6 +21,7 @@ class BaseBox2dHead(nn.Module):
     Attributes:
         logits (nn.Module): Module computing the 2D bounding box logits.
         box_encoding (str): String containing the type of box encoding scheme.
+        update_prior_boxes (bool): Boolean indicating whether to update prior boxes.
         get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -33,10 +34,11 @@ class BaseBox2dHead(nn.Module):
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
         loss (nn.Module): Module computing the 2D bounding box loss.
+        apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, get_dets=True, dup_attrs=None, max_dets=None,
-                 matcher_cfg=None, report_match_stats=True, **kwargs):
+    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, update_prior_boxes=False, get_dets=True,
+                 dup_attrs=None, max_dets=None, matcher_cfg=None, report_match_stats=True, apply_ids=None, **kwargs):
         """
         Initializes the BaseBox2dHead module.
 
@@ -45,11 +47,13 @@ class BaseBox2dHead(nn.Module):
             box_encoding (str): String containing the type of box encoding scheme.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            update_prior_boxes (bool): Boolean indicating whether to update prior boxes (default=False).
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
+            apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
@@ -67,11 +71,13 @@ class BaseBox2dHead(nn.Module):
 
         # Set remaining attributes
         self.box_encoding = box_encoding
+        self.update_prior_boxes = update_prior_boxes
         self.get_dets = get_dets
         self.dup_attrs = dup_attrs
         self.max_dets = max_dets
         self.metadata = metadata
         self.report_match_stats = report_match_stats
+        self.apply_ids = apply_ids
 
     @torch.no_grad()
     def compute_dets(self, storage_dict, pred_dicts, **kwargs):
@@ -315,9 +321,10 @@ class BaseBox2dHead(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
-            storage_dict (Dict): Storage dictionary containing following additional keys:
+            storage_dict (Dict): Storage dictionary containing following additional or updated keys:
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
+                - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_feats].
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
 
@@ -339,6 +346,10 @@ class BaseBox2dHead(nn.Module):
             raise ValueError(error_msg)
 
         storage_dict['pred_boxes'] = pred_boxes
+
+        # Update prior boxes if needed
+        if self.update_prior_boxes:
+            storage_dict['prior_boxes'] = pred_boxes
 
         # Get 2D object detection predictions if needed
         if self.get_dets and not self.training:

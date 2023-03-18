@@ -25,10 +25,9 @@ class GVD(nn.Module):
 
         dec_layers (nn.ModuleList): List of size [num_dec_layers] containing the decoder layers.
         heads (nn.ModuleList): List of size [num_heads] containing the heads.
-        head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
     """
 
-    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers, head_cfgs, head_apply_ids, metadata):
+    def __init__(self, group_init_cfg, dec_layer_cfg, num_dec_layers, head_cfgs, metadata, head_apply_ids=None):
         """
         Initializes the GVD head.
 
@@ -37,8 +36,8 @@ class GVD(nn.Module):
             dec_layer_cfg (Dict): Configuration dictionary specifying a single decoder layer.
             num_dec_layers (int): Integer containing the number decoder layers.
             head_cfgs (List): List of size [num_heads] with the configuration dictionaries specifying the heads.
-            head_apply_ids (List): List of size [num_ids] with integers determining when heads should be applied.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            head_apply_ids (List): List with integers determining when heads should be applied (default=None).
 
         Raises:
             ValueError: Error when an invalid group initialization mode is provided.
@@ -69,7 +68,10 @@ class GVD(nn.Module):
 
         # Set attributes related to the heads
         self.heads = nn.ModuleList([build_model(head_cfg, metadata=metadata) for head_cfg in head_cfgs])
-        self.head_apply_ids = head_apply_ids
+
+        for head in self.heads:
+            if getattr(head, 'apply_ids', None) is None:
+                head.apply_ids = head_apply_ids
 
     def group_init(self, storage_dict, **kwargs):
         """
@@ -157,28 +159,30 @@ class GVD(nn.Module):
 
         # Perform group initialization
         group_feats = self.group_init(**local_kwargs, **kwargs)
+        local_kwargs['qry_feats'] = group_feats
 
         # Apply heads if needed
-        if 0 in self.head_apply_ids:
-            local_kwargs['qry_feats'] = group_feats
-            [head(mode='pred', id=0, **local_kwargs, **kwargs) for head in self.heads]
+        for head in self.heads:
+            if 0 in head.apply_ids:
+                head(mode='pred', id=0, **local_kwargs, **kwargs)
 
-            if tgt_dict is not None:
-                [head(mode='loss', id=0, **local_kwargs, **kwargs) for head in self.heads]
+                if tgt_dict is not None:
+                    head(mode='loss', id=0, **local_kwargs, **kwargs)
 
         # Iterate over decoder layers and apply heads when needed
         for dec_id, dec_layer in enumerate(self.dec_layers, 1):
 
             # Apply decoder layer
             group_feats = dec_layer(group_feats, **local_kwargs, **kwargs)
+            local_kwargs['qry_feats'] = group_feats
 
             # Apply heads if needed
-            if dec_id in self.head_apply_ids:
-                local_kwargs['qry_feats'] = group_feats
-                [head(mode='pred', id=dec_id, **local_kwargs, **kwargs) for head in self.heads]
+            for head in self.heads:
+                if dec_id in head.apply_ids:
+                    head(mode='pred', id=dec_id, **local_kwargs, **kwargs)
 
-                if tgt_dict is not None:
-                    [head(mode='loss', id=dec_id, **local_kwargs, **kwargs) for head in self.heads]
+                    if tgt_dict is not None:
+                        head(mode='loss', id=dec_id, **local_kwargs, **kwargs)
 
         # Get list with items to return
         return_list = [analysis_dict]

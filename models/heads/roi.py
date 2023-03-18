@@ -43,10 +43,11 @@ class StandardRoIHead(MMDetStandardRoIHead):
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module matching predictions with targets.
+        apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None,
-                 max_segs=None, matcher_cfg=None, **kwargs):
+                 max_segs=None, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
@@ -59,6 +60,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
         """
 
@@ -78,6 +80,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
         self.metadata = metadata
+        self.apply_ids = apply_ids
 
     @torch.no_grad()
     def compute_segs(self, qry_feats, storage_dict, pred_dicts, **kwargs):

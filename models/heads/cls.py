@@ -18,9 +18,10 @@ class BaseClsHead(nn.Module):
         logits (nn.Module): Module computing the classification logits.
         matcher (nn.Module): Optional module determining the target classification labels.
         loss (nn.Module): Module computing the classification loss.
+        apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, logits_cfg, loss_cfg, matcher_cfg=None, **kwargs):
+    def __init__(self, logits_cfg, loss_cfg, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the BaseClsHead module.
 
@@ -28,6 +29,7 @@ class BaseClsHead(nn.Module):
             logits_cfg (Dict): Configuration dictionary specifying the logits module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
@@ -42,6 +44,9 @@ class BaseClsHead(nn.Module):
 
         # Build loss module
         self.loss = build_model(loss_cfg)
+
+        # Set apply_ids attribute
+        self.apply_ids = apply_ids
 
     def forward_pred(self, qry_feats, storage_dict, **kwargs):
         """
