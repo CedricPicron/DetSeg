@@ -162,7 +162,7 @@ model = dict(
             ],
             box_encoding='prior_boxes',
             update_prior_boxes=True,
-            get_dets=True,
+            get_dets=False,
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
