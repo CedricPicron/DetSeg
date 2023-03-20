@@ -162,6 +162,23 @@ model = dict(
             ],
             box_encoding='prior_boxes',
             update_prior_boxes=True,
+            box_encoder_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=4,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=1,
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+            ],
             get_dets=False,
             dup_attrs=dict(
                 type='nms',

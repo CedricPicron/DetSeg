@@ -22,6 +22,7 @@ class BaseBox2dHead(nn.Module):
         logits (nn.Module): Module computing the 2D bounding box logits.
         box_encoding (str): String containing the type of box encoding scheme.
         update_prior_boxes (bool): Boolean indicating whether to update prior boxes.
+        box_encoder (nn.Module): Optional module updating the box encodings based on the updated prior boxes.
         get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
@@ -37,8 +38,9 @@ class BaseBox2dHead(nn.Module):
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, update_prior_boxes=False, get_dets=True,
-                 dup_attrs=None, max_dets=None, matcher_cfg=None, report_match_stats=True, apply_ids=None, **kwargs):
+    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, update_prior_boxes=False, box_encoder_cfg=None,
+                 get_dets=True, dup_attrs=None, max_dets=None, matcher_cfg=None, report_match_stats=True,
+                 apply_ids=None, **kwargs):
         """
         Initializes the BaseBox2dHead module.
 
@@ -48,6 +50,7 @@ class BaseBox2dHead(nn.Module):
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             update_prior_boxes (bool): Boolean indicating whether to update prior boxes (default=False).
+            box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
@@ -62,6 +65,9 @@ class BaseBox2dHead(nn.Module):
 
         # Build logits module
         self.logits = build_model(logits_cfg)
+
+        # Build box encoder module if needed
+        self.box_encoder = build_model(box_encoder_cfg) if box_encoder_cfg is not None else None
 
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
@@ -315,6 +321,7 @@ class BaseBox2dHead(nn.Module):
             qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary possibly containing following key:
+                - images (Images): images structure of size [batch_size] containing the batched images;
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
@@ -324,7 +331,8 @@ class BaseBox2dHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional or updated keys:
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_feats].
+                - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_feats];
+                - add_encs (FloatTensor): possibly updated box encodings of shape [num_feats, feat_size].
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
 
@@ -350,6 +358,12 @@ class BaseBox2dHead(nn.Module):
         # Update prior boxes if needed
         if self.update_prior_boxes:
             storage_dict['prior_boxes'] = pred_boxes
+
+        # Update box encodings if needed
+        if self.update_prior_boxes and self.box_encoder is not None:
+            images = storage_dict['images']
+            norm_boxes = pred_boxes.clone().normalize(images).to_format('cxcywh')
+            storage_dict['add_encs'] = self.box_encoder(norm_boxes.boxes)
 
         # Get 2D object detection predictions if needed
         if self.get_dets and not self.training:
