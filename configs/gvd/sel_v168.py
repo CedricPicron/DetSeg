@@ -49,23 +49,6 @@ model = dict(
                 ),
                 num_modules=9,
             ),
-            box_encoder_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=4,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='OneStepMLP',
-                    num_layers=1,
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=True,
-                ),
-            ],
             matcher_cfg=dict(
                 type='BoxMatcher',
                 qry_key='anchors',
