@@ -19,6 +19,7 @@ class BaseBox2dHead(nn.Module):
     Class implementing the BaseBox2dHead module.
 
     Attributes:
+        detach_qry_feats (bool): Boolean indicating whether to use detached query features.
         logits (nn.Module): Module computing the 2D bounding box logits.
         box_encoding (str): String containing the type of box encoding scheme.
         update_prior_boxes (bool): Boolean indicating whether to update prior boxes.
@@ -38,9 +39,9 @@ class BaseBox2dHead(nn.Module):
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, update_prior_boxes=False, box_encoder_cfg=None,
-                 get_dets=True, dup_attrs=None, max_dets=None, matcher_cfg=None, report_match_stats=True,
-                 apply_ids=None, **kwargs):
+    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, detach_qry_feats=False, update_prior_boxes=False,
+                 box_encoder_cfg=None, get_dets=True, dup_attrs=None, max_dets=None, matcher_cfg=None,
+                 report_match_stats=True, apply_ids=None, **kwargs):
         """
         Initializes the BaseBox2dHead module.
 
@@ -49,6 +50,7 @@ class BaseBox2dHead(nn.Module):
             box_encoding (str): String containing the type of box encoding scheme.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            detach_qry_feats (bool): Boolean indicating whether to use detached query features (default=False).
             update_prior_boxes (bool): Boolean indicating whether to update prior boxes (default=False).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
@@ -76,6 +78,7 @@ class BaseBox2dHead(nn.Module):
         self.loss = build_model(loss_cfg)
 
         # Set remaining attributes
+        self.detach_qry_feats = detach_qry_feats
         self.box_encoding = box_encoding
         self.update_prior_boxes = update_prior_boxes
         self.get_dets = get_dets
@@ -340,6 +343,10 @@ class BaseBox2dHead(nn.Module):
             ValueError: Error when an invalid type of box encoding scheme is provided.
         """
 
+        # Detach query features if needed
+        if self.detach_qry_feats:
+            qry_feats = qry_feats.detach()
+
         # Get 2D bounding box logits
         box_logits = self.logits(qry_feats)
         storage_dict['box_logits'] = box_logits
@@ -362,7 +369,7 @@ class BaseBox2dHead(nn.Module):
         # Update box encodings if needed
         if self.update_prior_boxes and self.box_encoder is not None:
             images = storage_dict['images']
-            norm_boxes = pred_boxes.clone().normalize(images).to_format('cxcywh')
+            norm_boxes = pred_boxes.clone().detach().normalize(images).to_format('cxcywh')
             storage_dict['add_encs'] = self.box_encoder(norm_boxes.boxes)
 
         # Get 2D object detection predictions if needed
