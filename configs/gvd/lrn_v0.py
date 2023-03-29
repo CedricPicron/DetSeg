@@ -94,7 +94,9 @@ model = dict(
                     bias=True,
                 ),
             ],
-            box_encoding='prior_boxes',
+            box_coder_cfg=dict(
+              type='RcnnBoxCoder',
+            ),
             get_dets=True,
             dup_attrs=dict(
                 type='nms',

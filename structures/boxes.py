@@ -607,36 +607,6 @@ class Boxes(object):
         return well_defined
 
 
-def apply_box_deltas(box_deltas, in_boxes, scale_clamp=math.log(1000.0/16)):
-    """
-    Function applying box deltas to the given Boxes structure.
-
-    Args:
-        box_deltas (FloatTensor): Tensor of shape [num_boxes, 4] encoding the box transformation to be applied.
-        in_boxes (Boxes): Boxes structure of axis-aligned bounding boxes of size [num_boxes] to be transformed.
-        scale_clamp (float): Optional threshold indicating the maximum allowed relative change in width or height.
-
-    Returns:
-        out_boxes (Boxes): Boxes structure of transformed axis-aligned bounding boxes of size [num_boxes].
-    """
-
-    # Check whether both inputs have same length
-    check = len(box_deltas) == len(in_boxes)
-    assert_msg = f"Both deltas and boxes inputs should have same length (got {len(box_deltas)} and {len(in_boxes)})."
-    assert check, assert_msg
-
-    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert in_boxes.well_defined().all(), "in_boxes input contains degenerate boxes"
-
-    # Get transformed bounding boxes
-    in_boxes = in_boxes.to_format('cxcywh')
-    out_boxes = in_boxes.clone()
-    out_boxes.boxes[:, :2] += box_deltas[:, :2] * in_boxes.boxes[:, 2:]
-    out_boxes.boxes[:, 2:] *= torch.exp(box_deltas[:, 2:].clamp(max=scale_clamp))
-
-    return out_boxes
-
-
 def apply_edge_dists(edge_dists, pts, scales=None, normalized='false', alter_degenerate=True):
     """
     Function applying normalized point to box edge distances to each corresponding point to obtain a bounding box.
@@ -865,44 +835,6 @@ def get_anchors(feat_maps, map_ids, num_sizes=1, scale_factor=4.0, aspect_ratios
     anchors = Boxes.cat(anchors, same_image=True).to(feat_maps[0].device)
 
     return anchors
-
-
-def get_box_deltas(boxes1, boxes2):
-    """
-    Function computing box deltas encoding the transformation from one Boxes structure to a second one.
-
-    Args:
-        boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [num_boxes] to transform from.
-        boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [num_boxes] to transform to.
-
-    Returns:
-        box_deltas (FloatTensor): Tensor of shape [num_boxes, 4] encoding the transformation between both Boxes inputs.
-    """
-
-    # Check whether both inputs contain the same amount of boxes
-    check = len(boxes1) == len(boxes2)
-    assert_msg = f"Both Boxes inputs should contain the same amount of boxes (got {len(boxes1)} and {len(boxes2)})."
-    assert check, assert_msg
-
-    # Check whether normalized attributes are consistent
-    check = boxes1.normalized == boxes2.normalized
-    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
-    assert check, assert_msg
-
-    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
-
-    # Convert boxes to (center_x, center_y, width, height) format and get box tensors
-    boxes1 = boxes1.clone().to_format('cxcywh').boxes
-    boxes2 = boxes2.clone().to_format('cxcywh').boxes
-
-    # Get box deltas
-    box_deltas = torch.zeros_like(boxes1)
-    box_deltas[:, :2] = (boxes2[:, :2] - boxes1[:, :2]) / boxes1[:, 2:]
-    box_deltas[:, 2:] = torch.log(boxes2[:, 2:] / boxes1[:, 2:])
-
-    return box_deltas
 
 
 def get_edge_dists(pts, boxes, scales=None):

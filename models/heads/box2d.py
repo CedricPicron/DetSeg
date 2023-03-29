@@ -10,7 +10,7 @@ from torch import nn
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
-from structures.boxes import apply_box_deltas, Boxes, box_iou, get_box_deltas
+from structures.boxes import Boxes, box_iou
 
 
 @MODELS.register_module()
@@ -21,7 +21,7 @@ class BaseBox2dHead(nn.Module):
     Attributes:
         detach_qry_feats (bool): Boolean indicating whether to use detached query features.
         logits (nn.Module): Module computing the 2D bounding box logits.
-        box_encoding (str): String containing the type of box encoding scheme.
+        box_coder (nn.Module): Module containing the 2D box coder.
         update_prior_boxes (bool): Boolean indicating whether to update prior boxes.
         box_encoder (nn.Module): Optional module updating the box encodings based on the updated prior boxes.
         get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
@@ -39,7 +39,7 @@ class BaseBox2dHead(nn.Module):
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, logits_cfg, box_encoding, metadata, loss_cfg, detach_qry_feats=False, update_prior_boxes=False,
+    def __init__(self, logits_cfg, box_coder_cfg, metadata, loss_cfg, detach_qry_feats=False, update_prior_boxes=False,
                  box_encoder_cfg=None, get_dets=True, dup_attrs=None, max_dets=None, matcher_cfg=None,
                  report_match_stats=True, apply_ids=None, **kwargs):
         """
@@ -47,7 +47,7 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             logits_cfg (Dict): Configuration dictionary specifying the logits module.
-            box_encoding (str): String containing the type of box encoding scheme.
+            box_coder_cfg (Dict): Configuration dictionary specifying the box coder module.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             detach_qry_feats (bool): Boolean indicating whether to use detached query features (default=False).
@@ -68,6 +68,9 @@ class BaseBox2dHead(nn.Module):
         # Build logits module
         self.logits = build_model(logits_cfg)
 
+        # Build box coder module
+        self.box_coder = build_model(box_coder_cfg)
+
         # Build box encoder module if needed
         self.box_encoder = build_model(box_encoder_cfg) if box_encoder_cfg is not None else None
 
@@ -79,7 +82,6 @@ class BaseBox2dHead(nn.Module):
 
         # Set remaining attributes
         self.detach_qry_feats = detach_qry_feats
-        self.box_encoding = box_encoding
         self.update_prior_boxes = update_prior_boxes
         self.get_dets = get_dets
         self.dup_attrs = dup_attrs
@@ -338,9 +340,6 @@ class BaseBox2dHead(nn.Module):
                 - add_encs (FloatTensor): possibly updated box encodings of shape [num_feats, feat_size].
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
-
-        Raises:
-            ValueError: Error when an invalid type of box encoding scheme is provided.
         """
 
         # Detach query features if needed
@@ -352,14 +351,8 @@ class BaseBox2dHead(nn.Module):
         storage_dict['box_logits'] = box_logits
 
         # Get predicted 2D bounding boxes
-        if self.box_encoding == 'prior_boxes':
-            prior_boxes = storage_dict['prior_boxes']
-            pred_boxes = apply_box_deltas(box_logits, prior_boxes)
-
-        else:
-            error_msg = f"Invalid type of box encoding scheme (got '{self.box_encoding}')."
-            raise ValueError(error_msg)
-
+        prior_boxes = storage_dict['prior_boxes']
+        pred_boxes = self.box_coder('apply', box_logits, prior_boxes)
         storage_dict['pred_boxes'] = pred_boxes
 
         # Update prior boxes if needed
@@ -410,9 +403,6 @@ class BaseBox2dHead(nn.Module):
                 - box_matched_qry (FloatTensor): percentage of matched queries of shape [];
                 - box_matched_tgt (FloatTensor): percentage of matched targets of shape [];
                 - box_acc (FloatTensor): 2D bounding box accuracy of shape [].
-
-        Raises:
-            ValueError: Error when an invalid type of box encoding scheme is provided.
         """
 
         # Perform matching if matcher is available
@@ -479,13 +469,8 @@ class BaseBox2dHead(nn.Module):
         tgt_boxes = tgt_dict['boxes'][matched_tgt_ids]
 
         # Get 2D bounding box targets
-        if self.box_encoding == 'prior_boxes':
-            prior_boxes = storage_dict['prior_boxes'][matched_qry_ids]
-            box_targets = get_box_deltas(prior_boxes, tgt_boxes)
-
-        else:
-            error_msg = f"Invalid type of box encoding scheme (got '{self.box_encoding}')."
-            raise ValueError(error_msg)
+        prior_boxes = storage_dict['prior_boxes'][matched_qry_ids]
+        box_targets = self.box_coder('get', prior_boxes, tgt_boxes)
 
         # Get 2D bounding box loss
         box_loss = self.loss(box_logits, box_targets)

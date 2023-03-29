@@ -3,6 +3,7 @@ Import from different files to guarantee module registration.
 """
 
 from .attention import *  # noqa: F401, F403
+from .box_coder import *  # noqa: F401, F403
 from .container import *  # noqa: F401, F403
 from .convolution import *  # noqa: F401, F403
 from .ffn import *  # noqa: F401, F403

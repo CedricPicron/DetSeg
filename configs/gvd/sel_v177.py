@@ -49,6 +49,23 @@ model = dict(
                 ),
                 num_modules=9,
             ),
+            box_encoder_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=4,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='OneStepMLP',
+                    num_layers=1,
+                    in_size=256,
+                    out_size=256,
+                    norm='layer',
+                    act_fn='relu',
+                    skip=True,
+                ),
+            ],
             matcher_cfg=dict(
                 type='BoxMatcher',
                 qry_key='anchors',
@@ -59,7 +76,9 @@ model = dict(
                     mode='static',
                     static_mode='rel',
                     rel_pos=5,
-                    rel_neg=10,
+                    rel_neg=5,
+                    get_top_qry_ids=True,
+                    top_limit=15,
                 ),
             ),
             loss_cfg=dict(
@@ -141,19 +160,12 @@ model = dict(
                 ),
             ],
             matcher_cfg=dict(
-                type='BoxMatcher',
-                qry_key='pred_boxes',
-                tgt_key='boxes',
-                box_metric='iou',
-                sim_matcher_cfg=dict(
-                    type='SimMatcher',
-                    mode='static',
-                    static_mode='abs_and_rel',
-                    abs_pos=0.2,
-                    abs_neg=0.1,
-                    rel_pos=5,
-                    rel_neg=10,
-                ),
+                type='TopMatcher',
+                ids_key='sel_top_ids',
+                qry_key='cls_logits',
+                top_pos=15,
+                top_neg=15,
+                allow_multi_tgt=False,
             ),
             loss_cfg=dict(
                 type='SigmoidFocalLoss',
@@ -192,6 +204,7 @@ model = dict(
             ],
             box_coder_cfg=dict(
               type='RcnnBoxCoder',
+              delta_stds=(0.1, 0.1, 0.2, 0.2),
             ),
             get_dets=True,
             dup_attrs=dict(
