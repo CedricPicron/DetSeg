@@ -10,7 +10,6 @@ from torch import nn
 from models.build import build_model, MODELS
 from models.modules.container import Sequential
 from models.modules.convolution import ProjConv
-from structures.boxes import get_anchors
 
 
 @MODELS.register_module()
@@ -23,12 +22,7 @@ class AnchorSelector(nn.Module):
     overlap the most with the prodived ground-truth target boxes.
 
     Attributes:
-        anchor_attrs (Dict): Dictionary containing following anchor-related attributes:
-            - map_ids (List): list [num_maps] containing the map ids (i.e. downsampling exponents) of each map;
-            - num_sizes (int): integer containing the number of different anchor sizes per aspect ratio;
-            - scale_factor (float): factor scaling the anchors w.r.t. non-overlapping tiling anchors;
-            - aspect_ratios (List): list [num_aspect_ratios] containing the different anchor aspect ratios.
-
+        anchor (nn.Module): Module computing the anchor boxes.
         logits (Sequential): Module computing the selection logits for each feature-anchor combination.
 
         sel_attrs (Dict): Dictionary containing following selection-related attributes:
@@ -42,13 +36,13 @@ class AnchorSelector(nn.Module):
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_attrs, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01,
+    def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01,
                  box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
         Args:
-            anchor_attrs (Dict): Attribute dictionary specifying the anchor generator.
+            anchor_cfg (Dict): Configuration dictionary specifying the anchor module.
             pre_logits_cfg (Dict): Configuration dictionary specifying the pre-logits module.
             sel_attrs (Dict): Attribute dictionary specifying the selection procedure.
             post_cfg (Dict): Configuration dictionary specifying the post-processing module.
@@ -61,8 +55,8 @@ class AnchorSelector(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set anchor-related attributes
-        self.anchor_attrs = anchor_attrs
+        # Build anchor module
+        self.anchor = build_model(anchor_cfg)
 
         # Build logits module
         pre_logits = build_model(pre_logits_cfg)
@@ -72,7 +66,7 @@ class AnchorSelector(nn.Module):
         else:
             in_feat_size = pre_logits_cfg['out_channels']
 
-        num_cell_anchors = anchor_attrs['num_sizes'] * len(anchor_attrs['aspect_ratios'])
+        num_cell_anchors = self.anchor.num_cell_anchors
         proj_logits = ProjConv(in_feat_size, num_cell_anchors, skip=False)
 
         init_logits_bias = -(math.log((1 - init_prob) / init_prob))
@@ -263,7 +257,7 @@ class AnchorSelector(nn.Module):
         feat_maps = storage_dict['feat_maps']
 
         # Get anchors
-        anchors = get_anchors(feat_maps, **self.anchor_attrs)
+        anchors = self.anchor(feat_maps)
         storage_dict['anchors'] = anchors
 
         # Perform selection
@@ -279,7 +273,7 @@ class AnchorSelector(nn.Module):
         storage_dict['cum_feats_batch'] = cum_feats_batch
 
         # Get indices of selected features
-        num_cell_anchors = self.anchor_attrs['num_sizes'] * len(self.anchor_attrs['aspect_ratios'])
+        num_cell_anchors = self.anchor.num_cell_anchors
         feat_ids = torch.div(sel_ids, num_cell_anchors, rounding_mode='floor')
         storage_dict['feat_ids'] = feat_ids
 
