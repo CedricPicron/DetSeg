@@ -1,6 +1,6 @@
 model = dict(
     type='GVD',
-name='gvd',
+    name='gvd',
     requires_masks=True,
     group_init_cfg=dict(
         mode='selected',
@@ -70,6 +70,7 @@ name='gvd',
                 type='BoxMatcher',
                 qry_key='anchors',
                 tgt_key='boxes',
+                share_qry_boxes=True,
                 box_metric='iou',
                 sim_matcher_cfg=dict(
                     type='SimMatcher',

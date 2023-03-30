@@ -10,7 +10,7 @@ from torch import nn
 from models.build import build_model, MODELS
 from models.modules.container import Sequential
 from models.modules.convolution import ProjConv
-from structures.boxes import Boxes, get_anchors
+from structures.boxes import get_anchors
 
 
 @MODELS.register_module()
@@ -296,24 +296,13 @@ class AnchorSelector(nn.Module):
         # Get boxes corresponding to selected features
         anchor_ids = sel_ids % len(anchors)
         sel_boxes = anchors[anchor_ids]
-        sel_boxes.boxes_per_img = cum_feats_batch.diff()
+        sel_boxes.batch_ids = batch_ids
         storage_dict['sel_boxes'] = sel_boxes
 
         # Get encodings of selected boxes if needed
         if hasattr(self, 'box_encoder'):
-            boxes = sel_boxes.clone()
             images = storage_dict['images']
-            norm_boxes_list = []
-
-            for i, image in enumerate(images):
-                i0 = cum_feats_batch[i].item()
-                i1 = cum_feats_batch[i+1].item()
-
-                norm_boxes_i = boxes[i0:i1].normalize(image)
-                norm_boxes_list.append(norm_boxes_i)
-
-            norm_boxes = Boxes.cat(norm_boxes_list)
-            norm_boxes = norm_boxes.to_format('cxcywh')
+            norm_boxes = sel_boxes.clone().normalize(images).to_format('cxcywh')
 
             box_encs = self.box_encoder(norm_boxes.boxes)
             storage_dict['sel_box_encs'] = box_encs

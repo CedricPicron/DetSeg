@@ -24,10 +24,11 @@ class BoxMatcher(nn.Module):
         qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
         tgt_key (str): String with key to retrieve the target boxes from the target dictionary.
         box_metric (str): String containing the metric computing similarities between query and target boxes.
+        share_qry_boxes (bool): Boolean indicating whether to share query boxes between images.
         sim_matcher (nn.Module): Module matching queries with targets based on the given similarity matrix.
     """
 
-    def __init__(self, qry_key, sim_matcher_cfg, tgt_key='boxes', box_metric='iou'):
+    def __init__(self, qry_key, sim_matcher_cfg, tgt_key='boxes', share_qry_boxes=False, box_metric='iou'):
         """
         Initializes the BoxMatcher module.
 
@@ -35,6 +36,7 @@ class BoxMatcher(nn.Module):
             qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
             sim_matcher_cfg (Dict): Configuration dictionary specifying the similarity matcher.
             tgt_key (str): String with key to retrieve the target boxes from the target dictionary (default='boxes').
+            share_qry_boxes (bool): Boolean indicating whether to share query boxes between images (default=False).
             box_metric (str): String with metric computing similarities between query and target boxes (default='iou').
         """
 
@@ -47,6 +49,7 @@ class BoxMatcher(nn.Module):
         # Set remaining attributes
         self.qry_key = qry_key
         self.tgt_key = tgt_key
+        self.share_qry_boxes = share_qry_boxes
         self.box_metric = box_metric
 
     def forward(self, storage_dict, tgt_dict, **kwargs):
@@ -55,6 +58,7 @@ class BoxMatcher(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
+                - images (Images): images structure containing the batched images of size [batch_size];
                 - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_queries].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
@@ -81,11 +85,17 @@ class BoxMatcher(nn.Module):
         device = qry_boxes.boxes.device
 
         # Get list of query and target boxes per image
-        qry_boxes = qry_boxes.split(qry_boxes.boxes_per_img.tolist())
-        tgt_boxes = tgt_boxes.split(tgt_boxes.boxes_per_img.tolist())
+        images = storage_dict['images']
+        batch_size = len(images)
 
-        if len(qry_boxes) == 1 and len(tgt_boxes) > 1:
-            qry_boxes = qry_boxes * len(tgt_boxes)
+        if self.share_qry_boxes:
+            assert (qry_boxes.batch_ids == 0).all().item()
+            qry_boxes_list = [qry_boxes] * batch_size
+
+        else:
+            qry_boxes_list = [qry_boxes[qry_boxes.batch_ids == i] for i in range(batch_size)]
+
+        tgt_boxes_list = [tgt_boxes[tgt_boxes.batch_ids == i] for i in range(batch_size)]
 
         # Initialize query and target offsets
         qry_offset = 0
@@ -100,7 +110,7 @@ class BoxMatcher(nn.Module):
             top_qry_ids_list = []
 
         # Perform matching per image
-        for qry_boxes_i, tgt_boxes_i in zip(qry_boxes, tgt_boxes):
+        for qry_boxes_i, tgt_boxes_i in zip(qry_boxes_list, tgt_boxes_list):
 
             # Get number of query and target boxes
             num_queries = len(qry_boxes_i)

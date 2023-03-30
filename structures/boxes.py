@@ -17,10 +17,10 @@ class Boxes(object):
         boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
         format (str): String containing the format in which the bounding boxes are expressed.
         normalized (str): String indicating whether and w.r.t. what boxes are normalized.
-        boxes_per_img (LongTensor): Tensor of shape [num_images] containing the number of boxes per batched image.
+        batch_ids (LongTensor): Tensor containing the batch indices of shape [num_boxes].
     """
 
-    def __init__(self, boxes, format, normalized='false', boxes_per_img=None):
+    def __init__(self, boxes, format, normalized='false', batch_ids=None):
         """
         Initializes the Boxes structure.
 
@@ -28,7 +28,7 @@ class Boxes(object):
             boxes (FloatTensor): Tensor of axis-aligned bounding boxes of shape [num_boxes, 4].
             format (str): String containing the format in which the bounding boxes are expressed.
             normalized (str): String indicating whether and w.r.t. what boxes are normalized (default='false').
-            boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
+            batch_ids (LongTensor): Tensor containing the batch indices of shape [num_boxes] (default=None).
         """
 
         # Check whether input boxes tensor has valid shape
@@ -41,25 +41,26 @@ class Boxes(object):
         self.format = format
         self.normalized = normalized
 
-        # Set boxes per image attribute
-        if boxes_per_img is None:
-            self.boxes_per_img = torch.tensor([len(boxes)], dtype=torch.int64, device=boxes.device)
+        # Set batch_ids attribute
+        if batch_ids is None:
+            self.batch_ids = torch.zeros(len(boxes), dtype=torch.int64, device=boxes.device)
         else:
-            self.boxes_per_img = torch.as_tensor(boxes_per_img, dtype=torch.int64, device=boxes.device)
+            self.batch_ids = batch_ids.to(device=boxes.device)
 
     def __getitem__(self, key):
         """
         Implements the __getitem__ method of the Boxes structure.
 
         Args:
-            key: Object of any type also supported by Tensor determining the selected bounding boxes.
+            key (Any): Object of any type also supported by Tensor determining the selected bounding boxes.
 
         Returns:
             item (Boxes): New Boxes structure containing the selected bounding boxes.
         """
 
-        boxes_tensor = self.boxes[key].view(1, -1) if isinstance(key, int) else self.boxes[key]
-        item = Boxes(boxes_tensor, self.format, self.normalized)
+        boxes_tensor = self.boxes[None, key] if isinstance(key, int) else self.boxes[key]
+        batch_ids = self.batch_ids[None, key] if isinstance(key, int) else self.batch_ids[key]
+        item = Boxes(boxes_tensor, self.format, self.normalized, batch_ids=batch_ids)
 
         return item
 
@@ -87,7 +88,7 @@ class Boxes(object):
         boxes_string += f"   Size: {len(self)}\n"
         boxes_string += f"   Format: {self.format}\n"
         boxes_string += f"   Normalized: {self.normalized}\n"
-        boxes_string += f"   Boxes per image: {self.boxes_per_img}\n"
+        boxes_string += f"   Batch indices: {self.batch_ids}\n"
         boxes_string += f"   Content: {self.boxes}"
 
         return boxes_string
@@ -97,7 +98,7 @@ class Boxes(object):
         Implements the __setitem__ method of the Boxes structure.
 
         Args:
-            key: Object of any type also supported by Tensor determining the bounding boxes to be set.
+            key (Any): Object of any type also supported by Tensor determining the bounding boxes to be set.
             item (Boxes): Boxes structure containing the bounding boxes to be set.
         """
 
@@ -111,8 +112,9 @@ class Boxes(object):
         assert_msg = f"Inconsistent normalizations between self '{self.normalized}' and item '{item.normalized}'."
         assert check, assert_msg
 
-        # Set boxes attribute
+        # Set boxes and batch_ids attributes
         self.boxes[key] = item.boxes
+        self.batch_ids[key] = item.batch_ids
 
     def area(self):
         """
@@ -131,13 +133,13 @@ class Boxes(object):
         return areas
 
     @staticmethod
-    def cat(boxes_list, same_image=False):
+    def cat(boxes_list, offset_batch_ids=False):
         """
         Concatenate list of Boxes structures into single Boxes structure.
 
         Args:
             boxes_list (List): List of size [num_structures] with Boxes structures to be concatenated.
-            same_image (boolean): Boolean indicating whether Boxes structures belong to the same image or not.
+            offset_batch_ids (bool): Boolean indicating whether to offset batch indices (default=False).
 
         Returns:
             cat_boxes (Boxes): Boxes structure containing the concatenated input Boxes structures.
@@ -159,8 +161,19 @@ class Boxes(object):
 
         # Concatenate Boxes structures into single Boxes structure
         boxes_tensor = torch.cat([structure.boxes for structure in boxes_list])
-        boxes_per_img = torch.cat([structure.boxes_per_img for structure in boxes_list]) if not same_image else None
-        cat_boxes = Boxes(boxes_tensor, format_set.pop(), normalized_set.pop(), boxes_per_img)
+
+        batch_ids_list = []
+        batch_id_offset = 0
+
+        for structure in boxes_list:
+            batch_ids_list.append(structure.batch_ids + batch_id_offset)
+
+            if offset_batch_ids:
+                assert (structure.batch_ids == 0).all().item()
+                batch_id_offset += 1
+
+        batch_ids = torch.cat(batch_ids_list, dim=0)
+        cat_boxes = Boxes(boxes_tensor, format_set.pop(), normalized_set.pop(), batch_ids=batch_ids)
 
         return cat_boxes
 
@@ -212,7 +225,7 @@ class Boxes(object):
             cloned_boxes (Boxes): Cloned Boxes structure.
         """
 
-        cloned_boxes = Boxes(self.boxes.clone(), self.format, self.normalized, self.boxes_per_img.clone())
+        cloned_boxes = Boxes(self.boxes.clone(), self.format, self.normalized, self.batch_ids.clone())
 
         return cloned_boxes
 
@@ -275,6 +288,23 @@ class Boxes(object):
         num_boxes = torch.clamp(num_boxes/get_world_size(), min=1).item()
 
         return num_boxes
+
+    def expand(self, expand_size):
+        """
+        Expands the Boxes structure to contain multiple consecutive views of each bounding box.
+
+        Args:
+            expand_size (int): Integer containing the expanded size (i.e. the number of views per bounding box).
+
+        Returns:
+            self (Boxes): Updated Boxes structure containing multiple consecutive views of each bounding box.
+        """
+
+        # Expand Boxes structure
+        self.boxes = self.boxes[:, None, :].expand(-1, expand_size, -1).flatten(0, 1)
+        self.batch_ids = self.batch_ids[:, None].expand(-1, expand_size).flatten()
+
+        return self
 
     def fmt_cxcywh_to_xywh(self):
         """
@@ -406,7 +436,7 @@ class Boxes(object):
 
             # Normalize bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
-            self.boxes = self.boxes / scales.repeat_interleave(self.boxes_per_img, dim=0)
+            self.boxes = self.boxes / scales[self.batch_ids]
             self.normalized = 'img_with_padding' if with_padding else 'img_without_padding'
 
         return self
@@ -423,7 +453,7 @@ class Boxes(object):
         """
 
         # Update bounding boxes w.r.t. the padding operation
-        left, top, width, height = padding
+        left, top = padding[:2]
 
         if self.format in ['cxcywh', 'xywh']:
             self.boxes[:, :2] = self.boxes[:, :2] + torch.tensor([left, top]).to(self.boxes)
@@ -463,7 +493,10 @@ class Boxes(object):
         """
 
         boxes_list = self.boxes.split(split_size_or_sections, dim=0)
-        boxes_list = [Boxes(boxes, self.format, self.normalized) for boxes in boxes_list]
+        batch_ids_list = self.batch_ids.split(split_size_or_sections, dim=0)
+
+        zip_obj = zip(boxes_list, batch_ids_list)
+        boxes_list = [Boxes(boxes, self.format, self.normalized, batch_ids=batch_ids) for boxes, batch_ids in zip_obj]
 
         return boxes_list
 
@@ -476,7 +509,7 @@ class Boxes(object):
         """
 
         self.boxes = self.boxes.to(*args, **kwargs)
-        self.boxes_per_img = self.boxes_per_img.to(*args, **kwargs)
+        self.batch_ids = self.batch_ids.to(*args, **kwargs)
 
         return self
 
@@ -527,7 +560,7 @@ class Boxes(object):
 
             # Scale bounding box coordinates w.r.t. the image sizes
             scales = torch.tensor([[*img_size, *img_size] for img_size in img_sizes]).to(self.boxes)
-            self.boxes = self.boxes * scales.repeat_interleave(self.boxes_per_img, dim=0)
+            self.boxes = self.boxes * scales[self.batch_ids]
             self.normalized = 'false'
 
         return self
@@ -548,13 +581,10 @@ class Boxes(object):
         # Scale if boxes are normalized
         self = self.to_img_scale(images)
 
-        # Get image splits
-        img_splits = torch.cumsum(self.boxes_per_img, dim=0)
-        img_splits = [0] + img_splits.tolist()
-
         # Apply transforms
-        for i0, i1, transforms in zip(img_splits[:-1], img_splits[1:], images.transforms):
-            boxes = self[i0:i1]
+        for i, transforms in enumerate(images.transforms):
+            mask = self.batch_ids == i
+            boxes = self[mask]
 
             if inverse:
                 range_obj = range(len(transforms)-1, -1, -1)
@@ -583,7 +613,7 @@ class Boxes(object):
                     resize_ratio = tuple(1/x for x in transform[1]) if inverse else transform[1]
                     boxes = boxes.resize(resize_ratio)
 
-            self[i0:i1] = boxes
+            self[mask] = boxes
 
         # Get well-defined boxes after transformation
         well_defined = self.well_defined()
@@ -607,68 +637,28 @@ class Boxes(object):
         return well_defined
 
 
-def apply_edge_dists(edge_dists, pts, scales=None, normalized='false', alter_degenerate=True):
-    """
-    Function applying normalized point to box edge distances to each corresponding point to obtain a bounding box.
-
-    Args:
-        edge_dists (FloatTensor): Normalized point to edge distances of shape [N, 4].
-        pts (FloatTensor): Two-dimensional points of shape [N, 2].
-        scales (FloatTensor): Tensor of shape [N, 2] with which the edge distances were normalized (default=None).
-        normalized (str): String indicating whether and w.r.t. what output boxes will be normalized (default='false').
-        alter_degenerate (bool): Whether to alter boxes such that no degenerate boxes are outputted (default=True).
-
-    Returns:
-        out_boxes: Boxes structure of output boxes constructed from the given inputs of size [N].
-    """
-
-    # Get default scales variable if not specified
-    if scales is None:
-        scales = torch.ones_like(pts)
-
-    # Check whether inputs have same length
-    check = len(edge_dists) == len(pts)
-    assert_msg = f"Both distances and points inputs should have same length (got {len(edge_dists)} and {len(pts)})."
-    assert check, assert_msg
-
-    check = len(pts) == len(scales)
-    assert_msg = f"Both points and scales inputs should have same length (got {len(pts)} and {len(scales)})."
-    assert check, assert_msg
-
-    # Construct output boxes
-    left_top = pts - scales*edge_dists[:, :2]
-    right_bottom = pts + scales*edge_dists[:, 2:]
-
-    if alter_degenerate:
-        degenerate = right_bottom <= left_top
-        right_bottom[degenerate] = left_top[degenerate] + 1e-6
-
-    out_boxes = torch.cat([left_top, right_bottom], dim=1)
-    out_boxes = Boxes(out_boxes, format='xyxy', normalized=normalized)
-
-    return out_boxes
-
-
-def box_giou(boxes1, boxes2):
+def box_giou(boxes1, boxes2, images=None):
     """
     Function computing the 2D GIoU's between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
         boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
+        images (Images): Images structure containing the batched images of size [batch_size] (default=None).
 
     Returns:
         gious (FloatTensor): The 2D GIoU's between every pair of boxes of shape [N, M].
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
 
-    # Check whether normalized attributes are consistent
-    check = boxes1.normalized == boxes2.normalized
-    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
-    assert check, assert_msg
+    # Make sure normalized attributes are consistent
+    if boxes1.normalized != boxes2.normalized:
+        assert images is not None, "Inconsistent normalizations between Boxes inputs and no images input was provided."
+        boxes1 = boxes1.to_img_scale(images)
+        boxes2 = boxes2.to_img_scale(images)
 
     # Compute 2D IoU's and union areas
     ious, unions = box_iou(boxes1, boxes2, return_unions=True)
@@ -689,13 +679,14 @@ def box_giou(boxes1, boxes2):
     return gious
 
 
-def box_intersection(boxes1, boxes2, shard_size=int(1e7)):
+def box_intersection(boxes1, boxes2, images=None, shard_size=int(1e7)):
     """
     Function computing the intersection areas between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
         boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
+        images (Images): Images structure containing the batched images of size [batch_size] (default=None).
         shard_size (int): Integer containing the maximum number of elements per shard (default=1e7).
 
     Returns:
@@ -703,13 +694,14 @@ def box_intersection(boxes1, boxes2, shard_size=int(1e7)):
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
 
-    # Check whether normalized attributes are consistent
-    check = boxes1.normalized == boxes2.normalized
-    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
-    assert check, assert_msg
+    # Make sure normalized attributes are consistent
+    if boxes1.normalized != boxes2.normalized:
+        assert images is not None, "Inconsistent normalizations between Boxes inputs and no images input was provided."
+        boxes1 = boxes1.to_img_scale(images)
+        boxes2 = boxes2.to_img_scale(images)
 
     # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
     boxes1 = boxes1.clone().to_format('xyxy').boxes
@@ -757,13 +749,14 @@ def box_intersection(boxes1, boxes2, shard_size=int(1e7)):
     return inters
 
 
-def box_iou(boxes1, boxes2, return_inters=False, return_unions=False):
+def box_iou(boxes1, boxes2, images=None, return_inters=False, return_unions=False):
     """
     Function computing the 2D IoU's and union areas between every pair of boxes from two Boxes structures.
 
     Args:
         boxes1 (Boxes): First Boxes structure of axis-aligned bounding boxes of size [N].
         boxes2 (Boxes): Second Boxes structure of axis-aligned bounding boxes of size [M].
+        images (Images): Images structure containing the batched images of size [batch_size] (default=None).
         return_inters (bool): Whether to return areas of the box intersections or not (default=False).
         return_unions (bool): Whether to return areas of the box unions or not (default=False).
 
@@ -778,13 +771,14 @@ def box_iou(boxes1, boxes2, return_inters=False, return_unions=False):
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "boxes1 input contains degenerate boxes"
-    assert boxes2.well_defined().all(), "boxes2 input contains degenerate boxes"
+    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
 
-    # Check whether normalized attributes are consistent
-    check = boxes1.normalized == boxes2.normalized
-    assert_msg = f"Inconsistent normalizations between Boxes inputs (got {boxes1.normalized} and {boxes2.normalized})."
-    assert check, assert_msg
+    # Make sure normalized attributes are consistent
+    if boxes1.normalized != boxes2.normalized:
+        assert images is not None, "Inconsistent normalizations between Boxes inputs and no images input was provided."
+        boxes1 = boxes1.to_img_scale(images)
+        boxes2 = boxes2.to_img_scale(images)
 
     # Compute bounding box areas
     areas1 = boxes1.area()
@@ -832,58 +826,18 @@ def get_anchors(feat_maps, map_ids, num_sizes=1, scale_factor=4.0, aspect_ratios
     # Get anchors by applying anchor generator on given feature maps
     anchors = anchor_generator(feat_maps)
     anchors = [Boxes(map_anchors.tensor, format='xyxy') for map_anchors in anchors]
-    anchors = Boxes.cat(anchors, same_image=True).to(feat_maps[0].device)
+    anchors = Boxes.cat(anchors).to(feat_maps[0].device)
 
     return anchors
 
 
-def get_edge_dists(pts, boxes, scales=None):
-    """
-    Function computing the normalized distances of each point to its corresponding box edges.
-
-    Args:
-        pts (FloatTensor): Two-dimensional points of shape [N, 2].
-        boxes (Boxes): Boxes structure of axis-aligned bounding boxes of size [N].
-        scales (FloatTensor): Tensor of shape [N, 2] normalizing the point to edge distances (default=None).
-
-    Returns:
-        edge_dists (FloatTensor): Normalized point to edge distances of shape [N, 4].
-    """
-
-    # Get default scales variable if not specified
-    if scales is None:
-        scales = torch.ones_like(pts)
-
-    # Check whether inputs have same length
-    check = len(pts) == len(boxes)
-    assert_msg = f"Both points and boxes inputs should have same length (got {len(pts)} and {len(boxes)})."
-    assert check, assert_msg
-
-    check = len(pts) == len(scales)
-    assert_msg = f"Both points and scales inputs should have same length (got {len(pts)} and {len(scales)})."
-    assert check, assert_msg
-
-    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes.well_defined().all(), "boxes input contains degenerate boxes"
-
-    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
-    boxes = boxes.clone().to_format('xyxy').boxes
-
-    # Get normalized point to edge distances
-    left_top_dists = (pts - boxes[:, :2]) / scales
-    right_bottom_dists = (boxes[:, 2:] - pts) / scales
-    edge_dists = torch.cat([left_top_dists, right_bottom_dists], dim=1)
-
-    return edge_dists
-
-
-def mask_to_box(masks, boxes_per_img=None):
+def mask_to_box(masks, batch_ids=None):
     """
     Function converting binary masks into smallest axis-aligned bounding boxes containing the masks.
 
     Args:
         masks (BoolTensor): Tensor containing the binary masks of shape [num_masks, H, W].
-        boxes_per_img (LongTensor): Number of boxes per batched image of shape [num_images] (default=None).
+        batch_ids (LongTensor): Tensor containing the batch indices of shape [num_masks] (default=None).
 
     Returns:
         boxes (Boxes): Boxes structure with smallest bounding boxes containing the masks of size [num_masks].
@@ -916,32 +870,6 @@ def mask_to_box(masks, boxes_per_img=None):
     # Construct bounding boxes
     boxes = torch.stack([left_ids, top_ids, right_ids, bot_ids], dim=1)
     boxes = boxes.float() / torch.tensor([W, H, W, H], dtype=torch.float, device=device)
-    boxes = Boxes(boxes, format='xyxy', normalized='img_with_padding', boxes_per_img=boxes_per_img)
+    boxes = Boxes(boxes, format='xyxy', normalized='img_with_padding', batch_ids=batch_ids)
 
     return boxes
-
-
-def pts_inside_boxes(pts, boxes):
-    """
-    Function checking for every (point, box) pair whether the point lies inside the box or not.
-
-    Args:
-        pts (FloatTensor): Two-dimensional points of shape [N, 2].
-        boxes (Boxes): Boxes structure of axis-aligned bounding boxes of size [M].
-
-    Returns:
-        inside_boxes (BoolTensor): Tensor of shape [N, M] indicating for each pair whether point lies inside box.
-    """
-
-    # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes.well_defined().all(), "boxes input contains degenerate boxes"
-
-    # Convert bounding boxes to (left, top, right, bottom) format and get box tensors
-    boxes = boxes.clone().to_format('xyxy').boxes
-
-    # Check for every (point, box) pair whether point lies inside box
-    left_top_inside = (pts[:, None] - boxes[None, :, :2]) > 0
-    right_bottom_inside = (boxes[None, :, 2:] - pts[:, None]) > 0
-    inside_boxes = torch.cat([left_top_inside, right_bottom_inside], dim=2).all(dim=2)
-
-    return inside_boxes

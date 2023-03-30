@@ -14,7 +14,6 @@ from models.build import build_model, MODELS
 from models.extensions.deformable.modules import MSDA3D
 from models.extensions.deformable.python.insert import pytorch_maps_insert_2d, pytorch_maps_insert_3d
 from models.extensions.deformable.python.sample import pytorch_maps_sample_2d, pytorch_maps_sample_3d
-from structures.boxes import Boxes
 
 
 @MODELS.register_module()
@@ -279,7 +278,7 @@ class BoxCrossAttn(nn.Module):
         if 'sample_priors' not in storage_dict:
 
             if 'prior_boxes' in storage_dict:
-                sample_priors = storage_dict['prior_boxes'].clone()
+                sample_priors = storage_dict['prior_boxes']
 
             else:
                 keys = ['prior_boxes']
@@ -287,17 +286,7 @@ class BoxCrossAttn(nn.Module):
                 raise ValueError(error_msg)
 
             images = storage_dict['images']
-            sample_priors_list = []
-
-            for i, image in enumerate(images):
-                i0 = cum_feats_batch[i].item()
-                i1 = cum_feats_batch[i+1].item()
-
-                sample_priors_i = sample_priors[i0:i1].normalize(image)
-                sample_priors_list.append(sample_priors_i)
-
-            sample_priors = Boxes.cat(sample_priors_list)
-            sample_priors = sample_priors.to_format('cxcywh')
+            sample_priors = sample_priors.clone().normalize(images).to_format('cxcywh')
             storage_dict['sample_priors'] = sample_priors.boxes
 
         # Add sample features to storage dictionary if needed

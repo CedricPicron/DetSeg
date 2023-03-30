@@ -165,7 +165,7 @@ class MMDetArch(nn.Module):
                 box_preds = np.concatenate(box_preds, axis=0)
                 box_preds = torch.from_numpy(box_preds)
 
-                boxes = Boxes(box_preds[:, :4], format='xyxy')
+                boxes = Boxes(box_preds[:, :4], format='xyxy', batch_ids=batch_ids)
                 scores = box_preds[:, 4]
 
                 pred_dict['labels'].append(labels)

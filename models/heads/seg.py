@@ -761,7 +761,7 @@ class TopDownSegHead(nn.Module):
         pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
         # Get prediction boxes in desired format
-        pred_boxes = pred_boxes.to_format('xyxy').to_img_scale(images[0]).boxes
+        pred_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes
 
         # Get batch indices
         batch_size = len(cum_feats_batch) - 1
@@ -1032,7 +1032,7 @@ class TopDownSegHead(nn.Module):
         batch_ids = batch_ids[seg_qry_ids]
 
         # Extract RoI features
-        roi_boxes = qry_boxes.to_format('xyxy').to_img_scale(images[0]).boxes.detach()
+        roi_boxes = qry_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
         roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
         key_feat_maps = self.key_2d(key_feat_maps) if self.key_2d is not None else key_feat_maps
@@ -1095,7 +1095,7 @@ class TopDownSegHead(nn.Module):
         key_feat_size = key_feat_maps[0].size(dim=1)
 
         # Get boxes used to find normalized segmentation locations
-        seg_boxes = qry_boxes.to_format('xywh').normalize(images[0]).boxes
+        seg_boxes = qry_boxes.to_format('xywh').normalize(images).boxes
 
         # Store desired items in lists
         roi_ids_list = [roi_ids]
@@ -1358,7 +1358,7 @@ class TopDownSegHead(nn.Module):
         tgt_maps = tgt_dict['masks'][:, None, :, :].float()
 
         roi_boxes = pred_boxes[matched_qry_ids]
-        roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images[0]).boxes.detach()
+        roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
         roi_boxes = torch.cat([matched_tgt_ids[:, None], roi_boxes], dim=1)
 
         # Initialize segmentation and refinement loss

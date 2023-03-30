@@ -121,29 +121,24 @@ class BaseBox2dHead(nn.Module):
         cum_feats_batch = storage_dict['cum_feats_batch']
         pred_boxes = storage_dict['pred_boxes']
 
-        # Get number of features, number of labels and device
+        # Get number of features, number of labels, device and batch size
         num_feats, num_labels = cls_logits.size()
         device = cls_logits.device
-
-        # Get batch indices
         batch_size = len(cum_feats_batch) - 1
-        batch_ids = torch.arange(batch_size, device=device)
-        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
 
         # Only keep entries with well-defined boxes
         well_defined = pred_boxes.well_defined()
         cls_logits = cls_logits[well_defined]
         pred_boxes = pred_boxes[well_defined]
-        batch_ids = batch_ids[well_defined]
 
         # Get 2D detections for each combination of box and class label
         num_feats = len(cls_logits)
         num_classes = num_labels - 1
 
         pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
-        pred_boxes.boxes = pred_boxes.boxes[:, None, :].expand(-1, num_classes, -1).reshape(-1, 4)
+        pred_boxes = pred_boxes.expand(num_classes)
         pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
-        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+        batch_ids = pred_boxes.batch_ids
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -326,7 +321,7 @@ class BaseBox2dHead(nn.Module):
             qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary possibly containing following key:
-                - images (Images): images structure of size [batch_size] containing the batched images;
+                - images (Images): images structure containing the batched images of size [batch_size];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
@@ -352,7 +347,9 @@ class BaseBox2dHead(nn.Module):
 
         # Get predicted 2D bounding boxes
         prior_boxes = storage_dict['prior_boxes']
-        pred_boxes = self.box_coder('apply', box_logits, prior_boxes)
+        images = storage_dict['images']
+
+        pred_boxes = self.box_coder('apply', box_logits, prior_boxes, images=images)
         storage_dict['pred_boxes'] = pred_boxes
 
         # Update prior boxes if needed
@@ -361,7 +358,6 @@ class BaseBox2dHead(nn.Module):
 
         # Update box encodings if needed
         if self.update_prior_boxes and self.box_encoder is not None:
-            images = storage_dict['images']
             norm_boxes = pred_boxes.clone().detach().normalize(images).to_format('cxcywh')
             storage_dict['add_encs'] = self.box_encoder(norm_boxes.boxes)
 
@@ -381,6 +377,7 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
+                - images (Images): images structure containing the batched images of size [batch_size];
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
@@ -470,7 +467,8 @@ class BaseBox2dHead(nn.Module):
 
         # Get 2D bounding box targets
         prior_boxes = storage_dict['prior_boxes'][matched_qry_ids]
-        box_targets = self.box_coder('get', prior_boxes, tgt_boxes)
+        images = storage_dict['images']
+        box_targets = self.box_coder('get', prior_boxes, tgt_boxes, images=images)
 
         # Get 2D bounding box loss
         box_loss = self.loss(box_logits, box_targets)
@@ -481,7 +479,7 @@ class BaseBox2dHead(nn.Module):
         if analysis_dict is not None:
             pred_boxes = storage_dict['pred_boxes'].detach()
             pred_boxes = pred_boxes[matched_qry_ids]
-            box_acc = box_iou(pred_boxes, tgt_boxes).diag().mean()
+            box_acc = box_iou(pred_boxes, tgt_boxes, images=images).diag().mean()
 
             key_name = f'box_acc_{id}' if id is not None else 'box_acc'
             analysis_dict[key_name] = 100 * box_acc

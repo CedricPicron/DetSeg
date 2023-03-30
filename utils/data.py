@@ -46,7 +46,7 @@ def collate_fn(batch):
 
     # Concatenate target labels and target boxes across batch entries
     tgt_labels = torch.cat([tgt_dict['labels'] for tgt_dict in tgt_dicts])
-    tgt_boxes = Boxes.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts])
+    tgt_boxes = Boxes.cat([tgt_dict['boxes'] for tgt_dict in tgt_dicts], offset_batch_ids=True)
 
     # Compute cumulative target sizes of batch entries
     tgt_sizes = [0] + [len(tgt_dict['labels']) for tgt_dict in tgt_dicts]

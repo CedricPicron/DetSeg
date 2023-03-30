@@ -1609,7 +1609,7 @@ class DinoHead(nn.Module):
                     targets_i['masks'] = tgt_dict['masks'][i0:i1]
 
                 targets_i['boxes'] = tgt_dict['boxes'][i0:i1].to_format('cxcywh')
-                targets_i['boxes'] = targets_i['boxes'].normalize(images[i], with_padding=True).boxes
+                targets_i['boxes'] = targets_i['boxes'].normalize(images, with_padding=True).boxes
                 targets.append(targets_i)
 
         mask_features = x[self.mask_feat_id]
@@ -1914,13 +1914,15 @@ class DinoHead(nn.Module):
 
         pred_dict = dict()
         pred_dict['labels'] = labels_per_image
-        pred_dict['boxes'] = Boxes(box_result, format='cxcywh', normalized='img_with_padding')
+
+        batch_ids = torch.full_like(labels_per_image, batch_id)
+        pred_dict['boxes'] = Boxes(box_result, format='cxcywh', normalized='img_with_padding', batch_ids=batch_ids)
 
         if mask_result is not None:
             pred_dict['masks'] = pred_masks
 
         pred_dict['scores'] = scores_per_image
-        pred_dict['batch_ids'] = torch.full_like(labels_per_image, batch_id)
+        pred_dict['batch_ids'] = batch_ids
 
         return pred_dict
 

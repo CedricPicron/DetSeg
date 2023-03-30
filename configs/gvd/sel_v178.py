@@ -1,7 +1,7 @@
 model = dict(
     type='GVD',
     name='gvd',
-    requires_masks=True,
+    requires_masks=False,
     group_init_cfg=dict(
         mode='selected',
         sel_cfg=dict(
@@ -204,7 +204,7 @@ model = dict(
                 ),
             ],
             box_coder_cfg=dict(
-              type='RcnnBoxCoder',
+              type='SigmoidBoxCoder',
             ),
             get_dets=True,
             dup_attrs=dict(
@@ -219,74 +219,6 @@ model = dict(
                 beta=0.0,
                 reduction='sum',
                 weight=1.0,
-            ),
-        ),
-        dict(
-            type='BaseSegHead',
-            qry_cfg=[
-                dict(
-                    type='OneStepMLP',
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=False,
-                ),
-                dict(
-                    type='OneStepMLP',
-                    num_layers=1,
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=True,
-                ),
-            ],
-            key_cfg=[
-                dict(
-                    type='nn.ConvTranspose2d',
-                    in_channels=256,
-                    out_channels=256,
-                    kernel_size=3,
-                    stride=2,
-                    padding=1,
-                ),
-                dict(
-                    type='BottleneckConv',
-                    num_layers=1,
-                    in_channels=256,
-                    bottle_channels=64,
-                    out_channels=256,
-                    kernel_size=3,
-                    norm='group',
-                    skip=True,
-                ),
-            ],
-            get_segs=True,
-            dup_attrs=dict(
-                type='nms',
-                nms_candidates=1000,
-                nms_thr=0.5,
-            ),
-            max_segs=100,
-            matcher_cfg=None,
-            sample_attrs=dict(
-                type='dense',
-            ),
-            loss_cfg=dict(
-                type='ModuleSum',
-                sub_module_cfgs=[
-                    dict(
-                        type='SigmoidGroupBCELoss',
-                        reduction='sum',
-                        weight=5.0,
-                    ),
-                    dict(
-                        type='SigmoidDiceLoss',
-                        reduction='sum',
-                        weight=5.0,
-                    ),
-                ],
             ),
         ),
     ],
