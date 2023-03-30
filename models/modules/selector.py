@@ -22,6 +22,7 @@ class AnchorSelector(nn.Module):
     overlap the most with the prodived ground-truth target boxes.
 
     Attributes:
+        feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (or None).
         anchor (nn.Module): Module computing the anchor boxes.
         logits (Sequential): Module computing the selection logits for each feature-anchor combination.
 
@@ -36,8 +37,8 @@ class AnchorSelector(nn.Module):
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, init_prob=0.01,
-                 box_encoder_cfg=None):
+    def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, feat_map_ids=None,
+                 init_prob=0.01, box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
@@ -48,12 +49,16 @@ class AnchorSelector(nn.Module):
             post_cfg (Dict): Configuration dictionary specifying the post-processing module.
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Set attribute with feature map indices
+        self.feat_map_ids = feat_map_ids
 
         # Build anchor module
         self.anchor = build_model(anchor_cfg)
@@ -255,6 +260,10 @@ class AnchorSelector(nn.Module):
 
         # Retrieve feature maps from storage dictionary
         feat_maps = storage_dict['feat_maps']
+
+        # Select desired feature maps if needed
+        if self.feat_map_ids is not None:
+            feat_maps = feat_maps[self.feat_map_ids]
 
         # Get anchors
         anchors = self.anchor(feat_maps)

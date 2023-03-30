@@ -225,19 +225,24 @@ class BoxCrossAttn(nn.Module):
     Class implementing the BoxCrossAttn module.
 
     Attributes:
+        feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (or None).
         attn (nn.Module): Module performing the actual box-based cross-attention.
     """
 
-    def __init__(self, attn_cfg):
+    def __init__(self, attn_cfg, feat_map_ids=None):
         """
         Initializes the BoxCrossAttn module.
 
         Args:
             attn_cfg (Dict): Configuration dictionary specifying the underlying box-based cross-attention module.
+            feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Set attribute with feature map indices
+        self.feat_map_ids = feat_map_ids
 
         # Build underlying box-based cross-attention module
         self.attn = build_model(attn_cfg)
@@ -260,76 +265,32 @@ class BoxCrossAttn(nn.Module):
 
         Returns:
             out_feats (FloatTensor): Output features of shape [num_feats, out_size].
-
-        Raises:
-            ValueError: Error when storage dictionary does not have key-value pair to obtain sample priors.
-            ValueError: Error when storage dictionary does not have key-value pair to obtain sample features.
-            ValueError: Error when storage dictionary does not have key-value pair to obtain sample map shapes.
-            ValueError: Error when storage dictionary does not have key-value pair to obtain sample map start indices.
         """
 
         # Get device
         device = in_feats.device
 
-        # Retrieve cumulative number of features per batch entry
+        # Retrieve desired items from storage dictionary
+        feat_maps = storage_dict['feat_maps']
+        images = storage_dict['images']
+        prior_boxes = storage_dict['prior_boxes']
         cum_feats_batch = storage_dict['cum_feats_batch']
+        add_encs = storage_dict['add_encs']
 
-        # Add sample priors to storage dictionary if needed
-        if 'sample_priors' not in storage_dict:
+        # Select desired feature maps if needed
+        if self.feat_map_ids is not None:
+            feat_maps = feat_maps[self.feat_map_ids]
 
-            if 'prior_boxes' in storage_dict:
-                sample_priors = storage_dict['prior_boxes']
+        # Get sample priors, features, map shapes and start indices
+        sample_priors = prior_boxes.clone().normalize(images).to_format('cxcywh').boxes
+        sample_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
 
-            else:
-                keys = ['prior_boxes']
-                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample priors."
-                raise ValueError(error_msg)
-
-            images = storage_dict['images']
-            sample_priors = sample_priors.clone().normalize(images).to_format('cxcywh')
-            storage_dict['sample_priors'] = sample_priors.boxes
-
-        # Add sample features to storage dictionary if needed
-        if 'sample_feats' not in storage_dict:
-
-            if 'feat_maps' in storage_dict:
-                feat_maps = storage_dict['feat_maps']
-                sample_feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-                storage_dict['sample_feats'] = sample_feats
-
-            else:
-                keys = ['feat_maps']
-                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample features."
-                raise ValueError(error_msg)
-
-        # Add sample map shapes to storage dictionary if needed
-        if 'sample_map_shapes' not in storage_dict:
-
-            if 'feat_maps' in storage_dict:
-                feat_maps = storage_dict['feat_maps']
-                sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=device)
-                storage_dict['sample_map_shapes'] = sample_map_shapes
-
-            else:
-                keys = ['feat_maps']
-                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample map shapes."
-                raise ValueError(error_msg)
-
-        # Add sample map start indices to storage dictionary if needed
-        if 'sample_map_start_ids' not in storage_dict:
-
-            if 'feat_maps' in storage_dict:
-                sample_map_start_ids = storage_dict['sample_map_shapes'].prod(dim=1).cumsum(dim=0)[:-1]
-                sample_map_start_ids = torch.cat([sample_map_start_ids.new_zeros([1]), sample_map_start_ids], dim=0)
-                storage_dict['sample_map_start_ids'] = sample_map_start_ids
-
-            else:
-                keys = ['feat_maps']
-                error_msg = f"Storage dictionary must contain a key from {keys} to obtain sample map start indices."
-                raise ValueError(error_msg)
+        sample_map_shapes = torch.tensor([feat_map.shape[-2:] for feat_map in feat_maps], device=device)
+        sample_map_start_ids = sample_map_shapes.prod(dim=1).cumsum(dim=0)[:-1]
+        sample_map_start_ids = torch.cat([sample_map_start_ids.new_zeros([1]), sample_map_start_ids], dim=0)
 
         # Perform box-based cross-attention
-        attn_kwargs = {k: v for k, v in storage_dict.items() if k in ('sample_map_shapes', 'sample_map_start_ids')}
+        attn_kwargs = {'sample_map_shapes': sample_map_shapes, 'sample_map_start_ids': sample_map_start_ids}
         batch_size = len(cum_feats_batch) - 1
         out_feats_list = []
 
@@ -337,11 +298,11 @@ class BoxCrossAttn(nn.Module):
             i0 = cum_feats_batch[i].item()
             i1 = cum_feats_batch[i+1].item()
 
-            attn_kwargs['sample_priors'] = storage_dict['sample_priors'][i0:i1]
-            attn_kwargs['sample_feats'] = storage_dict['sample_feats'][i]
+            attn_kwargs['sample_priors'] = sample_priors[i0:i1]
+            attn_kwargs['sample_feats'] = sample_feats[i]
 
-            if storage_dict.get('add_encs', None) is not None:
-                attn_kwargs['add_encs'] = storage_dict['add_encs'][i0:i1]
+            if add_encs is not None:
+                attn_kwargs['add_encs'] = add_encs[i0:i1]
 
             out_feats_i = self.attn(in_feats[i0:i1], **attn_kwargs)
             out_feats_list.append(out_feats_i)
