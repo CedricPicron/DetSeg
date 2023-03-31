@@ -26,10 +26,14 @@ class AnchorSelector(nn.Module):
         anchor (nn.Module): Module computing the anchor boxes.
         logits (Sequential): Module computing the selection logits for each feature-anchor combination.
 
-        sel_attrs (Dict): Dictionary containing following selection-related attributes:
+        sel_attrs (Dict): Dictionary possibly containing following selection-related attributes:
             - mode (str): string containing the selection mode;
             - abs_thr (float): absolute threshold used during selection;
-            - rel_thr (int): relative threshold used during selection.
+            - rel_thr (int): relative threshold used during selection;
+            - num_gt_sels (int): number of ground-truth selections during training;
+            - gt_pos_thr (int): positive threshold used during ground-truth selection;
+            - gt_neg_thr (int): negative threshold used during ground-truth selection;
+            - gt_pos_ratio (float): ratio of positives during ground-truth selection.
 
         post (Sequential): Optional module post-processing the selected features.
         box_encoder (nn.Module): Optional module computing the box encodings of selected boxes.
@@ -95,29 +99,47 @@ class AnchorSelector(nn.Module):
         # Build loss module
         self.loss = build_model(loss_cfg)
 
-    def perform_selection(self, feat_maps):
+    def perform_selection(self, feat_maps, storage_dict, tgt_dict=None, loss_dict=None, analysis_dict=None, **kwargs):
         """
         Method performing the selection procedure.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+            storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest.
+
+            tgt_dict (Dict): Optional target dictionary used containing at least following key:
+                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
+                - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
+
+            loss_dict (Dict): Dictionary containing different weighted loss terms (default=None).
+            analysis_dict (Dict): Dictionary containing different analyses (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
             sel_logits (FloatTensor): Selection logits of shape [batch_size, num_anchors].
-            sel_ids (LongTensor): Indices of selected feature-anchor combinations of shape [num_selecs].
-            sel_feats (FloatTensor): Features of selected feature-anchor combinations of shape [num_selecs].
+            sel_ids (LongTensor): Indices of selected feature-anchor combinations of shape [num_sels].
+
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
+                - attn_mask_list (List): list [batch_size] with attention masks of shape [num_sels_i, num_sels_i];
+                - sel_top_ids (LongTensor): top indices of selections per target of shape [top_limit, num_targets].
+
+            loss_dict (Dict): Loss dictionary containing following additional key:
+                - sel_loss (FloatTensor): tensor containing the selection loss of shape [].
+
+            analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
+                - sel_tgt_found (FloatTensor): tensor containing the percentage of targets found of shape [].
 
         Raises:
             ValueError: Error when an invalid selection mode is provided.
+            ValueError: Error when a target dictionary is provided but no corresponding loss dictionary.
         """
 
-        # Get selection logits
+        # Get selection logits and probabilities
         logit_maps = self.logits(feat_maps)
         sel_logits = torch.cat([logit_map.permute(0, 2, 3, 1).flatten(1) for logit_map in logit_maps], dim=1)
-
-        # Get selected indices
         sel_probs = torch.sigmoid(sel_logits.detach())
 
+        # Get selected indices
         batch_size, num_anchors = sel_probs.size()
         device = sel_probs.device
         sel_mode = self.sel_attrs['mode']
@@ -148,93 +170,123 @@ class AnchorSelector(nn.Module):
             error_msg = f"Invalid selection mode (got '{sel_mode}')."
             raise ValueError(error_msg)
 
-        return sel_logits, sel_ids
+        # Get selection loss and percentage of targets found if needed
+        if tgt_dict is not None:
 
-    def get_selection_loss(self, sel_logits, storage_dict, tgt_dict, loss_dict, analysis_dict=None, **kwargs):
-        """
-        Method computing the selection loss.
+            # Check whether loss dictionary is provided
+            if loss_dict is None:
+                error_msg = "A target dictionary was provided but no corresponding loss dictionary."
+                raise ValueError(error_msg)
 
-        The method also computes the percentage of targets found, if an analysis dictionary is provided.
+            # Perform matching
+            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        Args:
-            sel_logits (FloatTensor): Selection logits of shape [batch_size, num_anchors].
+            # Get selection loss
+            match_labels = storage_dict['match_labels']
 
-            storage_dict (Dict): Storage dictionary containing at least following key:
-                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs].
+            loss_mask = match_labels != -1
+            pred_logits = sel_logits.flatten()[loss_mask]
+            tgt_labels = match_labels[loss_mask]
 
-            tgt_dict (Dict): Target dictionary used containing at least following key:
-                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total].
+            sel_loss = self.loss(pred_logits, tgt_labels)
+            loss_dict['sel_loss'] = sel_loss
 
-            loss_dict (Dict): Dictionary containing different weighted loss terms.
-            analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
+            # Get percentage of targets found
+            if analysis_dict is not None:
+                matched_qry_ids = storage_dict['matched_qry_ids']
+                matched_tgt_ids = storage_dict['matched_tgt_ids']
 
-        Returns:
-            storage_dict (Dict): Storage dictionary possibly containing following additional key:
-                - sel_top_ids (LongTensor): top indices of selections per target of shape [top_limit, num_targets].
+                cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
+                inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
 
-            loss_dict (Dict): Loss dictionary containing following additional key:
-                - sel_loss (FloatTensor): tensor containing the selection loss of shape [].
+                num_matches = len(matched_qry_ids)
+                inv_ids = inv_ids[:num_matches]
 
-            analysis_dict (Dict): Analysis dictionary containing following additional key (if not None):
-                - sel_tgt_found (FloatTensor): tensor containing the percentage of targets found of shape [].
-        """
+                tgt_found_mask = counts[inv_ids] == 2
+                tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
 
-        # Retrieve indices of selected feature-anchor combinations and get device
-        sel_ids = storage_dict['sel_ids']
-        device = sel_ids.device
+                num_tgts_found = len(tgt_found_ids)
+                num_tgts = len(tgt_dict['boxes'])
 
-        # Perform matching
-        self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+                tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
+                tgt_found = torch.tensor(tgt_found, device=device)
+                analysis_dict['sel_tgt_found'] = 100 * tgt_found
+
+        # Add ground-truth selections if needed
+        if self.training:
+            num_gt_sels = self.sel_attrs.get('num_gt_sels', 0)
+
+            if num_gt_sels > 0:
+                tgt_sizes = tgt_dict['sizes']
+                top_ids = storage_dict['top_qry_ids']
+
+                pos_thr = self.sel_attrs['gt_pos_thr']
+                neg_thr = self.sel_attrs['gt_neg_thr']
+
+                batch_ids = torch.div(sel_ids, num_anchors, rounding_mode='floor')
+                sel_ids_list = []
+                attn_mask_list = []
+
+                for i in range(batch_size):
+                    i0 = tgt_sizes[i]
+                    i1 = tgt_sizes[i+1]
+
+                    top_ids_i = top_ids[:, i0:i1]
+                    sel_ids_i = sel_ids[batch_ids == i]
+
+                    pos_mask = torch.zeros(batch_size * num_anchors, dtype=torch.bool, device=device)
+                    neg_mask = torch.zeros(batch_size * num_anchors, dtype=torch.bool, device=device)
+
+                    pos_mask[top_ids_i[:pos_thr].flatten()] = True
+                    pos_mask[sel_ids_i] = False
+
+                    neg_mask[top_ids_i[:neg_thr].flatten()] = True
+                    neg_mask[sel_ids_i] = False
+                    neg_mask[pos_mask] = False
+
+                    pos_ids = torch.nonzero(pos_mask)[:, 0]
+                    neg_ids = torch.nonzero(neg_mask)[:, 0]
+
+                    pos_ratio = self.sel_attrs['gt_pos_ratio']
+                    num_pos = int(pos_ratio * num_gt_sels)
+                    num_neg = num_gt_sels - num_pos
+
+                    pos_ids = pos_ids[torch.randperm(len(pos_ids))[:num_pos]]
+                    neg_ids = neg_ids[torch.randperm(len(neg_ids))[:num_neg]]
+
+                    sel_ids_i = torch.cat([sel_ids_i, pos_ids, neg_ids], dim=0)
+                    sel_ids_list.append(sel_ids_i)
+
+                    num_sels_i = len(sel_ids_i)
+                    attn_mask = torch.zeros(num_sels_i, num_sels_i, dtype=torch.bool, device=device)
+
+                    num_pred_sels = len(sel_ids_i)
+                    attn_mask[:, num_pred_sels:] = True
+
+                    gt_diag = torch.arange(num_pred_sels, num_sels_i)
+                    attn_mask[gt_diag, gt_diag] = False
+                    attn_mask_list.append(attn_mask)
+
+                sel_ids = torch.cat(sel_ids_list, dim=0)
+                storage_dict['attn_mask_list'] = attn_mask_list
 
         # Get top indices of selections per target if needed
-        if 'top_qry_ids' in storage_dict:
+        if tgt_dict is not None and 'top_qry_ids' in storage_dict:
             top_old_ids = storage_dict['top_qry_ids']
 
-            num_selecs = len(sel_ids)
-            max_old_id = sel_ids.amax().item() if num_selecs > 0 else 0
+            num_sels = len(sel_ids)
+            max_old_id = sel_ids.amax().item() if num_sels > 0 else 0
             max_old_id = max(max_old_id, top_old_ids.amax().item()) if top_old_ids.numel() > 0 else max_old_id
 
             new_ids = torch.full(size=[max_old_id+1], fill_value=-1, dtype=torch.int64, device=device)
-            new_ids[sel_ids] = torch.arange(num_selecs, device=device)
+            new_ids[sel_ids] = torch.arange(num_sels, device=device)
 
             top_new_ids = new_ids[top_old_ids]
             storage_dict['sel_top_ids'] = top_new_ids
 
-        # Get selection loss
-        match_labels = storage_dict['match_labels']
+        return sel_logits, sel_ids, storage_dict, loss_dict, analysis_dict
 
-        loss_mask = match_labels != -1
-        pred_logits = sel_logits.flatten()[loss_mask]
-        tgt_labels = match_labels[loss_mask]
-
-        sel_loss = self.loss(pred_logits, tgt_labels)
-        loss_dict['sel_loss'] = sel_loss
-
-        # Get percentage of targets found
-        if analysis_dict is not None:
-            matched_qry_ids = storage_dict['matched_qry_ids']
-            matched_tgt_ids = storage_dict['matched_tgt_ids']
-
-            cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
-            inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
-
-            num_matches = len(matched_qry_ids)
-            inv_ids = inv_ids[:num_matches]
-
-            tgt_found_mask = counts[inv_ids] == 2
-            tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
-
-            num_tgts_found = len(tgt_found_ids)
-            num_tgts = len(tgt_dict['boxes'])
-
-            tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
-            tgt_found = torch.tensor(tgt_found, device=device)
-            analysis_dict['sel_tgt_found'] = 100 * tgt_found
-
-        return storage_dict, loss_dict, analysis_dict
-
-    def forward(self, storage_dict, tgt_dict=None, **kwargs):
+    def forward(self, storage_dict, **kwargs):
         """
         Forward method of the AnchorSelector module.
 
@@ -243,18 +295,17 @@ class AnchorSelector(nn.Module):
                 - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure of size [batch_size] containing the batched images.
 
-            tgt_dict (Dict): Dictionary containing the ground-truth targets during trainval (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
             storage_dict (Dict): Storage dictionary possibly containing following additional keys:
                 - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
-                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_selecs];
+                - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_sels];
                 - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
-                - feat_ids (LongTensor): indices of selected features of shape [num_selecs];
-                - sel_feats (FloatTensor): selected features after post-processing of shape [num_selecs, feat_size];
-                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_selecs];
-                - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_selecs, feat_size].
+                - feat_ids (LongTensor): indices of selected features of shape [num_sels];
+                - sel_feats (FloatTensor): selected features after post-processing of shape [num_sels, feat_size];
+                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_sels];
+                - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_sels, feat_size].
         """
 
         # Retrieve feature maps from storage dictionary
@@ -269,7 +320,7 @@ class AnchorSelector(nn.Module):
         storage_dict['anchors'] = anchors
 
         # Perform selection
-        sel_logits, sel_ids = self.perform_selection(feat_maps)
+        sel_logits, sel_ids = self.perform_selection(feat_maps, storage_dict, **kwargs)[:2]
         storage_dict['sel_ids'] = sel_ids
 
         # Get cumulative number of selected features per batch entry
@@ -290,7 +341,7 @@ class AnchorSelector(nn.Module):
         feats = feats.flatten(0, 1)
         sel_feats = feats[feat_ids]
 
-        # Perform post-processing on selected features
+        # Perform post-processing on selected features if needed
         if self.post is not None:
             cell_anchor_ids = sel_ids % num_cell_anchors
             sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
@@ -311,9 +362,5 @@ class AnchorSelector(nn.Module):
 
             box_encs = self.box_encoder(norm_boxes.boxes)
             storage_dict['sel_box_encs'] = box_encs
-
-        # Get selection loss during trainval
-        if tgt_dict is not None:
-            self.get_selection_loss(sel_logits, storage_dict=storage_dict, tgt_dict=tgt_dict, **kwargs)
 
         return storage_dict

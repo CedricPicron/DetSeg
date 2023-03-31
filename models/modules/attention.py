@@ -2268,9 +2268,10 @@ class SelfAttn1d(nn.Module):
             in_feats (FloatTensor): Input features of shape [num_feats, in_size].
 
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
-                mul_encs (FloatTensor): encodings multiplied by queries/keys of shape [num_feats, in_size];
-                add_encs (FloatTensor): encodings added to queries/keys of shape [num_feats, in_size];
-                cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1].
+                - mul_encs (FloatTensor): encodings multiplied by queries/keys of shape [num_feats, in_size];
+                - add_encs (FloatTensor): encodings added to queries/keys of shape [num_feats, in_size];
+                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
+                - attn_mask_list (List): list [batch_size] with attention masks of shape [num_feats_i, num_feats_i].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
@@ -2282,6 +2283,7 @@ class SelfAttn1d(nn.Module):
         mul_encs = storage_dict.get('mul_encs', None)
         add_encs = storage_dict.get('add_encs', None)
         cum_feats_batch = storage_dict['cum_feats_batch']
+        attn_mask_list = storage_dict.get('attn_mask_list', None)
 
         # Apply optional normalization and activation function modules
         delta_feats = in_feats
@@ -2298,12 +2300,19 @@ class SelfAttn1d(nn.Module):
             qk_feats = qk_feats + add_encs[:, None, :]
 
         # Apply multi-head attention module
+        batch_size = len(cum_feats_batch) - 1
+        mha_kwargs = {'need_weights': False}
+
         num_feats = len(in_feats)
         out_size = self.mha.out_proj.weight.size(dim=0)
         mha_feats = in_feats.new_empty([num_feats, 1, out_size])
 
-        for i0, i1 in zip(cum_feats_batch[:-1], cum_feats_batch[1:]):
-            mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], need_weights=False)[0]
+        for i in range(batch_size):
+            i0 = cum_feats_batch[i]
+            i1 = cum_feats_batch[i+1]
+
+            mha_kwargs['attn_mask'] = attn_mask_list[i] if attn_mask_list is not None else None
+            mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], **mha_kwargs)[0]
 
         # Get output features
         mha_feats = mha_feats[:, 0, :]
