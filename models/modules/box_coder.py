@@ -89,8 +89,8 @@ class RcnnBoxCoder(AbstractBoxCoder):
     Class implementing the RcnnBoxCoder module.
 
     Attributes:
-        delta_means (Tuple): Tuple of size [4] with 'means' offsetting the box deltas (or None).
-        delta_stds (Tuple): Tuple of size [4] with 'standard deviations' scaling the box deltas (or None).
+        delta_means (FloatTensor): Buffer of shape [1, 4] with 'means' offsetting the box deltas (or None).
+        delta_stds (FloatTensor): Buffer of shape [1, 4] with 'standard deviations' scaling the box deltas (or None).
         scale_clamp (float): Maximum relative increase in width and height when applying box deltas.
     """
 

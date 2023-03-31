@@ -279,7 +279,7 @@ class BoxCrossAttn(nn.Module):
 
         # Select desired feature maps if needed
         if self.feat_map_ids is not None:
-            feat_maps = feat_maps[self.feat_map_ids]
+            feat_maps = [feat_maps[i] for i in self.feat_map_ids]
 
         # Get sample priors, features, map shapes and start indices
         sample_priors = prior_boxes.clone().normalize(images).to_format('cxcywh').boxes

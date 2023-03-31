@@ -31,14 +31,14 @@ class AnchorSelector(nn.Module):
             - abs_thr (float): absolute threshold used during selection;
             - rel_thr (int): relative threshold used during selection.
 
-        post (Sequential): Post-processing module operating on selected features.
-        box_encoder (nn.Module): Module computing the box encodings of selected boxes.
+        post (Sequential): Optional module post-processing the selected features.
+        box_encoder (nn.Module): Optional module computing the box encodings of selected boxes.
         matcher (nn.Module): Module performing matching between anchors and target boxes.
         loss (nn.Module): Module computing the weighted selection loss.
     """
 
-    def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, post_cfg, matcher_cfg, loss_cfg, feat_map_ids=None,
-                 init_prob=0.01, box_encoder_cfg=None):
+    def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, matcher_cfg, loss_cfg, feat_map_ids=None, init_prob=0.01,
+                 post_cfg=None, box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
@@ -46,11 +46,11 @@ class AnchorSelector(nn.Module):
             anchor_cfg (Dict): Configuration dictionary specifying the anchor module.
             pre_logits_cfg (Dict): Configuration dictionary specifying the pre-logits module.
             sel_attrs (Dict): Attribute dictionary specifying the selection procedure.
-            post_cfg (Dict): Configuration dictionary specifying the post-processing module.
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
+            post_cfg (Dict): Configuration dictionary specifying the post-processing module (default=None).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
         """
 
@@ -83,12 +83,11 @@ class AnchorSelector(nn.Module):
         # Set selection-related attributes
         self.sel_attrs = sel_attrs
 
-        # Build post-processing module
-        self.post = build_model(post_cfg, sequential=True)
+        # Build post-processing module if needed
+        self.post = build_model(post_cfg, sequential=True) if post_cfg is not None else None
 
         # Build box encoder module if needed
-        if box_encoder_cfg is not None:
-            self.box_encoder = build_model(box_encoder_cfg)
+        self.box_encoder = build_model(box_encoder_cfg) if box_encoder_cfg is not None else None
 
         # Build matcher module
         self.matcher = build_model(matcher_cfg)
@@ -263,7 +262,7 @@ class AnchorSelector(nn.Module):
 
         # Select desired feature maps if needed
         if self.feat_map_ids is not None:
-            feat_maps = feat_maps[self.feat_map_ids]
+            feat_maps = [feat_maps[i] for i in self.feat_map_ids]
 
         # Get anchors
         anchors = self.anchor(feat_maps)
@@ -292,8 +291,11 @@ class AnchorSelector(nn.Module):
         sel_feats = feats[feat_ids]
 
         # Perform post-processing on selected features
-        cell_anchor_ids = sel_ids % num_cell_anchors
-        sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
+        if self.post is not None:
+            cell_anchor_ids = sel_ids % num_cell_anchors
+            sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
+
+        # Add selected features to storage dictionary
         storage_dict['sel_feats'] = sel_feats
 
         # Get boxes corresponding to selected features
@@ -303,7 +305,7 @@ class AnchorSelector(nn.Module):
         storage_dict['sel_boxes'] = sel_boxes
 
         # Get encodings of selected boxes if needed
-        if hasattr(self, 'box_encoder'):
+        if self.box_encoder is not None:
             images = storage_dict['images']
             norm_boxes = sel_boxes.clone().normalize(images).to_format('cxcywh')
 
