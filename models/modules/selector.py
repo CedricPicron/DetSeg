@@ -254,16 +254,15 @@ class AnchorSelector(nn.Module):
                     pos_ids = pos_ids[torch.randperm(len(pos_ids))[:num_pos]]
                     neg_ids = neg_ids[torch.randperm(len(neg_ids))[:num_neg]]
 
+                    num_pred_sels = len(sel_ids_i)
                     sel_ids_i = torch.cat([sel_ids_i, pos_ids, neg_ids], dim=0)
                     sel_ids_list.append(sel_ids_i)
 
-                    num_sels_i = len(sel_ids_i)
-                    attn_mask = torch.zeros(num_sels_i, num_sels_i, dtype=torch.bool, device=device)
-
-                    num_pred_sels = len(sel_ids_i)
+                    num_sels = len(sel_ids_i)
+                    attn_mask = torch.zeros(num_sels, num_sels, dtype=torch.bool, device=device)
                     attn_mask[:, num_pred_sels:] = True
 
-                    gt_diag = torch.arange(num_pred_sels, num_sels_i)
+                    gt_diag = torch.arange(num_pred_sels, num_sels)
                     attn_mask[gt_diag, gt_diag] = False
                     attn_mask_list.append(attn_mask)
 
