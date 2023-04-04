@@ -119,7 +119,7 @@ model = dict(
     head_cfgs=[
         dict(
             type='BaseBox2dHead',
-            apply_ids=[0],
+            apply_ids=[2],
             logits_cfg=[
                 dict(
                     type='OneStepMLP',
@@ -191,7 +191,7 @@ model = dict(
         ),
         dict(
             type='BaseClsHead',
-            apply_ids=[2],
+            apply_ids=[6],
             logits_cfg=[
                 dict(
                     type='OneStepMLP',
