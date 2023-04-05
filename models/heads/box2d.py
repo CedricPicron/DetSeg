@@ -559,8 +559,8 @@ class BaseBox2dHead(nn.Module):
 
             # Get 2D bounding box score accuracy if needed
             if box_scores is not None:
-                score_deltas = pred_scores.detach().sigmoid() - tgt_scores
-                box_score_acc = 1 - score_deltas.abs().mean()
+                box_score_err = pred_scores.detach().sigmoid() - box_ious
+                box_score_acc = 1 - box_score_err.abs().mean()
 
                 key_name = f'box_score_acc_{id}' if id is not None else 'box_score_acc'
                 analysis_dict[key_name] = 100 * box_score_acc
