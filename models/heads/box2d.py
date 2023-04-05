@@ -5,6 +5,7 @@ Collection of 2D bounding box heads.
 from detectron2.layers import batched_nms
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
+from mmdet.models.layers.transformer.utils import inverse_sigmoid
 import torch
 from torch import nn
 import torchvision.transforms.functional as T
@@ -24,9 +25,14 @@ class BaseBox2dHead(nn.Module):
         box_coder (nn.Module): Module containing the 2D box coder.
         update_prior_boxes (bool): Boolean indicating whether to update prior boxes.
         box_encoder (nn.Module): Optional module updating the box encodings based on the updated prior boxes.
+        box_score (nn.Module): Optional module computing the unnormalized 2D bounding box scores.
         get_dets (bool): Boolean indicating whether to get 2D object detection predictions.
 
-        dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
+        score_attrs (Dict): Dictionary specifying the scoring mechanism possibly containing following keys:
+            - cls_power (float): value containing the classification score power;
+            - box_power (float): value containing the box score power.
+
+        dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism possibly containing following keys:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
@@ -36,12 +42,14 @@ class BaseBox2dHead(nn.Module):
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
         loss (nn.Module): Module computing the 2D bounding box loss.
+        box_score_loss (nn.Module): Optional module computing the 2D bounding box score loss.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, logits_cfg, box_coder_cfg, metadata, loss_cfg, detach_qry_feats=False, update_prior_boxes=False,
-                 box_encoder_cfg=None, get_dets=True, dup_attrs=None, max_dets=None, matcher_cfg=None,
-                 report_match_stats=True, apply_ids=None, **kwargs):
+                 box_encoder_cfg=None, box_score_cfg=None, get_dets=True, score_attrs=None, dup_attrs=None,
+                 max_dets=None, matcher_cfg=None, report_match_stats=True, box_score_loss_cfg=None, apply_ids=None,
+                 **kwargs):
         """
         Initializes the BaseBox2dHead module.
 
@@ -53,11 +61,14 @@ class BaseBox2dHead(nn.Module):
             detach_qry_feats (bool): Boolean indicating whether to use detached query features (default=False).
             update_prior_boxes (bool): Boolean indicating whether to update prior boxes (default=False).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
+            box_score_cfg (Dict): Configuration dictionary specifying the box score module (default=None).
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
+            score_attrs (Dict): Attribute dictionary specifying the scoring mechanism (default=None).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
+            box_score_loss_cfg (Dict): Configuration dictionary specifying the box score loss module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
@@ -74,17 +85,24 @@ class BaseBox2dHead(nn.Module):
         # Build box encoder module if needed
         self.box_encoder = build_model(box_encoder_cfg) if box_encoder_cfg is not None else None
 
+        # Build box score module if needed
+        self.box_score = build_model(box_score_cfg) if box_score_cfg is not None else None
+
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
         # Build loss module
         self.loss = build_model(loss_cfg)
 
+        # Build box score loss module if needed
+        self.box_score_loss = build_model(box_score_loss_cfg) if box_score_loss_cfg is not None else None
+
         # Set remaining attributes
         self.detach_qry_feats = detach_qry_feats
         self.update_prior_boxes = update_prior_boxes
         self.get_dets = get_dets
-        self.dup_attrs = dup_attrs
+        self.score_attrs = score_attrs if score_attrs is not None else dict()
+        self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
         self.max_dets = max_dets
         self.metadata = metadata
         self.report_match_stats = report_match_stats
@@ -120,6 +138,7 @@ class BaseBox2dHead(nn.Module):
         cls_logits = storage_dict['cls_logits']
         cum_feats_batch = storage_dict['cum_feats_batch']
         pred_boxes = storage_dict['pred_boxes']
+        box_scores = storage_dict.get('box_scores', None)
 
         # Get number of features, number of labels, device and batch size
         num_feats, num_labels = cls_logits.size()
@@ -135,10 +154,19 @@ class BaseBox2dHead(nn.Module):
         num_feats = len(cls_logits)
         num_classes = num_labels - 1
 
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).reshape(-1)
+        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).flatten()
         pred_boxes = pred_boxes.expand(num_classes)
-        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+        pred_scores = cls_logits[:, :-1].sigmoid().flatten()
         batch_ids = pred_boxes.batch_ids
+
+        # Update prediction scores if needed
+        if box_scores is not None:
+            box_scores = box_scores.sigmoid()
+            box_scores = box_scores[:, None].expand(-1, num_classes).flatten()
+
+            cls_power = self.score_attrs.get('cls_power', 1.0)
+            box_power = self.score_attrs.get('box_power', 1.0)
+            pred_scores = (pred_scores**cls_power) * (box_scores**box_power)
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -155,7 +183,7 @@ class BaseBox2dHead(nn.Module):
             pred_scores_i = pred_scores[batch_mask]
 
             # Remove duplicate predictions if needed
-            if self.dup_attrs is not None:
+            if self.dup_attrs:
                 dup_removal_type = self.dup_attrs['type']
 
                 if dup_removal_type == 'nms':
@@ -332,7 +360,8 @@ class BaseBox2dHead(nn.Module):
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
                 - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_feats];
-                - add_encs (FloatTensor): possibly updated box encodings of shape [num_feats, feat_size].
+                - add_encs (FloatTensor): possibly updated box encodings of shape [num_feats, feat_size];
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_feats].
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
         """
@@ -361,6 +390,11 @@ class BaseBox2dHead(nn.Module):
             norm_boxes = pred_boxes.clone().detach().normalize(images).to_format('cxcywh')
             storage_dict['add_encs'] = self.box_encoder(norm_boxes.boxes)
 
+        # Get box scores if needed
+        if self.box_score is not None:
+            box_scores = self.box_score(qry_feats)
+            storage_dict['box_scores'] = box_scores
+
         # Get 2D object detection predictions if needed
         if self.get_dets and not self.training:
             self.compute_dets(storage_dict=storage_dict, **kwargs)
@@ -380,6 +414,7 @@ class BaseBox2dHead(nn.Module):
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats];
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
 
@@ -392,22 +427,25 @@ class BaseBox2dHead(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
-            loss_dict (Dict): Loss dictionary containing following additional key:
-                - box_loss (FloatTensor): 2D bounding box loss of shape [].
+            loss_dict (Dict): Loss dictionary (possibly) containing following additional keys:
+                - box_loss (FloatTensor): 2D bounding box loss of shape [];
+                - box_score_loss (FloatTensor): 2D bounding box score loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary (possibly) containing following additional keys (if not None):
                 - box_multi_tgt_qry (FloatTensor): percentage of queries matched to multiple targets of shape [];
                 - box_matched_qry (FloatTensor): percentage of matched queries of shape [];
                 - box_matched_tgt (FloatTensor): percentage of matched targets of shape [];
-                - box_acc (FloatTensor): 2D bounding box accuracy of shape [].
+                - box_acc (FloatTensor): 2D bounding box accuracy of shape [];
+                - box_score_acc (FloatTensor): 2D bounding box score accuracy of shape [].
         """
 
         # Perform matching if matcher is available
         if self.matcher is not None:
             self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
-        # Retrieve 2D bounding box logits and matching results
+        # Retrieve desired items from storage dictionary
         box_logits = storage_dict['box_logits']
+        box_scores = storage_dict.get('box_scores', None)
         matched_qry_ids = storage_dict['matched_qry_ids']
         matched_tgt_ids = storage_dict['matched_tgt_ids']
 
@@ -451,13 +489,29 @@ class BaseBox2dHead(nn.Module):
             key_name = f'box_loss_{id}' if id is not None else 'box_loss'
             loss_dict[key_name] = box_loss
 
-            # Get 2D bounding box accuracy if needed
+            # Get 2D bounding box score loss if needed
+            if box_scores is not None:
+                box_score_loss = 0.0 * box_scores.sum()
+                key_name = f'box_score_loss_{id}' if id is not None else 'box_score_loss'
+                loss_dict[key_name] = box_score_loss
+
+            # Get accuracies if needed
             if analysis_dict is not None:
+
+                # Get 2D bounding box accuracy
                 box_acc = 1.0 if len(tgt_dict['boxes']) == 0 else 0.0
                 box_acc = torch.tensor(box_acc, dtype=box_loss.dtype, device=device)
 
                 key_name = f'box_acc_{id}' if id is not None else 'box_acc'
                 analysis_dict[key_name] = 100 * box_acc
+
+                # Get 2D bounding box score accuracy if needed
+                if box_scores is not None:
+                    box_score_acc = 1.0 if len(tgt_dict['boxes']) == 0 else 0.0
+                    box_score_acc = torch.tensor(box_score_acc, dtype=box_loss.dtype, device=device)
+
+                    key_name = f'box_score_acc_{id}' if id is not None else 'box_score_acc'
+                    analysis_dict[key_name] = 100 * box_score_acc
 
             return loss_dict, analysis_dict
 
@@ -475,14 +529,41 @@ class BaseBox2dHead(nn.Module):
         key_name = f'box_loss_{id}' if id is not None else 'box_loss'
         loss_dict[key_name] = box_loss
 
-        # Get 2D bounding box accuracy if needed
-        if analysis_dict is not None:
+        # Get 2D bounding box score loss if needed
+        if box_scores is not None:
             pred_boxes = storage_dict['pred_boxes'].detach()
             pred_boxes = pred_boxes[matched_qry_ids]
-            box_acc = box_iou(pred_boxes, tgt_boxes, images=images).diag().mean()
+            box_ious = box_iou(pred_boxes, tgt_boxes, images=images).diag()
+
+            pred_scores = box_scores[matched_qry_ids]
+            tgt_scores = inverse_sigmoid(box_ious, eps=1e-3)
+            box_score_loss = self.box_score_loss(pred_scores, tgt_scores)
+
+            key_name = f'box_score_loss_{id}' if id is not None else 'box_score_loss'
+            loss_dict[key_name] = box_score_loss
+
+        # Get accuracies if needed
+        if analysis_dict is not None:
+
+            # Get 2D bounding box accuracy
+            if box_scores is None:
+                pred_boxes = storage_dict['pred_boxes'].detach()
+                pred_boxes = pred_boxes[matched_qry_ids]
+                box_acc = box_iou(pred_boxes, tgt_boxes, images=images).diag().mean()
+
+            else:
+                box_acc = box_ious.mean()
 
             key_name = f'box_acc_{id}' if id is not None else 'box_acc'
             analysis_dict[key_name] = 100 * box_acc
+
+            # Get 2D bounding box score accuracy if needed
+            if box_scores is not None:
+                score_deltas = pred_scores.detach().sigmoid() - tgt_scores
+                box_score_acc = 1 - score_deltas.abs().mean()
+
+                key_name = f'box_score_acc_{id}' if id is not None else 'box_score_acc'
+                analysis_dict[key_name] = 100 * box_score_acc
 
         return loss_dict, analysis_dict
 
