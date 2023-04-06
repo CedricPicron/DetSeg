@@ -33,7 +33,8 @@ class BaseBox2dHead(nn.Module):
             - box_power (float): value containing the box score power.
 
         dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism possibly containing following keys:
-            - type (str): string containing the type of duplicate removal mechanism (mandatory);
+            - type (str): string containing the type of duplicate removal mechanism;
+            - dup_thr (float): value thresholding the predicted duplicate logits;
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
@@ -114,8 +115,9 @@ class BaseBox2dHead(nn.Module):
         Method computing the 2D object detection predictions.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following keys:
+            storage_dict (Dict): Storage dictionary (possibly) containing following keys:
                 - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
+                - dup_logits (FloatTensor): duplicate logits of shape [num_feats, num_feats];
                 - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
@@ -168,6 +170,14 @@ class BaseBox2dHead(nn.Module):
             box_power = self.score_attrs.get('box_power', 1.0)
             pred_scores = (pred_scores**cls_power) * (box_scores**box_power)
 
+        # Get duplicate mask if needed
+        if self.dup_attrs.get('type', None) == 'learned':
+            dup_logits = storage_dict['dup_logits']
+            dup_logits = dup_logits[well_defined, :][:, well_defined]
+
+            dup_thr = self.dup_attrs.get('dup_thr', 0.0)
+            dup_mask = dup_logits > dup_thr
+
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
@@ -186,7 +196,23 @@ class BaseBox2dHead(nn.Module):
             if self.dup_attrs:
                 dup_removal_type = self.dup_attrs['type']
 
-                if dup_removal_type == 'nms':
+                if dup_removal_type == 'learned':
+                    dup_batch_mask = batch_mask.view(-1, num_classes)[:, 0]
+                    dup_mask_i = dup_mask[dup_batch_mask, :][:, dup_batch_mask]
+                    dup_mask_i = dup_mask_i[:, :, None].expand(-1, -1, num_classes)
+
+                    scores = pred_scores_i.view(-1, num_classes)
+                    lower_score_mask = scores[:, None, :] < scores[None, :, :]
+
+                    dup_mask_i = dup_mask_i & lower_score_mask
+                    dup_mask_i = dup_mask_i.any(dim=1).flatten()
+                    non_dup_mask = ~dup_mask_i
+
+                    pred_labels_i = pred_labels_i[non_dup_mask]
+                    pred_boxes_i = pred_boxes_i[non_dup_mask]
+                    pred_scores_i = pred_scores_i[non_dup_mask]
+
+                elif dup_removal_type == 'nms':
                     num_candidates = self.dup_attrs['nms_candidates']
                     candidate_ids = pred_scores_i.topk(num_candidates)[1]
 
