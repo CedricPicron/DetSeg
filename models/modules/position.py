@@ -59,6 +59,70 @@ class PosEncoder(nn.Module):
 
 
 @MODELS.register_module()
+class SineBoxEncoder2d(nn.Module):
+    """
+    Class implementing the SineBoxEncoder2d module.
+
+    Attributes:
+        feat_size (int): Integer containing the feature size of the box features.
+        scale_factor (float): Value scaling the boxes after optional normalization.
+        max_period (float): Value determining the maximum sine and cosine periods.
+    """
+
+    def __init__(self, feat_size, scale_factor=2*math.pi, max_period=1e4):
+        """
+        Initializes the SineBoxEncoder2d module.
+
+        Args:
+            feat_size (int): Integer containing the feature size of the box features.
+            scale_factor (float): Value scaling the boxes after optional normalization (default=2*math.pi).
+            max_period (float): Value determining the maximum sine and cosine periods (default=1e4).
+
+        Raises:
+            ValueError: Error when the provided feature size is not divisible by 8.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Check whether the feature size is divisible by 8
+        if feat_size % 8 != 0:
+            error_msg = f"The feature size (got {feat_size}) of the SineBoxEncoder2d module must be divisible by 8."
+            raise ValueError(error_msg)
+
+        # Set remaining attributes
+        self.feat_size = feat_size
+        self.scale_factor = scale_factor
+        self.max_period = max_period
+
+    def forward(self, norm_boxes):
+        """
+        Forward method of the SineBoxEncoder2d module.
+
+        Args:
+            norm_boxes (FloatTensor): Normalized box coordinates in 'cxcywh' format of shape [num_boxes, 4].
+
+        Returns:
+            box_feats (FloatTensor): Box features of shape [num_boxes, feat_size].
+        """
+
+        # Get scaled box coordinates
+        norm_boxes = self.scale_factor * norm_boxes
+
+        # Get periods
+        device = norm_boxes.device
+        periods = 8 * torch.arange(self.feat_size // 8, dtype=torch.float, device=device) / self.feat_size
+        periods = self.max_period ** periods
+
+        # Get box features
+        box_feats = norm_boxes[:, :, None] / periods
+        box_feats = torch.cat([box_feats.sin(), box_feats.cos()], dim=2)
+        box_feats = box_feats.view(-1, self.feat_size)
+
+        return box_feats
+
+
+@MODELS.register_module()
 class SinePosEncoder2d(nn.Module):
     """
     Class implementing the SinePosEncoder2d module.
@@ -81,15 +145,15 @@ class SinePosEncoder2d(nn.Module):
             max_period (float): Value determining the maximum sine and cosine periods (default=1e4).
 
         Raises:
-            ValueError: Error when the provided feature size is not even.
+            ValueError: Error when the provided feature size is not divisible by 4.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Check whether the feature size is even
-        if feat_size % 2 != 0:
-            error_msg = f"The feature size (got {feat_size}) of the SinePosEncoder2d module must be even."
+        # Check whether the feature size is divisible by 4
+        if feat_size % 4 != 0:
+            error_msg = f"The feature size (got {feat_size}) of the SineBoxEncoder2d module must be divisible by 4."
             raise ValueError(error_msg)
 
         # Set remaining attributes
