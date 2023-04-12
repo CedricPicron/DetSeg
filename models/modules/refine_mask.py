@@ -112,6 +112,7 @@ class BARCrossEntropyLoss(nn.Module):
         return loss_instance
 
 
+@MODELS.register_module()
 class MultiBranchFusion(nn.Module):
 
     def __init__(self, feat_dim, dilations=[1, 3, 5]):
@@ -131,6 +132,7 @@ class MultiBranchFusion(nn.Module):
         return out_feat
 
 
+@MODELS.register_module()
 class MultiBranchFusionAvg(MultiBranchFusion):
 
     def forward(self, x):
@@ -142,6 +144,7 @@ class MultiBranchFusionAvg(MultiBranchFusion):
         return out_feat
 
 
+@MODELS.register_module()
 class SimpleSFMStage(nn.Module):
 
     def __init__(self,
@@ -154,22 +157,33 @@ class SimpleSFMStage(nn.Module):
                  out_size=14,
                  num_classes=80,
                  semantic_out_stride=4,
-                 upsample_cfg=dict(type='bilinear', scale_factor=2)):
+                 upsample_cfg=dict(type='bilinear', scale_factor=2),
+                 with_instance_logits=True):
         super(SimpleSFMStage, self).__init__()
 
-        self.semantic_out_stride = semantic_out_stride
         self.num_classes = num_classes
+        self.semantic_out_stride = semantic_out_stride
+        self.with_instance_logits = with_instance_logits
 
         # for extracting instance-wise semantic feats
         self.semantic_transform_in = nn.Conv2d(semantic_in_channel, semantic_out_channel, 1)
         self.semantic_roi_extractor = SimpleRoIAlign(output_size=out_size, spatial_scale=1.0/semantic_out_stride)
 
-        fuse_in_channel = instance_in_channel + semantic_out_channel + 1
+        if with_instance_logits:
+            fuse_in_channel = instance_in_channel + semantic_out_channel + 1
+        else:
+            fuse_in_channel = instance_in_channel + semantic_out_channel
+
         self.fuse_conv = nn.ModuleList([
             nn.Conv2d(fuse_in_channel, instance_in_channel, 1),
             globals()[fusion_type](instance_in_channel, dilations=dilations)])
 
-        self.fuse_transform_out = nn.Conv2d(instance_in_channel, instance_out_channel - 1, 1)
+        if with_instance_logits:
+            fuse_out_channel = instance_out_channel - 1
+        else:
+            fuse_out_channel = instance_out_channel
+
+        self.fuse_transform_out = nn.Conv2d(instance_in_channel, fuse_out_channel, 1)
         self.upsample = build_upsample_layer(upsample_cfg.copy())
         self.relu = nn.ReLU(inplace=True)
 
@@ -185,20 +199,27 @@ class SimpleSFMStage(nn.Module):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, instance_feats, instance_logits, semantic_feat, rois, upsample=True):
+    def forward(self, instance_feats, semantic_feat, rois, instance_logits=None, upsample=True):
         # instance-wise semantic feats
         semantic_feat = self.relu(self.semantic_transform_in(semantic_feat))
         ins_semantic_feats = self.semantic_roi_extractor(semantic_feat, rois)
 
         # fuse instance feats & instance masks & semantic feats
-        concat_tensors = [instance_feats, ins_semantic_feats, instance_logits.sigmoid()]
+        if self.with_instance_logits:
+            concat_tensors = [instance_feats, ins_semantic_feats, instance_logits.sigmoid()]
+        else:
+            concat_tensors = [instance_feats, ins_semantic_feats]
+
         fused_feats = torch.cat(concat_tensors, dim=1)
         for conv in self.fuse_conv:
             fused_feats = self.relu(conv(fused_feats))
 
         # concat instance masks with fused feats again
         fused_feats = self.relu(self.fuse_transform_out(fused_feats))
-        fused_feats = torch.cat([fused_feats, instance_logits.sigmoid()], dim=1)
+
+        if self.with_instance_logits:
+            fused_feats = torch.cat([fused_feats, instance_logits.sigmoid()], dim=1)
+
         fused_feats = self.upsample(fused_feats) if upsample else fused_feats
         return fused_feats
 
@@ -310,7 +331,7 @@ class SimpleRefineMaskHead(nn.Module):
             instance_logits = self.stage_instance_logits[idx](instance_feats)
             instance_logits = instance_logits[torch.arange(len(rois)), roi_labels][:, None]
             upsample_flag = self.pre_upsample_last_stage or idx < len(self.stages) - 1
-            instance_feats = stage(instance_feats, instance_logits, semantic_feat, rois, upsample_flag)
+            instance_feats = stage(instance_feats, semantic_feat, rois, instance_logits, upsample_flag)
             stage_instance_preds.append(instance_logits)
 
         # if use class-agnostic classifier for the last stage

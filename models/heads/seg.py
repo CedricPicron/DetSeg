@@ -597,7 +597,6 @@ class TopDownSegHead(nn.Module):
         trans (nn.ModuleList): List [seg_iters-1] of modules transitioning core and auxiliary features to new space.
         proc (nn.ModuleList): List [seg_iters-1] of modules processing the core features.
 
-        map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
         key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         seg_iters (int): Integer containing the number of segmentation iterations.
@@ -613,6 +612,7 @@ class TopDownSegHead(nn.Module):
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
+        roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes.
         tgt_roi_ext (nn.ModuleList): List [seg_iters] of modules extracting the RoI-based target segmentation masks.
         seg_loss (nn.Module): Module computing the segmentation loss.
         seg_loss_weights (Tuple): Tuple of size [seg_iters] containing the segmentation loss weights.
@@ -621,10 +621,10 @@ class TopDownSegHead(nn.Module):
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, map_offset,
-                 key_min_id, key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg,
-                 seg_loss_weights, ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None,
-                 fuse_qry_cfg=None, roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None,
+    def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, key_min_id,
+                 key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg, seg_loss_weights,
+                 ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None,
+                 roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, roi_sizes=None,
                  apply_ids=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
@@ -637,7 +637,6 @@ class TopDownSegHead(nn.Module):
             fuse_key_cfg (Dict): Configuration dictionary specifying the fuse key module.
             trans_cfg (Dict): Configuration dictionary specifying the transition module.
             proc_cfg (Dict): Configuration dictionary specifying the processing module.
-            map_offset (int): Integer with map offset used to determine the coarse key feature map for each query.
             key_min_id (int): Integer containing the downsampling index of the highest resolution key feature map.
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             seg_iters (int): Integer containing the number of segmentation iterations.
@@ -657,6 +656,7 @@ class TopDownSegHead(nn.Module):
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
+            roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
@@ -684,6 +684,12 @@ class TopDownSegHead(nn.Module):
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
+        # Set attribute containing the RoI sizes
+        if roi_sizes is None:
+            self.roi_sizes = tuple(2**i * roi_ext_cfg['roi_layer']['output_size'] for i in range(seg_iters))
+        else:
+            self.roi_sizes = roi_sizes
+
         # Build target RoI extractor
         tgt_roi_ext_cfg = dict(type='mmdet.SingleRoIExtractor')
         tgt_roi_ext_cfg['roi_layer'] = dict(type='RoIAlign', sampling_ratio=0)
@@ -691,8 +697,8 @@ class TopDownSegHead(nn.Module):
         tgt_roi_ext_cfg['featmap_strides'] = [1]
         self.tgt_roi_ext = nn.ModuleList()
 
-        for i in range(seg_iters):
-            tgt_roi_ext_cfg['roi_layer']['output_size'] = 2**i * roi_ext_cfg['roi_layer']['output_size']
+        for roi_size in self.roi_sizes:
+            tgt_roi_ext_cfg['roi_layer']['output_size'] = roi_size
             self.tgt_roi_ext.append(build_model(tgt_roi_ext_cfg))
 
         # Build segmentation and refinement loss modules
@@ -700,7 +706,6 @@ class TopDownSegHead(nn.Module):
         self.ref_loss = build_model(ref_loss_cfg)
 
         # Set remaining attributes
-        self.map_offset = map_offset
         self.key_min_id = key_min_id
         self.key_max_id = key_max_id
         self.seg_iters = seg_iters
@@ -824,14 +829,14 @@ class TopDownSegHead(nn.Module):
             self.get_preds(qry_feats, storage_dict, seg_qry_ids=seg_qry_ids, **kwargs)
 
             # Retrieve various items related to segmentation predictions from storage dictionary
-            roi_size = storage_dict['roi_size']
             roi_ids_list = storage_dict['roi_ids_list']
             pos_ids_list = storage_dict['pos_ids_list']
             seg_logits_list = storage_dict['seg_logits_list']
 
             # Get prediction masks
             num_rois = len(seg_qry_ids)
-            mask_logits = torch.zeros(num_rois, 1, *roi_size, device=device)
+            rH = rW = self.roi_sizes[0]
+            mask_logits = torch.zeros(num_rois, 1, rH, rW, device=device)
 
             for j in range(self.seg_iters):
                 roi_ids = roi_ids_list[j]
@@ -841,8 +846,8 @@ class TopDownSegHead(nn.Module):
                 mask_logits[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]] = seg_logits
 
                 if j < self.seg_iters-1:
-                    roi_size = tuple(2*size for size in roi_size)
-                    mask_logits = F.interpolate(mask_logits, roi_size, mode='bilinear', align_corners=False)
+                    rH = rW = self.roi_sizes[j+1]
+                    mask_logits = F.interpolate(mask_logits, (rH, rW), mode='bilinear', align_corners=False)
 
             mask_scores = mask_logits.sigmoid()
             pred_boxes_i = pred_boxes[seg_qry_ids]
@@ -1005,7 +1010,6 @@ class TopDownSegHead(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional keys:
-                - roi_size (Tuple): tuple [2] containing the size of the initial RoI in (height, width) format;
                 - roi_ids_list (List): list [seg_iters] with RoI indices of predictions [num_preds_i];
                 - pos_ids_list (List): list [seg_iters] with RoI-based position ids in (X, Y) format [num_preds_i, 2];
                 - seg_logits_list (List): list [seg_iters] with segmentation logits of shape [num_preds_i];
@@ -1058,12 +1062,15 @@ class TopDownSegHead(nn.Module):
             roi_feats = roi_feats + self.fuse_qry(fuse_qry_feats)
 
         # Update RoI features if needed
-        roi_feats = self.roi_ins(roi_feats) if self.roi_ins is not None else roi_feats
-        num_rois, feat_size, rH, rW = roi_feats.size()
+        if self.roi_ins is not None:
+            roi_ins_kwargs = {'semantic_feat': key_feat_maps[0], 'rois': roi_boxes}
+            roi_feats = self.roi_ins(roi_feats, **roi_ins_kwargs)
 
         # Get map indices from which RoI features were extracted
         map_ids = self.roi_ext.map_roi_levels(roi_boxes, self.roi_ext.num_inputs)
         max_map_id = map_ids.max().item()
+
+        num_rois, feat_size, rH, rW = roi_feats.size()
         map_ids = map_ids[:, None].expand(-1, rH*rW).flatten()
 
         # Get RoI and batch indices
@@ -1115,7 +1122,7 @@ class TopDownSegHead(nn.Module):
             seg_logits_list.append(seg_logits)
             ref_logits_list.append(ref_logits)
 
-            # Refine graph if needed
+            # Refine if needed
             if i < self.seg_iters-1:
 
                 # Get refine mask
@@ -1211,7 +1218,6 @@ class TopDownSegHead(nn.Module):
                 core_feats = self.proc[i](core_feats, aux_feats=aux_feats, **id_kwargs)
 
         # Store desired items in storage dictionary
-        storage_dict['roi_size'] = (rH, rW)
         storage_dict['roi_ids_list'] = roi_ids_list
         storage_dict['pos_ids_list'] = pos_ids_list
         storage_dict['seg_logits_list'] = seg_logits_list
