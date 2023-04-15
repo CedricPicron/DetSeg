@@ -377,7 +377,7 @@ model = dict(
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
-                nms_thr=0.5,
+                nms_thr=0.65,
             ),
             max_dets=100,
             report_match_stats=False,
