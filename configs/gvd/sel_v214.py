@@ -255,7 +255,7 @@ model = dict(
             get_dets=True,
             dup_attrs=dict(
                 type='learned',
-                dup_thr=0.0,
+                dup_thr=0.5,
             ),
             max_dets=100,
             matcher_cfg=None,

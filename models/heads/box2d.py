@@ -34,7 +34,7 @@ class BaseBox2dHead(nn.Module):
 
         dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism possibly containing following keys:
             - type (str): string containing the type of duplicate removal mechanism;
-            - dup_thr (float): value thresholding the predicted duplicate logits;
+            - dup_thr (float): value thresholding the predicted duplicate scores;
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
@@ -175,8 +175,8 @@ class BaseBox2dHead(nn.Module):
             dup_logits = storage_dict['dup_logits']
             dup_logits = dup_logits[well_defined, :][:, well_defined]
 
-            dup_thr = self.dup_attrs.get('dup_thr', 0.0)
-            dup_mask = dup_logits > dup_thr
+            dup_thr = self.dup_attrs.get('dup_thr', 0.5)
+            dup_mask = dup_logits.sigmoid() > dup_thr
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -203,9 +203,16 @@ class BaseBox2dHead(nn.Module):
 
                     scores = pred_scores_i.view(-1, num_classes)
                     lower_score_mask = scores[:, None, :] < scores[None, :, :]
+                    base_mask = dup_mask_i & lower_score_mask
 
-                    dup_mask_i = dup_mask_i & lower_score_mask
-                    dup_mask_i = dup_mask_i.any(dim=1).flatten()
+                    old_mask = base_mask
+                    new_mask = base_mask & (~old_mask.any(dim=1)[None, :, :])
+
+                    while not torch.equal(old_mask, new_mask):
+                        old_mask = new_mask
+                        new_mask = base_mask & (~old_mask.any(dim=1)[None, :, :])
+
+                    dup_mask_i = new_mask.any(dim=1).flatten()
                     non_dup_mask = ~dup_mask_i
 
                     pred_labels_i = pred_labels_i[non_dup_mask]
