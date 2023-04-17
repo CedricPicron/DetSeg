@@ -33,8 +33,8 @@ class BaseBox2dHead(nn.Module):
             - cls_power (float): value containing the classification score power;
             - box_power (float): value containing the box score power.
 
-        dup_attrs (Dict): Dictionary specifying the duplicate removal mechanism possibly containing following keys:
-            - type (str): string containing the type of duplicate removal mechanism;
+        dup_attrs (Dict): Dictionary specifying the duplicate removal or rescoring mechanism possibly containing:
+            - type (str): string containing the type of duplicate removal or rescoring mechanism;
             - dup_thr (float): value thresholding the predicted duplicate scores;
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): IoU threshold used during NMS or Soft-NMS to remove or rescore duplicate detections;
@@ -69,7 +69,7 @@ class BaseBox2dHead(nn.Module):
             box_score_cfg (Dict): Configuration dictionary specifying the box score module (default=None).
             get_dets (bool): Boolean indicating whether to get 2D object detection predictions (default=True).
             score_attrs (Dict): Attribute dictionary specifying the scoring mechanism (default=None).
-            dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
+            dup_attrs (Dict): Dictionary specifying the duplicate removal or rescoring mechanism (default=None).
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
@@ -137,7 +137,7 @@ class BaseBox2dHead(nn.Module):
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
-            ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid type of duplicate removal or rescoring mechanism is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -198,9 +198,9 @@ class BaseBox2dHead(nn.Module):
 
             # Remove duplicate predictions if needed
             if self.dup_attrs:
-                dup_removal_type = self.dup_attrs['type']
+                dup_type = self.dup_attrs['type']
 
-                if dup_removal_type == 'learned':
+                if dup_type == 'learned':
                     dup_batch_mask = batch_mask.view(-1, num_classes)[:, 0]
                     dup_mask_i = dup_mask[dup_batch_mask, :][:, dup_batch_mask]
                     dup_mask_i = dup_mask_i[:, :, None].expand(-1, -1, num_classes)
@@ -223,7 +223,7 @@ class BaseBox2dHead(nn.Module):
                     pred_boxes_i = pred_boxes_i[non_dup_mask]
                     pred_scores_i = pred_scores_i[non_dup_mask]
 
-                elif dup_removal_type == 'nms':
+                elif dup_type == 'nms':
                     num_candidates = self.dup_attrs.get('nms_candidates', 1000)
                     candidate_ids = pred_scores_i.topk(num_candidates)[1]
 
@@ -238,7 +238,7 @@ class BaseBox2dHead(nn.Module):
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
 
-                elif dup_removal_type == 'soft-nms':
+                elif dup_type == 'soft-nms':
                     soft_nms_kwargs = {}
                     soft_nms_kwargs['iou_threshold'] = self.dup_attrs.get('nms_thr', 0.3)
                     soft_nms_kwargs['sigma'] = self.dup_attrs.get('soft_nms_sigma', 0.5)
@@ -256,7 +256,7 @@ class BaseBox2dHead(nn.Module):
                     pred_scores_i = dets[:, 4]
 
                 else:
-                    error_msg = f"Invalid type of duplicate removal mechanism (got '{dup_removal_type}')."
+                    error_msg = f"Invalid type of duplicate removal or rescoring mechanism (got '{dup_type}')."
                     raise ValueError(error_msg)
 
             # Only keep top predictions if needed
