@@ -5,6 +5,7 @@ Collection of 2D bounding box heads.
 from detectron2.layers import batched_nms
 from detectron2.structures.instances import Instances
 from detectron2.utils.visualizer import Visualizer
+from mmcv.ops import soft_nms
 from mmdet.models.layers.transformer.utils import inverse_sigmoid
 import torch
 from torch import nn
@@ -36,7 +37,10 @@ class BaseBox2dHead(nn.Module):
             - type (str): string containing the type of duplicate removal mechanism;
             - dup_thr (float): value thresholding the predicted duplicate scores;
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
-            - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
+            - nms_thr (float): IoU threshold used during NMS or Soft-NMS to remove or rescore duplicate detections;
+            - soft_nms_sigma (float): value containing the standard deviation of the Soft-NMS gaussian;
+            - soft_nms_min_score (float): value containing the minimum detection score to be considered by Soft-NMS;
+            - soft_nms_method (str): string containing the type of Soft-NMS method.
 
         max_dets (int): Optional integer with the maximum number of returned 2D object detection predictions.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -220,19 +224,36 @@ class BaseBox2dHead(nn.Module):
                     pred_scores_i = pred_scores_i[non_dup_mask]
 
                 elif dup_removal_type == 'nms':
-                    num_candidates = self.dup_attrs['nms_candidates']
+                    num_candidates = self.dup_attrs.get('nms_candidates', 1000)
                     candidate_ids = pred_scores_i.topk(num_candidates)[1]
 
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_boxes_i = pred_boxes_i[candidate_ids].to_format('xyxy')
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    iou_thr = self.dup_attrs['nms_thr']
+                    iou_thr = self.dup_attrs.get('nms_thr', 0.65)
                     non_dup_ids = batched_nms(pred_boxes_i.boxes, pred_scores_i, pred_labels_i, iou_thr)
 
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
+
+                elif dup_removal_type == 'soft-nms':
+                    soft_nms_kwargs = {}
+                    soft_nms_kwargs['iou_threshold'] = self.dup_attrs.get('nms_thr', 0.3)
+                    soft_nms_kwargs['sigma'] = self.dup_attrs.get('soft_nms_sigma', 0.5)
+                    soft_nms_kwargs['min_score'] = self.dup_attrs.get('soft_nms_min_score', 1e-3)
+                    soft_nms_kwargs['method'] = self.dup_attrs.get('soft_nms_method', 'gaussian')
+
+                    nms_boxes = pred_boxes_i.to_format('xyxy').boxes
+                    offset = nms_boxes.max().item() + 1
+
+                    nms_boxes = nms_boxes + offset * pred_labels_i[:, None]
+                    dets, ids = soft_nms(nms_boxes, pred_scores_i, **soft_nms_kwargs)
+
+                    pred_labels_i = pred_labels_i[ids]
+                    pred_boxes_i = pred_boxes_i[ids]
+                    pred_scores_i = dets[:, 4]
 
                 else:
                     error_msg = f"Invalid type of duplicate removal mechanism (got '{dup_removal_type}')."
