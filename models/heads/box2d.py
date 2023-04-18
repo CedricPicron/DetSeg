@@ -40,7 +40,10 @@ class BaseBox2dHead(nn.Module):
             - nms_thr (float): IoU threshold used during NMS or Soft-NMS to remove or rescore duplicate detections;
             - soft_nms_sigma (float): value containing the standard deviation of the Soft-NMS gaussian;
             - soft_nms_min_score (float): value containing the minimum detection score to be considered by Soft-NMS;
-            - soft_nms_method (str): string containing the type of Soft-NMS method.
+            - soft_nms_method (str): string containing the type of Soft-NMS method;
+            - ub_perfect_boxes (bool): boolean indicating whether to use best box per target during upper-bound method;
+            - ub_perfect_labels (bool): boolean indicating whether to use correct label during upper-bound method;
+            - ub_perfect_scores (bool): boolean indicating whether to use perfect scores during upper-bound method.
 
         max_dets (int): Optional integer with the maximum number of returned 2D object detection predictions.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -114,7 +117,7 @@ class BaseBox2dHead(nn.Module):
         self.apply_ids = apply_ids
 
     @torch.no_grad()
-    def compute_dets(self, storage_dict, pred_dicts, **kwargs):
+    def compute_dets(self, storage_dict, pred_dicts, tgt_dict=None, **kwargs):
         """
         Method computing the 2D object detection predictions.
 
@@ -126,6 +129,11 @@ class BaseBox2dHead(nn.Module):
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
+
+            tgt_dict (Dictionary): Optional target dictionary containing at least following key:
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - boxes (Boxes): target 2D bounding boxes of size [num_targets].
+
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -254,6 +262,54 @@ class BaseBox2dHead(nn.Module):
                     pred_labels_i = pred_labels_i[ids]
                     pred_boxes_i = pred_boxes_i[ids]
                     pred_scores_i = dets[:, 4]
+
+                elif dup_type == 'upper_bound':
+                    if tgt_dict is not None:
+                        pred_boxes_i = pred_boxes_i[::num_classes]
+
+                        tgt_batch_mask = tgt_dict['boxes'].batch_ids == i
+                        tgt_labels_i = tgt_dict['labels'][tgt_batch_mask]
+                        tgt_boxes_i = tgt_dict['boxes'][tgt_batch_mask]
+
+                        if self.dup_attrs.get('ub_perfect_boxes', False):
+                            ious, box_ids = box_iou(pred_boxes_i, tgt_boxes_i).max(dim=0)
+
+                        else:
+                            num_preds = len(pred_boxes_i)
+                            num_tgts = len(tgt_boxes_i)
+
+                            if num_tgts > 0:
+                                pred_ids = torch.arange(num_preds, device=device)
+                                ious, tgt_ids = box_iou(pred_boxes_i, tgt_boxes_i).max(dim=1)
+
+                                scores_i = pred_scores_i.view(-1, num_classes)
+                                score_matrix = torch.zeros(num_preds, num_tgts, device=device)
+                                score_matrix[pred_ids, tgt_ids] = scores_i[pred_ids, tgt_labels_i[tgt_ids]]
+
+                                box_ids = score_matrix.argmax(dim=0)
+                                ious = ious[box_ids]
+
+                            else:
+                                box_ids = torch.zeros(0, dtype=torch.int64, device=device)
+                                ious = torch.zeros(0, device=device)
+
+                        if self.dup_attrs.get('ub_perfect_labels', False):
+                            pred_labels_i = tgt_labels_i
+                            pred_boxes_i = pred_boxes_i[box_ids]
+
+                            if self.dup_attrs.get('ub_perfect_scores', False):
+                                pred_scores_i = ious
+                            else:
+                                pred_scores_i = pred_scores_i.view(-1, num_classes)[box_ids, pred_labels_i]
+
+                        else:
+                            pred_labels_i = pred_labels_i.view(-1, num_classes)[box_ids, :].flatten()
+                            pred_boxes_i = pred_boxes_i[box_ids].expand(num_classes)
+
+                            if self.dup_attrs.get('ub_perfect_score', False):
+                                pred_scores_i = ious[:, None].expand(-1, num_classes).flatten()
+                            else:
+                                pred_scores_i = pred_scores_i.view(-1, num_classes)[box_ids, :].flatten()
 
                 else:
                     error_msg = f"Invalid type of duplicate removal or rescoring mechanism (got '{dup_type}')."
