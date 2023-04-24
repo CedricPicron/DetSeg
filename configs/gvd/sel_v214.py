@@ -254,8 +254,9 @@ model = dict(
             ),
             get_dets=True,
             dup_attrs=dict(
-                type='learned',
-                dup_thr=0.5,
+                type='soft-learned',
+                soft_dup_thr=0.0,
+                soft_dup_power=2.0,
             ),
             max_dets=100,
             matcher_cfg=None,

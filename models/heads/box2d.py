@@ -38,6 +38,8 @@ class BaseBox2dHead(nn.Module):
             - dup_thr (float): value thresholding the predicted duplicate scores;
             - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
             - nms_thr (float): IoU threshold used during NMS or Soft-NMS to remove or rescore duplicate detections;
+            - soft_dup_thr (float): value thresholding the predicted duplicate score during soft duplicate removal;
+            - soft dup_power (float): value containing the duplicate score power during soft duplicate removal;
             - soft_nms_sigma (float): value containing the standard deviation of the Soft-NMS gaussian;
             - soft_nms_min_score (float): value containing the minimum detection score to be considered by Soft-NMS;
             - soft_nms_method (str): string containing the type of Soft-NMS method;
@@ -182,13 +184,26 @@ class BaseBox2dHead(nn.Module):
             box_power = self.score_attrs.get('box_power', 1.0)
             pred_scores = (pred_scores**cls_power) * (box_scores**box_power)
 
-        # Get duplicate mask if needed
-        if self.dup_attrs.get('type', None) == 'learned':
+        # Get duplicate-relared mask or scores if needed
+        dup_type = self.dup_attrs.get('type', None)
+
+        if dup_type == 'learned':
             dup_logits = storage_dict['dup_logits']
             dup_logits = dup_logits[well_defined, :][:, well_defined]
 
             dup_thr = self.dup_attrs.get('dup_thr', 0.5)
             dup_mask = dup_logits.sigmoid() > dup_thr
+
+        elif dup_type == 'soft-learned':
+            dup_logits = storage_dict['dup_logits']
+            dup_logits = dup_logits[well_defined, :][:, well_defined]
+
+            dup_thr = self.dup_attrs.get('soft_dup_thr', 0.0)
+            dup_power = self.dup_attrs.get('soft_dup_power', 2.0)
+
+            dup_scores = (dup_logits.sigmoid() - dup_thr) / (1 - dup_thr)
+            dup_scores = dup_scores.clamp(min=0)**dup_power
+            non_dup_scores = 1 - dup_scores
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'boxes', 'scores', 'batch_ids')
@@ -206,7 +221,6 @@ class BaseBox2dHead(nn.Module):
 
             # Remove duplicate predictions if needed
             if self.dup_attrs:
-                dup_type = self.dup_attrs['type']
 
                 if dup_type == 'learned':
                     dup_batch_mask = batch_mask.view(-1, num_classes)[:, 0]
@@ -245,6 +259,46 @@ class BaseBox2dHead(nn.Module):
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
+
+                elif dup_type == 'soft-learned':
+                    dup_batch_mask = batch_mask[::num_classes]
+                    non_dup_scores_i = non_dup_scores[dup_batch_mask, :][:, dup_batch_mask]
+
+                    scores = pred_scores_i.view(-1, num_classes).t()
+                    num_preds = scores.size(dim=1)
+
+                    orig_ids = torch.arange(num_preds, device=device)[None, :].expand(num_classes, -1)
+                    cls_ids = torch.arange(num_classes, device=device)
+
+                    orig_ids_list = []
+                    scores_list = []
+
+                    for j in range(num_preds):
+                        scores_j, local_ids = scores.max(dim=1)
+                        orig_ids_j = orig_ids[cls_ids, local_ids]
+
+                        orig_ids_list.append(orig_ids_j)
+                        scores_list.append(scores_j)
+
+                        if j < num_preds-1:
+                            mask = torch.ones_like(scores, dtype=torch.bool)
+                            mask[cls_ids, local_ids] = False
+
+                            orig_ids = orig_ids[mask].view(num_classes, num_preds-j-1)
+                            scores = scores[mask].view(num_classes, num_preds-j-1)
+
+                            orig_ids_j = orig_ids_j[:, None].expand(-1, num_preds-j-1)
+                            non_dup_scores_j = non_dup_scores_i[orig_ids_j, orig_ids]
+                            scores = non_dup_scores_j * scores
+
+                    orig_ids = torch.stack(orig_ids_list, dim=0)
+                    scores = torch.stack(scores_list, dim=0)
+
+                    pred_scores_i = torch.empty(num_preds, num_classes, device=device)
+                    cls_ids = cls_ids[None, :].expand(num_preds, -1)
+
+                    pred_scores_i[orig_ids, cls_ids] = scores
+                    pred_scores_i = pred_scores_i.flatten()
 
                 elif dup_type == 'soft-nms':
                     soft_nms_kwargs = {}
