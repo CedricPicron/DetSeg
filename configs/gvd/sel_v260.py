@@ -173,8 +173,15 @@ model = dict(
                 nms_thr=0.5,
             ),
             max_dets=100,
-            matcher_cfg=None,
-            report_match_stats=False,
+            matcher_cfg=dict(
+                type='TopMatcher',
+                ids_key='sel_top_ids',
+                qry_key='box_logits',
+                top_pos=15,
+                top_neg=15,
+                allow_multi_tgt=False,
+            ),
+            report_match_stats=True,
             loss_cfg=dict(
                 type='SmoothL1Loss',
                 beta=0.0,
@@ -249,7 +256,7 @@ model = dict(
             ],
             box_coder_cfg=dict(
               type='RcnnBoxCoder',
-              delta_stds=(0.5, 0.5, 0.5, 0.5),
+              delta_stds=(0.1, 0.1, 0.1, 0.1),
             ),
             get_dets=True,
             dup_attrs=dict(
