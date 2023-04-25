@@ -256,7 +256,7 @@ model = dict(
             ],
             box_coder_cfg=dict(
               type='RcnnBoxCoder',
-              delta_stds=(0.1, 0.1, 0.1, 0.1),
+              delta_stds=(0.5, 0.5, 0.5, 0.5),
             ),
             get_dets=True,
             dup_attrs=dict(
