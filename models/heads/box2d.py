@@ -43,9 +43,8 @@ class BaseBox2dHead(nn.Module):
             - soft_nms_sigma (float): value containing the standard deviation of the Soft-NMS gaussian;
             - soft_nms_min_score (float): value containing the minimum detection score to be considered by Soft-NMS;
             - soft_nms_method (str): string containing the type of Soft-NMS method;
-            - ub_perfect_boxes (bool): boolean indicating whether to use best box per target during upper-bound method;
-            - ub_perfect_labels (bool): boolean indicating whether to use correct label during upper-bound method;
-            - ub_perfect_scores (bool): boolean indicating whether to use perfect scores during upper-bound method.
+            - ub_tgt_thr (float): minimum IoU value required to match target during upper bound removal;
+            - ub_pred_thr (float): minumum IoU value required to match other prediction during upper bound removal.
 
         max_dets (int): Optional integer with the maximum number of returned 2D object detection predictions.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -319,51 +318,57 @@ class BaseBox2dHead(nn.Module):
 
                 elif dup_type == 'upper_bound':
                     if tgt_dict is not None:
-                        pred_boxes_i = pred_boxes_i[::num_classes]
-
                         tgt_batch_mask = tgt_dict['boxes'].batch_ids == i
                         tgt_labels_i = tgt_dict['labels'][tgt_batch_mask]
                         tgt_boxes_i = tgt_dict['boxes'][tgt_batch_mask]
 
-                        if self.dup_attrs.get('ub_perfect_boxes', False):
-                            ious, box_ids = box_iou(pred_boxes_i, tgt_boxes_i).max(dim=0)
+                        if len(tgt_boxes_i) > 0:
+                            tgt_thr = self.dup_attrs.get('ub_tgt_thr', 0.5)
+                            pred_thr = self.dup_attrs.get('ub_pred_thr', 0.5)
 
-                        else:
-                            num_preds = len(pred_boxes_i)
-                            num_tgts = len(tgt_boxes_i)
+                            pred_boxes_ic = pred_boxes_i[::num_classes]
+                            max_ious, tgt_ids = box_iou(pred_boxes_ic, tgt_boxes_i).max(dim=1)
 
-                            if num_tgts > 0:
-                                pred_ids = torch.arange(num_preds, device=device)
-                                ious, tgt_ids = box_iou(pred_boxes_i, tgt_boxes_i).max(dim=1)
+                            tgt_ids[max_ious < tgt_thr] = -1
+                            cls_ids = tgt_labels_i[tgt_ids]
 
-                                scores_i = pred_scores_i.view(-1, num_classes)
-                                score_matrix = torch.zeros(num_preds, num_tgts, device=device)
-                                score_matrix[pred_ids, tgt_ids] = scores_i[pred_ids, tgt_labels_i[tgt_ids]]
+                            num_preds = len(tgt_ids)
+                            pred_ids = torch.arange(num_preds, device=device)
 
-                                box_ids = score_matrix.argmax(dim=0)
-                                ious = ious[box_ids]
+                            tgt_ids_m = torch.full([num_preds, num_classes], -1, dtype=torch.int64, device=device)
+                            tgt_ids_m[pred_ids, cls_ids] = tgt_ids
 
-                            else:
-                                box_ids = torch.zeros(0, dtype=torch.int64, device=device)
-                                ious = torch.zeros(0, device=device)
+                            tgt_unmatched = torch.ones(len(tgt_boxes_i)+1, dtype=torch.bool, device=device)
+                            tgt_unmatched[-1] = False
 
-                        if self.dup_attrs.get('ub_perfect_labels', False):
-                            pred_labels_i = tgt_labels_i
-                            pred_boxes_i = pred_boxes_i[box_ids]
+                            scores = pred_scores_i.view(-1, num_classes)
+                            scores, sort_ids = scores.sort(dim=0, descending=True)
 
-                            if self.dup_attrs.get('ub_perfect_scores', False):
-                                pred_scores_i = ious
-                            else:
-                                pred_scores_i = pred_scores_i.view(-1, num_classes)[box_ids, pred_labels_i]
+                            pred_ids = pred_ids[:, None].expand(-1, num_classes)
+                            pred_ids = torch.gather(pred_ids, dim=0, index=sort_ids)
 
-                        else:
-                            pred_labels_i = pred_labels_i.view(-1, num_classes)[box_ids, :].flatten()
-                            pred_boxes_i = pred_boxes_i[box_ids].expand(num_classes)
+                            cls_ids = torch.arange(num_classes, device=device)
+                            pred_iou_mask = box_iou(pred_boxes_ic, pred_boxes_ic) > pred_thr
+                            non_dup_mask_i = torch.empty(num_preds, num_classes, dtype=torch.bool, device=device)
 
-                            if self.dup_attrs.get('ub_perfect_score', False):
-                                pred_scores_i = ious[:, None].expand(-1, num_classes).flatten()
-                            else:
-                                pred_scores_i = pred_scores_i.view(-1, num_classes)[box_ids, :].flatten()
+                            for j in range(num_preds):
+                                pred_ids_j = pred_ids[j]
+                                tgt_ids_j = tgt_ids_m[pred_ids_j, cls_ids]
+
+                                matches_unmatched_tgt = tgt_unmatched[tgt_ids_j]
+                                tgt_unmatched[tgt_ids_j] = False
+
+                                pred_iou_mask_i = pred_iou_mask[pred_ids[:j], pred_ids_j[None, :].expand(j, -1)]
+                                overlaps_matched_pred = (non_dup_mask_i[:j] & pred_iou_mask_i).any(dim=0)
+                                non_dup_mask_i[j] = matches_unmatched_tgt | (~overlaps_matched_pred)
+
+                            orig_ids = torch.arange(num_preds*num_classes, device=device).view(num_preds, num_classes)
+                            orig_ids = torch.gather(orig_ids, dim=0, index=sort_ids)
+                            non_dup_ids = orig_ids[non_dup_mask_i]
+
+                            pred_labels_i = pred_labels_i[non_dup_ids]
+                            pred_boxes_i = pred_boxes_i[non_dup_ids]
+                            pred_scores_i = pred_scores_i[non_dup_ids]
 
                 else:
                     error_msg = f"Invalid type of duplicate removal or rescoring mechanism (got '{dup_type}')."
@@ -564,7 +569,7 @@ class BaseBox2dHead(nn.Module):
             self.compute_dets(storage_dict=storage_dict, **kwargs)
 
         # Draw predicted and target 2D object detections if needed
-        if images_dict is not None:
+        if self.get_dets and images_dict is not None:
             self.draw_dets(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
 
         return storage_dict, images_dict
