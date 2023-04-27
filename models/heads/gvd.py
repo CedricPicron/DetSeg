@@ -166,7 +166,9 @@ class GVD(nn.Module):
             if 0 in head.apply_ids:
                 head(mode='pred', id=0, **local_kwargs, **kwargs)
 
-                if tgt_dict is not None:
+        if tgt_dict is not None:
+            for head in self.heads:
+                if 0 in head.apply_ids:
                     head(mode='loss', id=0, **local_kwargs, **kwargs)
 
         # Iterate over decoder layers and apply heads when needed
@@ -181,7 +183,9 @@ class GVD(nn.Module):
                 if dec_id in head.apply_ids:
                     head(mode='pred', id=dec_id, **local_kwargs, **kwargs)
 
-                    if tgt_dict is not None:
+            if tgt_dict is not None:
+                for head in self.heads:
+                    if dec_id in head.apply_ids:
                         head(mode='loss', id=dec_id, **local_kwargs, **kwargs)
 
         # Get list with items to return
