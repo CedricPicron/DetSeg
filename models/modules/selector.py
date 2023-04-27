@@ -35,6 +35,7 @@ class AnchorSelector(nn.Module):
             - gt_neg_thr (int): negative threshold used during ground-truth selection;
             - gt_pos_ratio (float): ratio of positives during ground-truth selection.
 
+        feat_sel_type (str): String containing the feature selection type.
         post (Sequential): Optional module post-processing the selected features.
         box_encoder (nn.Module): Optional module computing the box encodings of selected boxes.
         matcher (nn.Module): Module performing matching between anchors and target boxes.
@@ -42,7 +43,7 @@ class AnchorSelector(nn.Module):
     """
 
     def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, matcher_cfg, loss_cfg, feat_map_ids=None, init_prob=0.01,
-                 post_cfg=None, box_encoder_cfg=None):
+                 feat_sel_type='map', post_cfg=None, box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
@@ -54,6 +55,7 @@ class AnchorSelector(nn.Module):
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
+            feat_sel_type (str): String containing the feature selection type (default='map').
             post_cfg (Dict): Configuration dictionary specifying the post-processing module (default=None).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
         """
@@ -86,6 +88,7 @@ class AnchorSelector(nn.Module):
 
         # Set selection-related attributes
         self.sel_attrs = sel_attrs
+        self.feat_sel_type = feat_sel_type
 
         # Build post-processing module if needed
         self.post = build_model(post_cfg, sequential=True) if post_cfg is not None else None
@@ -305,6 +308,9 @@ class AnchorSelector(nn.Module):
                 - sel_feats (FloatTensor): selected features after post-processing of shape [num_sels, feat_size];
                 - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_sels];
                 - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_sels, feat_size].
+
+        Raises:
+            ValueError: Error when an invalid feature selection type is provided.
         """
 
         # Retrieve feature maps from storage dictionary
@@ -336,9 +342,19 @@ class AnchorSelector(nn.Module):
         storage_dict['feat_ids'] = feat_ids
 
         # Get selected features
-        feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
-        feats = feats.flatten(0, 1)
-        sel_feats = feats[feat_ids]
+        if self.feat_sel_type == 'map':
+            feats = torch.cat([feat_map.flatten(2).permute(0, 2, 1) for feat_map in feat_maps], dim=1)
+            feats = feats.flatten(0, 1)
+            sel_feats = feats[feat_ids]
+
+        elif self.feat_sel_type == 'zero':
+            num_sels = len(sel_ids)
+            feat_size = feat_maps[0].size(dim=1)
+            sel_feats = torch.zeros(num_sels, feat_size, device=sel_logits.device)
+
+        else:
+            error_msg = f"Invalid feature selection type (got '{self.feat_sel_type}')."
+            raise ValueError(error_msg)
 
         # Perform post-processing on selected features if needed
         if self.post is not None:
