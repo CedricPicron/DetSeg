@@ -183,10 +183,14 @@ model = dict(
             ),
             report_match_stats=True,
             loss_cfg=dict(
-                type='SmoothL1Loss',
-                beta=0.0,
-                reduction='sum',
-                weight=0.25,
+                type='BoxLoss',
+                box_loss_type='regression',
+                box_loss_cfg=dict(
+                    type='SmoothL1Loss',
+                    beta=0.0,
+                    reduction='sum',
+                    weight=0.25,
+                ),
             ),
         ),
         dict(
@@ -268,10 +272,14 @@ model = dict(
             report_match_stats=False,
             matcher_cfg=None,
             loss_cfg=dict(
-                type='SmoothL1Loss',
-                beta=0.0,
-                reduction='sum',
-                weight=0.75,
+                type='BoxLoss',
+                box_loss_type='regression',
+                box_loss_cfg=dict(
+                    type='SmoothL1Loss',
+                    beta=0.0,
+                    reduction='sum',
+                    weight=0.75,
+                ),
             ),
         ),
     ],

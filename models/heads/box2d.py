@@ -582,6 +582,7 @@ class BaseBox2dHead(nn.Module):
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats];
                 - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_feats];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
@@ -684,8 +685,9 @@ class BaseBox2dHead(nn.Module):
 
             return loss_dict, analysis_dict
 
-        # Get 2D bounding box logits with corresponding target boxes
+        # Get 2D bounding box logits with corresponding predicted and target boxes
         box_logits = box_logits[matched_qry_ids]
+        pred_boxes = storage_dict['pred_boxes'][matched_qry_ids]
         tgt_boxes = tgt_dict['boxes'][matched_tgt_ids]
 
         # Get 2D bounding box targets
@@ -694,7 +696,7 @@ class BaseBox2dHead(nn.Module):
         box_targets = self.box_coder('get', prior_boxes, tgt_boxes, images=images)
 
         # Get 2D bounding box loss
-        box_loss = self.loss(box_logits, box_targets)
+        box_loss = self.loss(box_logits, box_targets, pred_boxes, tgt_boxes)
         key_name = f'box_loss_{id}' if id is not None else 'box_loss'
         loss_dict[key_name] = box_loss
 

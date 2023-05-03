@@ -7,8 +7,73 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from models.build import MODELS
+from models.build import build_model, MODELS
 from models.functional.loss import sigmoid_dice_loss
+
+
+@MODELS.register_module()
+class BoxLoss(nn.Module):
+    """
+    Class implementing the BoxLoss module.
+
+    Attributes:
+        box_loss_type (str): String containing the bounding box loss type.
+        box_loss (nn.Module): Module containing the underlying bounding box loss function.
+    """
+
+    def __init__(self, box_loss_type, box_loss_cfg):
+        """
+        Initializes the BoxLoss module.
+
+        Args:
+            box_loss_type (str): String containing the bounding box loss type.
+            box_loss_cfg (Dict): Configuration dictionary specifying the underlying bounding box loss module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attribute containing the bounding box loss type
+        self.box_loss_type = box_loss_type
+
+        # Build underlying bounding box loss module
+        self.box_loss = build_model(box_loss_cfg)
+
+    def forward(self, box_preds, box_targets, pred_boxes, tgt_boxes, **kwargs):
+        """
+        Forward method of the BoxLoss module.
+
+        Args:
+            box_logits (FloatTensor): 2D bounding box regression predictions of shape [num_preds, 4].
+            box_targets (FloatTensor): 2D bounding box regression targets of shape [num_preds, 4].
+            pred_boxes (Boxes): Boxes structure containing the predicted 2D bounding boxes of size [num_preds].
+            tgt_boxes (Boxes): Boxes structure containing the target 2D bounding boxes of size [num_preds].
+            kwargs (Dict): Dictionary containing keyword arguments passed to the underlying loss module.
+
+        Returns:
+            box_loss (FloatTensor): Tensor containing the box loss or losses of shape [] or [*] respectively.
+
+        Raises:
+            ValueError: Error when an invalid bounding box loss type is provided.
+        """
+
+        # Get box loss
+        if self.box_loss_type == 'boxes':
+            box_loss = self.box_loss(pred_boxes, tgt_boxes, **kwargs)
+
+        elif self.box_loss_type == 'mmdet_boxes':
+            pred_boxes = pred_boxes.to_format('xyxy').boxes
+            tgt_boxes = tgt_boxes.to_format('xyxy').boxes
+            box_loss = self.box_loss(pred_boxes, tgt_boxes, **kwargs)
+
+        elif self.box_loss_type == 'regression':
+            box_loss = self.box_loss(box_preds, box_targets, **kwargs)
+
+        else:
+            error_msg = f"Invalid bounding box loss type (got '{self.box_loss_type}') in BoxLoss module."
+            raise ValueError(error_msg)
+
+        return box_loss
 
 
 @MODELS.register_module()
