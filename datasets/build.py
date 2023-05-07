@@ -4,6 +4,7 @@ Dataset/evaluator build function.
 
 from datasets.cityscapes.cityscapes import build_cityscapes
 from datasets.coco.coco import build_coco
+from datasets.objects365.objects365 import build_objects365
 
 
 def build_dataset(args):
@@ -27,11 +28,14 @@ def build_dataset(args):
     """
 
     # Build datasets and evaluator
-    if args.dataset == 'coco':
+    if args.dataset == 'cityscapes':
+        datasets, evaluator = build_cityscapes(args)
+
+    elif args.dataset == 'coco':
         datasets, evaluator = build_coco(args)
 
-    elif args.dataset == 'cityscapes':
-        datasets, evaluator = build_cityscapes(args)
+    elif args.dataset == 'objects365':
+        datasets, evaluator = build_objects365(args)
 
     else:
         raise ValueError(f"Unknown dataset name '{args.dataset}' was provided.")

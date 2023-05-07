@@ -635,13 +635,13 @@ def get_train_transforms(transforms_type='coco_multi_scale'):
     """
 
     # Get training transforms
-    if transforms_type == 'coco_single_scale':
+    if transforms_type in ('coco_single_scale', 'objects365_single_scale'):
         hflip = RandomHorizontalFlip()
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([hflip, resize, to_tensor])]
 
-    elif transforms_type == 'coco_multi_scale':
+    elif transforms_type in ('coco_multi_scale', 'objects365_multi_scale'):
         scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
         default_resize = RandomResize(scales, max_size=1333)
 
@@ -690,24 +690,24 @@ def get_eval_transforms(transforms_type='coco_single_scale'):
     """
 
     # Get evaluation transforms
-    if transforms_type == 'coco_single_scale':
+    if transforms_type in ('coco_single_scale', 'objects365_single_scale'):
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor])]
 
-    elif transforms_type == 'coco_single_scale_flip':
+    elif transforms_type in ('coco_single_scale_flip', 'objects365_single_scale_flip'):
         hflip = RandomHorizontalFlip(flip_prob=1.0)
         resize = RandomResize([800], max_size=1333)
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor]), Compose([hflip, resize, to_tensor])]
 
-    elif transforms_type == 'coco_multi_scale':
+    elif transforms_type in ('coco_multi_scale', 'objects365_multi_scale'):
         scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
         resizes = [RandomResize([scale]) for scale in scales]
         to_tensor = ToTensor()
         transforms = [Compose([resize, to_tensor]) for resize in resizes]
 
-    elif transforms_type == 'coco_multi_scale_flip':
+    elif transforms_type in ('coco_multi_scale_flip', 'objects365_multi_scale_flip'):
         hflip = RandomHorizontalFlip(flip_prob=1.0)
         scales = [500, 600, 700, 800, 900, 1000, 1100, 1200, 1300]
         resizes = [RandomResize([scale]) for scale in scales]

@@ -18,7 +18,7 @@ ln -s $COCO_DIR/annotations/instances_train2017.json datasets/coco/annotations/i
 ln -s $COCO_DIR/annotations/instances_val2017.json datasets/coco/annotations/instances_val2017.json
 
 # Set LVIS symbolic links
-LVIS_DIR=/esat/ruchba/cpicron/Datasets/lvis
+LVIS_DIR=/esat/raidho/cpicron/Datasets/lvis
 
 ln -s $LVIS_DIR/annotations/lvis_v0.5_train.json datasets/lvis/annotations/lvis_v0.5_train.json
 ln -s $LVIS_DIR/annotations/lvis_v0.5_val.json datasets/lvis/annotations/lvis_v0.5_val.json
@@ -35,3 +35,10 @@ cd -
 cd datasets/lvis/annotations
 python cocofy_lvis.py
 cd -
+
+# Set Objects365 symbolic links
+OBJECTS365_DIR=/esat/raidho/cpicron/Datasets/objects365
+
+ln -s $OBJECTS365_DIR/annotations datasets/objects365/annotations
+ln -s $OBJECTS365_DIR/train datasets/objects365/train
+ln -s $OBJECTS365_DIR/val datasets/objects365/val

@@ -9,6 +9,9 @@ datasets/coco/test2017/*
 datasets/coco/train2017/*
 datasets/coco/val2017/*
 datasets/lvis/annotations/*.json
+datasets/objects365/annotations/*
+datasets/objects365/train/*
+datasets/objects365/val/*
 outputs/*
 plots/*/*
 slurm/*
