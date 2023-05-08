@@ -2,7 +2,10 @@
 General build function for backbone modules.
 """
 
+from mmengine.config import Config
+
 from .mmdet import MMDetBackbone
+from models.build import build_model
 from .resnet import ResNet
 
 
@@ -21,7 +24,11 @@ def build_backbone(args):
     """
 
     # Build backbone module
-    if args.backbone_type == 'mmdet':
+    if args.backbone_type == 'cfg':
+        backbone_cfg = Config.fromfile(args.backbone_cfg_path)
+        backbone = build_model(backbone_cfg.model)
+
+    elif args.backbone_type == 'mmdet':
         backbone = MMDetBackbone(args.mmdet_backbone_cfg_path)
 
     elif args.backbone_type == 'resnet':

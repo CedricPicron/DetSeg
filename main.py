@@ -91,6 +91,7 @@ def get_parser():
 
     # Backbone
     parser.add_argument('--backbone_type', default='resnet', type=str, help='type of backbone module')
+    parser.add_argument('--backbone_cfg_path', default='', type=str, help='path to the backbone config')
 
     # * MMDetection backbone
     parser.add_argument('--mmdet_backbone_cfg_path', default='', type=str, help='path to MMDetection backbone config')
