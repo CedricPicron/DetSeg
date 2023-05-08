@@ -327,6 +327,9 @@ class Objects365Evaluator(object):
         image_ids = torch.as_tensor(images.image_ids)
         image_ids = image_ids[batch_ids.cpu()]
 
+        # Transform labels back to original space
+        labels = labels + 1
+
         # Convert desired tensors to lists
         image_ids = image_ids.tolist()
         labels = labels.tolist()
@@ -425,7 +428,7 @@ class Objects365Evaluator(object):
 
         # Save result dictionaries if needed
         if output_dir is not None:
-            if save_results or not self.has_gt_anns:
+            if save_results:
                 json_file_name = output_dir / f'{save_name}.json'
                 zip_file_name = output_dir / f'{save_name}.zip'
 
