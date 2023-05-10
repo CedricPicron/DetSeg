@@ -154,8 +154,8 @@ class RcnnBoxCoder(AbstractBoxCoder):
         assert check, assert_msg
 
         # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-        assert in_boxes.well_defined().all(), "The 'in_boxes' input contains degenerate boxes."
-        assert tgt_boxes.well_defined().all(), "The 'tgt_boxes' input contains degenerate boxes."
+        assert in_boxes.well_defined().all().item(), "The 'in_boxes' input contains degenerate boxes."
+        assert tgt_boxes.well_defined().all().item(), "The 'tgt_boxes' input contains degenerate boxes."
 
         # Convert boxes to (center_x, center_y, width, height) format and get box tensors
         in_boxes = in_boxes.clone().to_format('cxcywh').boxes
@@ -193,7 +193,7 @@ class RcnnBoxCoder(AbstractBoxCoder):
         assert check, assert_msg
 
         # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-        assert in_boxes.well_defined().all(), "The 'in_boxes' input contains degenerate boxes."
+        assert in_boxes.well_defined().all().item(), "The 'in_boxes' input contains degenerate boxes."
 
         # Apply box deltas to get output boxes
         if self.delta_stds is not None:
@@ -237,8 +237,8 @@ class SigmoidBoxCoder(AbstractBoxCoder):
         assert check, assert_msg
 
         # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-        assert in_boxes.well_defined().all(), "The 'in_boxes' input contains degenerate boxes."
-        assert tgt_boxes.well_defined().all(), "The 'tgt_boxes' input contains degenerate boxes."
+        assert in_boxes.well_defined().all().item(), "The 'in_boxes' input contains degenerate boxes."
+        assert tgt_boxes.well_defined().all().item(), "The 'tgt_boxes' input contains degenerate boxes."
 
         # Get normalized box tensors in desired format
         in_boxes = in_boxes.clone().normalize(images).to_format('cxcywh').boxes
@@ -271,7 +271,7 @@ class SigmoidBoxCoder(AbstractBoxCoder):
         assert check, assert_msg
 
         # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-        assert in_boxes.well_defined().all(), "The 'in_boxes' input contains degenerate boxes."
+        assert in_boxes.well_defined().all().item(), "The 'in_boxes' input contains degenerate boxes."
 
         # Apply box deltas to get output boxes
         in_boxes = in_boxes.clone().normalize(images).to_format('cxcywh')

@@ -265,7 +265,7 @@ class Images(object):
         """
 
         images = self.images.clone() if not inplace else self.images
-        images_view = images.movedim([-3, -2, -1], [-1, -3, -2])
+        images_view = images.permute(0, 2, 3, 1)
         images_view[self.masks, :] = images_view[self.masks, :].sub_(mean).div_(std)
 
         return images

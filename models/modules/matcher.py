@@ -449,12 +449,15 @@ class TopMatcher(nn.Module):
         # Remove matches if multiple targets per query are not allowed
         if not self.allow_multi_tgt:
             matched_qry_ids, inv_ids = matched_qry_ids.unique(return_inverse=True)
-            argmin_ids = scatter_min(rank_ids, inv_ids, dim=0)[1]
+            argmin_ids = scatter_min(rank_ids[pos_mask], inv_ids, dim=0)[1]
             matched_tgt_ids = matched_tgt_ids[argmin_ids]
+
+        # Get non-negative query indices
+        non_neg_qry_ids = qry_ids[non_neg_mask]
 
         # Get match labels
         match_labels = torch.zeros(num_queries, dtype=torch.int64, device=device)
-        match_labels[qry_ids[non_neg_mask]] = -1
+        match_labels[non_neg_qry_ids] = -1
         match_labels[matched_qry_ids] = 1
 
         # Add matching results to storage dictionary

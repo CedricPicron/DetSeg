@@ -650,8 +650,8 @@ def box_giou(boxes1, boxes2, images=None):
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
-    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
+    assert boxes1.well_defined().all().item(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all().item(), "The boxes2 input contains degenerate boxes."
 
     # Make sure normalized attributes are consistent
     if boxes1.normalized != boxes2.normalized:
@@ -693,8 +693,8 @@ def box_intersection(boxes1, boxes2, images=None, shard_size=int(1e7)):
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
-    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
+    assert boxes1.well_defined().all().item(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all().item(), "The boxes2 input contains degenerate boxes."
 
     # Make sure normalized attributes are consistent
     if boxes1.normalized != boxes2.normalized:
@@ -770,8 +770,8 @@ def box_iou(boxes1, boxes2, images=None, return_inters=False, return_unions=Fals
     """
 
     # Check for degenerate boxes (i.e. boxes with non-positive width or height)
-    assert boxes1.well_defined().all(), "The boxes1 input contains degenerate boxes."
-    assert boxes2.well_defined().all(), "The boxes2 input contains degenerate boxes."
+    assert boxes1.well_defined().all().item(), "The boxes1 input contains degenerate boxes."
+    assert boxes2.well_defined().all().item(), "The boxes2 input contains degenerate boxes."
 
     # Make sure normalized attributes are consistent
     if boxes1.normalized != boxes2.normalized:
