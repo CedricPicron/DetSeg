@@ -22,22 +22,22 @@ class BoxMatcher(nn.Module):
 
     Attributes:
         qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
-        tgt_key (str): String with key to retrieve the target boxes from the target dictionary.
-        box_metric (str): String containing the metric computing similarities between query and target boxes.
         share_qry_boxes (bool): Boolean indicating whether to share query boxes between images.
+        box_metric (str): String containing the metric computing similarities between query and target boxes.
+        center_in_mask (bool): Boolean indicating whether match requires the query box center inside the target mask.
         sim_matcher (nn.Module): Module matching queries with targets based on the given similarity matrix.
     """
 
-    def __init__(self, qry_key, sim_matcher_cfg, tgt_key='boxes', share_qry_boxes=False, box_metric='iou'):
+    def __init__(self, qry_key, sim_matcher_cfg, share_qry_boxes=False, box_metric='iou', center_in_mask=False):
         """
         Initializes the BoxMatcher module.
 
         Args:
             qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
             sim_matcher_cfg (Dict): Configuration dictionary specifying the similarity matcher.
-            tgt_key (str): String with key to retrieve the target boxes from the target dictionary (default='boxes').
             share_qry_boxes (bool): Boolean indicating whether to share query boxes between images (default=False).
             box_metric (str): String with metric computing similarities between query and target boxes (default='iou').
+            center_in_mask (bool): Whether match requires the query box center inside the target mask (default=False).
         """
 
         # Initialization of default nn.Module
@@ -48,21 +48,22 @@ class BoxMatcher(nn.Module):
 
         # Set remaining attributes
         self.qry_key = qry_key
-        self.tgt_key = tgt_key
         self.share_qry_boxes = share_qry_boxes
         self.box_metric = box_metric
+        self.center_in_mask = center_in_mask
 
     def forward(self, storage_dict, tgt_dict, **kwargs):
         """
         Forward method of the BoxMatcher module.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following key:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_queries].
 
-            tgt_dict (Dict): Target dictionary containing at least following key:
-                - {self.tgt_key} (Boxes): structure containing axis-aligned target boxes of size [num_targets].
+            tgt_dict (Dict): Target dictionary (possibly) containing following keys:
+                - boxes (Boxes): structure containing axis-aligned target boxes of size [num_targets].
+                - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
@@ -79,7 +80,12 @@ class BoxMatcher(nn.Module):
 
         # Retrieve query and target boxes
         qry_boxes = storage_dict[self.qry_key]
-        tgt_boxes = tgt_dict[self.tgt_key]
+        tgt_boxes = tgt_dict['boxes']
+
+        # Retrieve target masks and get mask sizes if needed
+        if self.center_in_mask:
+            tgt_masks = tgt_dict['masks']
+            iH, iW = tgt_masks.size()[1:]
 
         # Get device
         device = qry_boxes.boxes.device
@@ -129,6 +135,19 @@ class BoxMatcher(nn.Module):
                 else:
                     error_msg = f"Invalid bounding box metric (got '{self.box_metric}')."
                     raise ValueError(error_msg)
+
+                # Add center constraints if requested
+                if self.center_in_mask:
+                    i0 = tgt_offset
+                    i1 = tgt_offset + num_targets
+                    tgt_masks_i = tgt_masks[i0:i1]
+
+                    qry_xy = qry_boxes_i.to_format('cxcywh').to_img_scale(images).boxes[:, :2].long()
+                    qry_xy[:, 0].clamp_(max=iW-1)
+                    qry_xy[:, 1].clamp_(max=iH-1)
+
+                    center_in_mask = tgt_masks_i[:, qry_xy[:, 1], qry_xy[:, 0]].t()
+                    sim_matrix[~center_in_mask] = 0.0
 
                 # Perform matching based on similarity matrix
                 match_results = self.sim_matcher(sim_matrix)
@@ -275,8 +294,8 @@ class SimMatcher(nn.Module):
         if self.mode == 'static':
 
             if 'abs' in self.static_mode:
-                abs_pos_mask = sim_matrix >= self.abs_pos
-                abs_neg_mask = sim_matrix < self.abs_neg
+                abs_pos_mask = sim_matrix > self.abs_pos
+                abs_neg_mask = sim_matrix <= self.abs_neg
 
             if 'rel' in self.static_mode:
                 top_limit = max(self.rel_neg, int(self.get_top_qry_ids) * self.top_limit)
