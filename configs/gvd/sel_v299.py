@@ -23,14 +23,12 @@ model = dict(
                     skip=False,
                 ),
                 dict(
-                    type='BottleneckConv',
-                    num_layers=1,
+                    type='mmdet.ConvModule',
+                    num_layers=4,
                     in_channels=256,
-                    bottle_channels=64,
                     out_channels=256,
                     kernel_size=3,
-                    norm='group',
-                    skip=True,
+                    padding=1,
                 ),
             ],
             sel_attrs=dict(

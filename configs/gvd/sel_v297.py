@@ -24,7 +24,7 @@ model = dict(
                 ),
                 dict(
                     type='BottleneckConv',
-                    num_layers=1,
+                    num_layers=2,
                     in_channels=256,
                     bottle_channels=64,
                     out_channels=256,

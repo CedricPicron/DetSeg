@@ -37,19 +37,6 @@ model = dict(
                 mode='rel',
                 rel_thr=1500,
             ),
-            post_cfg=dict(
-                type='ModuleSelector',
-                module_cfg=dict(
-                    type='OneStepMLP',
-                    num_layers=1,
-                    in_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='relu',
-                    skip=False,
-                ),
-                num_modules=21,
-            ),
             matcher_cfg=dict(
                 type='BoxMatcher',
                 qry_key='anchors',
