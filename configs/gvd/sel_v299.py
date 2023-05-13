@@ -23,12 +23,12 @@ model = dict(
                     skip=False,
                 ),
                 dict(
-                    type='mmdet.ConvModule',
+                    type='ProjConv',
                     num_layers=4,
                     in_channels=256,
                     out_channels=256,
                     kernel_size=3,
-                    padding=1,
+                    skip=False,
                 ),
             ],
             sel_attrs=dict(
