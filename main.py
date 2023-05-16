@@ -32,7 +32,6 @@ def get_parser():
 
     # Distributed
     parser.add_argument('--dist_url', default='env://', type=str, help='url used to set up distributed training')
-    parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
 
     # Dataset
     parser.add_argument('--dataset', default='coco', type=str, help='name of dataset')
