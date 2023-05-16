@@ -19,12 +19,13 @@ class ApplyAll(nn.Module):
         module (Sequential): Underlying module applied to all inputs from the input list.
     """
 
-    def __init__(self, module_cfg):
+    def __init__(self, module_cfg, **kwargs):
         """
         Initializes the ApplyAll module.
 
         Args:
             module_cfg (Dict): Configuration dictionary specifying the underlying module.
+            kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
         # Initialization of default nn.Module
