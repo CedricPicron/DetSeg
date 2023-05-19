@@ -53,6 +53,55 @@ class ApplyAll(nn.Module):
 
 
 @MODELS.register_module()
+class ApplyToSelected(nn.Module):
+    """
+    Class implementing the ApplyToSelected module.
+
+    The ApplyToSelected module applies the underlying module to the selected input from the given input list.
+
+    Attributes:
+        select_id (int): Integer containing the index of the selected input.
+        module (nn.Module): Underlying module applied to the selected input.
+    """
+
+    def __init__(self, select_id, module_cfg):
+        """
+        Initializes the ApplyToSelected module.
+
+        Args:
+            select_id (int): Integer containing the index of the selected input.
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set select_id attribute
+        self.select_id = select_id
+
+        # Build underlying module
+        self.module = build_model(module_cfg)
+
+    def forward(self, in_list, **kwargs):
+        """
+        Forward method of the ApplyToSelected module.
+
+        Args:
+            in_list (List): Input list containing the selected input to be processed by the underlying module.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_list (List): Output list replacing the selected input by its processed output.
+        """
+
+        # Get output list
+        out_list = in_list.copy()
+        out_list[self.select_id] = self.module(in_list[self.select_id])
+
+        return out_list
+
+
+@MODELS.register_module()
 class ApplyOneToOne(nn.Module):
     """
     Class implementing the ApplyOneToOne module.

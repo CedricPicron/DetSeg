@@ -124,10 +124,11 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys:
-                - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - dup_logits (FloatTensor): duplicate logits of shape [num_feats, num_feats];
-                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
+                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
+                - dup_logits (FloatTensor): duplicate logits of shape [num_qrys, num_qrys];
+                - cum_feats_batch (LongTensor): cumulative number of queries per batch entry [batch_size+1];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
 
@@ -155,8 +156,8 @@ class BaseBox2dHead(nn.Module):
         pred_boxes = storage_dict['pred_boxes']
         box_scores = storage_dict.get('box_scores', None)
 
-        # Get number of features, number of labels, device and batch size
-        num_feats, num_labels = cls_logits.size()
+        # Get number of queries, number of labels, device and batch size
+        num_qrys, num_labels = cls_logits.size()
         device = cls_logits.device
         batch_size = len(cum_feats_batch) - 1
 
@@ -166,10 +167,10 @@ class BaseBox2dHead(nn.Module):
         pred_boxes = pred_boxes[well_defined]
 
         # Get 2D detections for each combination of box and class label
-        num_feats = len(cls_logits)
+        num_qrys = len(cls_logits)
         num_classes = num_labels - 1
 
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_feats, -1).flatten()
+        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).flatten()
         pred_boxes = pred_boxes.expand(num_classes)
         pred_scores = cls_logits[:, :-1].sigmoid().flatten()
         batch_ids = pred_boxes.batch_ids
@@ -515,22 +516,22 @@ class BaseBox2dHead(nn.Module):
         Forward prediction method of the BaseBox2dHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary possibly containing following key:
                 - images (Images): images structure containing the batched images of size [batch_size];
-                - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats].
+                - prior_boxes (Boxes): prior 2D bounding boxes of size [num_qrys].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional or updated keys:
-                - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_feats];
-                - add_encs (FloatTensor): possibly updated box encodings of shape [num_feats, feat_size];
-                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_feats].
+                - box_logits (FloatTensor): 2D bounding box logits of shape [num_qrys, 4];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
+                - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_qrys];
+                - add_encs (FloatTensor): possibly updated box encodings of shape [num_qrys, feat_size];
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys].
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
         """
@@ -581,12 +582,12 @@ class BaseBox2dHead(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
                 - images (Images): images structure containing the batched images of size [batch_size];
-                - box_logits (FloatTensor): 2D bounding box logits of shape [num_feats, 4];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats];
-                - prior_boxes (Boxes): prior 2D bounding boxes of size [num_feats];
-                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_feats];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+                - box_logits (FloatTensor): 2D bounding box logits of shape [num_qrys, 4];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
+                - prior_boxes (Boxes): prior 2D bounding boxes of size [num_qrys];
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - boxes (Boxes): target 2D bounding boxes of size [num_targets].

@@ -57,13 +57,13 @@ class BaseClsHead(nn.Module):
         Forward prediction method of the BaseClsHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
+            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest.
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels].
+                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels].
         """
 
         # Get classification logits
@@ -78,11 +78,11 @@ class BaseClsHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
-                - cls_logits (FloatTensor): classification logits of shape [num_feats, num_labels];
-                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_feats].
+                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys].
 
             tgt_dict (Dict): Target dictionary (possibly) containing following keys:
                 - labels (LongTensor): target class indices of shape [num_targets];

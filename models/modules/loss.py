@@ -3,6 +3,7 @@ Collection of modules implementing losses.
 """
 
 from fvcore.nn import sigmoid_focal_loss
+from mmdet.models.losses.utils import weight_reduce_loss
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -74,6 +75,62 @@ class BoxLoss(nn.Module):
             raise ValueError(error_msg)
 
         return box_loss
+
+
+@MODELS.register_module()
+class MaskLoss(nn.Module):
+    """
+    Class implementing the MaskLoss module.
+
+    The MaskLoss module first computes the unreduced mask loss, then averages over the mask dimensions and finally
+    applies the reduction operation on the averaged loss tensor.
+
+    Attributes:
+        mask_loss (nn.Module): Module computing the unreduced mask loss.
+        reduction (str): String containing the reduction operation.
+    """
+
+    def __init__(self, mask_loss_cfg):
+        """
+        Initializes the MaskLoss module.
+
+        Args:
+            mask_loss_cfg (Dict): Configuration dictionary specifying the mask loss module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build mask loss module
+        reduction = mask_loss_cfg.pop('reduction', 'mean')
+        mask_loss_cfg['reduction'] = 'none'
+        self.mask_loss = build_model(mask_loss_cfg)
+
+        # Set reduction attribute
+        self.reduction = reduction
+
+    def forward(self, *args, reduction_override=None, **kwargs):
+        """
+        Forward method of the MaskLoss module.
+
+        Args:
+            args (Tuple): Tuple of positional arguments passed to the underlying mask loss module.
+            reduction_override (str): String overriding the module's reduction operation (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying mask loss module.
+
+        Returns:
+            mask_loss (FloatTensor): Tensor with reduced mask loss or losses of shape [] or [num_masks] respectively.
+        """
+
+        # Get unreduced mask loss
+        mask_loss = self.mask_loss(*args, **kwargs)
+
+        # Get reduced mask loss
+        mask_loss = mask_loss.flatten(1).mean(dim=1)
+        reduction = reduction_override if reduction_override is not None else self.reduction
+        mask_loss = weight_reduce_loss(mask_loss, reduction=reduction)
+
+        return mask_loss
 
 
 @MODELS.register_module()

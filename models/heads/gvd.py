@@ -161,6 +161,14 @@ class GVD(nn.Module):
         group_feats = self.group_init(**local_kwargs, **kwargs)
         local_kwargs['qry_feats'] = group_feats
 
+        # Get and add batch indices to storage dictionary
+        cum_feats_batch = storage_dict['cum_feats_batch']
+        batch_size = len(cum_feats_batch) - 1
+
+        batch_ids = torch.arange(batch_size, device=cum_feats_batch.device)
+        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
+        storage_dict['batch_ids'] = batch_ids
+
         # Apply heads if needed
         for head in self.heads:
             if 0 in head.apply_ids:

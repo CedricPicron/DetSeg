@@ -59,7 +59,7 @@ class BoxMatcher(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): images structure containing the batched images of size [batch_size];
-                - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_queries].
+                - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_qrys].
 
             tgt_dict (Dict): Target dictionary (possibly) containing following keys:
                 - boxes (Boxes): structure containing axis-aligned target boxes of size [num_targets].
@@ -69,9 +69,9 @@ class BoxMatcher(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary possibly containing following additional keys:
-                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries];
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
                 - top_qry_ids (LongTensor): optional top query indices per target of shape [top_limit, num_targets].
 
         Raises:
@@ -119,11 +119,11 @@ class BoxMatcher(nn.Module):
         for qry_boxes_i, tgt_boxes_i in zip(qry_boxes_list, tgt_boxes_list):
 
             # Get number of query and target boxes
-            num_queries = len(qry_boxes_i)
+            num_qrys = len(qry_boxes_i)
             num_targets = len(tgt_boxes_i)
 
             # Case where there are both queries and targets
-            if (num_queries > 0) and (num_targets > 0):
+            if (num_qrys > 0) and (num_targets > 0):
 
                 # Get similarity matrix between query and target boxes
                 if self.box_metric == 'giou':
@@ -155,7 +155,7 @@ class BoxMatcher(nn.Module):
 
             # Case where there are no queries or targets
             else:
-                match_labels_i = torch.zeros(num_queries, dtype=torch.int64, device=device)
+                match_labels_i = torch.zeros(num_qrys, dtype=torch.int64, device=device)
                 matched_qry_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
                 matched_tgt_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
 
@@ -171,7 +171,7 @@ class BoxMatcher(nn.Module):
             # Get image-specific top query indices if requested
             if self.sim_matcher.get_top_qry_ids:
 
-                if (num_queries > 0) and (num_targets > 0):
+                if (num_qrys > 0) and (num_targets > 0):
                     top_qry_ids_i = match_results[3]
 
                 else:
@@ -182,7 +182,7 @@ class BoxMatcher(nn.Module):
                 top_qry_ids_list.append(top_qry_ids_i)
 
             # Update query and target offsets
-            qry_offset += num_queries
+            qry_offset += num_qrys
             tgt_offset += num_targets
 
         # Concatenate matching results and top query indices if requested
@@ -256,13 +256,13 @@ class SimMatcher(nn.Module):
         Forward method of the SimMatcher module.
 
         Args:
-            sim_matrix (FloatTensor): Query-target similarity matrix of shape [num_queries, num_targets].
+            sim_matrix (FloatTensor): Query-target similarity matrix of shape [num_qrys, num_targets].
 
         Returns:
             return_list (List): List of size [num_returns] possibly containing following items to return:
-                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries];
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
                 - top_qry_ids (LongTensor): optional top query indices per target of shape [top_limit, num_targets].
 
         Raises:
@@ -271,14 +271,14 @@ class SimMatcher(nn.Module):
         """
 
         # Get number of queries and targets
-        num_queries, num_targets = sim_matrix.size()
+        num_qrys, num_targets = sim_matrix.size()
 
         # Get device
         device = sim_matrix.device
 
         # Handle case where there are no queries or targets and return
-        if (num_queries == 0) or (num_targets == 0):
-            match_labels = torch.zeros(num_queries, dtype=torch.int64, device=device)
+        if (num_qrys == 0) or (num_targets == 0):
+            match_labels = torch.zeros(num_qrys, dtype=torch.int64, device=device)
             matched_qry_ids = torch.zeros(0, dtype=torch.int64, device=device)
             matched_tgt_ids = torch.zeros(0, dtype=torch.int64, device=device)
 
@@ -343,7 +343,7 @@ class SimMatcher(nn.Module):
 
         # Remove matches if multiple targets per query are not allowed
         if not self.allow_multi_tgt:
-            best_qry_ids = torch.arange(num_queries, device=device)
+            best_qry_ids = torch.arange(num_qrys, device=device)
             best_tgt_ids = torch.argmax(pos_mask.to(torch.float) * sim_matrix, dim=1)
 
             best_tgt_mask = torch.zeros_like(pos_mask)
@@ -351,7 +351,7 @@ class SimMatcher(nn.Module):
             pos_mask = pos_mask & best_tgt_mask
 
         # Get match labels
-        match_labels = torch.full(size=[num_queries], fill_value=-1, device=device)
+        match_labels = torch.full(size=[num_qrys], fill_value=-1, device=device)
         match_labels[pos_mask.sum(dim=1) > 0] = 1
         match_labels[neg_mask.sum(dim=1) == num_targets] = 0
 
@@ -418,24 +418,24 @@ class TopMatcher(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary possibly containing following additional keys:
-                - match_labels (LongTensor): match labels corresponding to each query of shape [num_queries];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+                - match_labels (LongTensor): match labels corresponding to each query of shape [num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys].
         """
 
         # Retrieve top query indices per target
         top_qry_ids = storage_dict[self.ids_key]
 
         # Get number of queries
-        num_queries = len(storage_dict[self.qry_key])
+        num_qrys = len(storage_dict[self.qry_key])
 
         # Get device, top limit and number of targets
         device = top_qry_ids.device
         top_limit, num_targets = top_qry_ids.size()
 
         # Handle case where there are no queries or targets and return
-        if (num_queries == 0) or (num_targets == 0):
-            storage_dict['match_labels'] = torch.zeros(num_queries, dtype=torch.int64, device=device)
+        if (num_qrys == 0) or (num_targets == 0):
+            storage_dict['match_labels'] = torch.zeros(num_qrys, dtype=torch.int64, device=device)
             storage_dict['matched_qry_ids'] = torch.zeros(0, dtype=torch.int64, device=device)
             storage_dict['matched_tgt_ids'] = torch.zeros(0, dtype=torch.int64, device=device)
 
@@ -475,7 +475,7 @@ class TopMatcher(nn.Module):
         non_neg_qry_ids = qry_ids[non_neg_mask]
 
         # Get match labels
-        match_labels = torch.zeros(num_queries, dtype=torch.int64, device=device)
+        match_labels = torch.zeros(num_qrys, dtype=torch.int64, device=device)
         match_labels[non_neg_qry_ids] = -1
         match_labels[matched_qry_ids] = 1
 
