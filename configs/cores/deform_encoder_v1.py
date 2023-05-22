@@ -17,7 +17,7 @@ deform_encoder = dict(
         layer_cfg=dict(
             self_attn_cfg=dict(
                 embed_dims=256,
-                num_levels=5,
+                num_levels=6,
                 dropout=0.0,
             ),
             ffn_cfg=dict(
