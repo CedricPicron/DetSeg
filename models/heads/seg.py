@@ -107,7 +107,7 @@ class BaseSegHead(nn.Module):
         self.metadata = metadata
         self.apply_ids = apply_ids
 
-    def get_mask_logits(self, qry_feats, seg_qry_ids, storage_dict, **kwargs):
+    def get_mask_logits(self, qry_feats, seg_qry_ids, storage_dict):
         """
         Method computing the mask logits for the desired queries.
 
@@ -119,8 +119,7 @@ class BaseSegHead(nn.Module):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - batch_ids (LongTensor): batch indices of queries of shape [num_qrys];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys].
 
         Returns:
             mask_logits (FloatTensor): Mask logits with shape depending on the segmentation method.
