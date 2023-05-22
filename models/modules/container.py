@@ -11,6 +11,56 @@ from models.build import build_model, MODELS
 
 
 @MODELS.register_module()
+class ModuleCat(nn.Module):
+    """
+    Class implementing the ModuleCat module.
+
+    The ModuleCat module contains a list of sub-modules, where each of the sub-modules are applied on the input and
+    where the resulting output tensors are concatenated along the desired dimension to yield the final output tensor
+    of the ModuleCat module.
+
+    Attributes:
+        sub_modules (nn.ModuleList): List of size [num_sub_modules] containing the sub-modules.
+        dim (int): Integer containing the dimension along which to concatenate.
+    """
+
+    def __init__(self, sub_module_cfgs, dim=0):
+        """
+        Initializes the ModuleCat module.
+
+        Args:
+            sub_module_cfgs (List): List of configuration dictionaries specifying the sub-modules.
+            dim (int): Integer containing the dimension along which to concatenate (default=0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build list with sub-modules
+        self.sub_modules = nn.ModuleList([build_model(sub_module_cfg) for sub_module_cfg in sub_module_cfgs])
+
+        # Set dim attribute
+        self.dim = dim
+
+    def forward(self, *args, **kwargs):
+        """
+        Forward method of the ModuleCat module.
+
+        Args:
+            args (Tuple): Tuple containing positional arguments passed to the underlying sub-modules.
+            kwargs (Dict): Dictionary containing keyword arguments passed to the underlying sub-modules.
+
+        Returns:
+            out_tensor (Tensor): Tensor obtained by concatenating the output tensors of the individual sub-modules.
+        """
+
+        # Get output tensor
+        output = torch.cat([sub_module(*args, **kwargs) for sub_module in self.sub_modules], dim=self.dim)
+
+        return output
+
+
+@MODELS.register_module()
 class ModuleSelector(nn.Module):
     """
     Class implementing the ModuleSelector module.
@@ -118,9 +168,6 @@ class ModuleSum(nn.Module):
 
         Args:
             sub_module_cfgs (List): List of configuration dictionaries specifying the sub-modules.
-
-        Raises:
-            ValueError: Error when the output feature size cannot be inferred and was not given as input argument.
         """
 
         # Initialization of default nn.Module
@@ -134,11 +181,11 @@ class ModuleSum(nn.Module):
         Forward method of the ModuleSum module.
 
         Args:
-            args (Tuple): Tuple containing positional arguments.
-            kwargs (Dict): Dictionary containing keyword arguments.
+            args (Tuple): Tuple containing positional arguments passed to the underlying sub-modules.
+            kwargs (Dict): Dictionary containing keyword arguments passed to the underlying sub-modules.
 
         Returns:
-            output (Any): Output obtained by summing outputs of individual sub-modules.
+            output (Any): Output obtained by summing the outputs of the individual sub-modules.
         """
 
         # Get output
@@ -184,8 +231,8 @@ class ModuleWeightedSum(nn.Module):
 
         Args:
             in_tensor (FloatTensor): Input tensor of shape [num_feats, *].
-            args (Tuple): Tuple containing additional positional arguments.
-            kwargs (Dict): Dictionary containing keyword arguments.
+            args (Tuple): Tuple containing additional positional arguments passed to the underlying sub-modules.
+            kwargs (Dict): Dictionary containing keyword arguments passed to the underlying sub-modules.
 
         Returns:
             out_tensor (FloatTensor): Output tensor of shape [num_feats, *].

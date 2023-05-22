@@ -245,6 +245,98 @@ class GetApplyInsert(nn.Module):
 
 
 @MODELS.register_module()
+class GetBoxesTensor(nn.Module):
+    """
+    Class implementing the GetBoxesTensor module.
+
+    Attributes:
+        boxes_key (str): String with key to retrieve Boxes structure from storage dictionary (or None).
+        clone (bool): Boolean indicating whether to clone Boxes structure.
+        detach (bool): Boolean indicating whether to detach Boxes structure.
+        format (str): String containing the desired bounding box format (or None).
+        normalize (str): String containing the desired bounding box normalization (or None).
+    """
+
+    def __init__(self, boxes_key=None, clone=False, detach=False, format=None, normalize=None):
+        """
+        Initializes the GetBoxesTensor module.
+
+        Args:
+            boxes_key (str): String with key to retrieve Boxes structure from storage dictionary (default=None).
+            clone (bool): Boolean indicating whether to clone Boxes structure (default=False).
+            detach (bool): Boolean indicating whether to detach Boxes structure (default=False).
+            format (str): String containing the desired bounding box format (default=None).
+            normalize (str): String containing the desired bounding box normalization (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set attributes
+        self.boxes_key = boxes_key
+        self.clone = clone
+        self.detach = detach
+        self.format = format
+        self.normalize = normalize
+
+    def forward(self, *args, storage_dict=None, **kwargs):
+        """
+        Forward method of the GetBoxesTensor module.
+
+        Args:
+            args (Tuple): Tuple with positional arguments (possibly) containing following items:
+                - 0: Boxes structure with axis-aligned bounding boxes of size [num_boxes];
+                - 1: Images structure containing the batched images of size [batch_size].
+
+            storage_dict (Dict): Optional storage dictionary (possibly) containing following keys:
+                - {self.boxes_key} (Boxes): Boxes structure with axis-aligned bounding boxes of size [num_boxes];
+                - images (Images): Images structure containing the batched images of size [batch_size].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            boxes_tensor (FloatTensor): Tensor containing the bounding boxes of shape [num_boxes, 4].
+
+        Raises:
+            ValueError: Error when an invalid normalization string is provided.
+        """
+
+        # Get Boxes structure
+        boxes = args[0] if self.boxes_key is None else storage_dict[self.boxes_key]
+
+        # Transform Boxes structure if needed
+        if self.clone:
+            boxes = boxes.clone()
+
+        if self.detach:
+            boxes = boxes.detach()
+
+        if self.format is not None:
+            boxes = boxes.to_format(self.format)
+
+        if self.normalize is not None:
+            images = args[1] if self.boxes_key is None else storage_dict['images']
+
+            if self.normalize == 'false':
+                boxes = boxes.to_img_scale(images)
+
+            elif self.normalize == 'with_padding':
+                boxes = boxes.normalize(images, with_padding=True)
+
+            elif self.normalize == 'without_padding':
+                boxes = boxes.normalize(images, with_padding=False)
+
+            else:
+                error_msg = f"Invalid normalization string in GetBoxesTensor (got {self.normalize})."
+                raise ValueError(error_msg)
+
+        # Get tensor with bounding boxes
+        boxes_tensor = boxes.boxes
+
+        return boxes_tensor
+
+
+@MODELS.register_module()
 class IdAvg2d(nn.Module):
     """
     Class implementing the IdAvg2d module.

@@ -135,7 +135,8 @@ class BaseSegHead(nn.Module):
         qry_feats = qry_feats[seg_qry_ids]
 
         if self.qry is not None:
-            qry_feats = self.qry(qry_feats)
+            storage_dict['qry_boxes'] = storage_dict['pred_boxes'][seg_qry_ids]
+            qry_feats = self.qry(qry_feats, storage_dict=storage_dict)
 
         # Get key feature maps
         key_feat_maps = storage_dict['feat_maps']
