@@ -308,8 +308,6 @@ class SigmoidGroupBCELoss(nn.Module):
             error_msg = f"Invalid reduction string (got '{self.reduction}')."
             raise ValueError(error_msg)
 
-        return loss
-
 
 @MODELS.register_module()
 class SigmoidHillLoss(nn.Module):
