@@ -20,8 +20,8 @@ conda activate pytorch1.13
 # Install MMDetection
 pip install -U openmim
 mim install mmengine
-mim install "mmcv>=2.0.0rc1"
-python -m pip install git+https://github.com/open-mmlab/mmdetection.git@dev-3.x
+mim install mmcv
+python -m pip install git+https://github.com/open-mmlab/mmdetection.git
 
 # Install from git repositories using pip
 python -m pip install git+https://github.com/CedricPicron/boundary-iou-api.git
