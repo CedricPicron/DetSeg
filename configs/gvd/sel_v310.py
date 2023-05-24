@@ -260,7 +260,7 @@ model = dict(
                 use_sigmoid=True,
                 reduction='sum',
                 naive_dice=True,
-                loss_weight=1.0,
+                loss_weight=2.0,
             ),
         ),
     ],

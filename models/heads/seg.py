@@ -582,22 +582,21 @@ class BaseSegHead(nn.Module):
         mask_logits = self.get_mask_logits(qry_feats, matched_qry_ids, storage_dict)
 
         # Get mask targets
-        tgt_masks = tgt_dict['masks'][matched_tgt_ids]
+        tgt_masks = tgt_dict['masks']
 
         if self.mask_method == 'dense_image':
             fH, fW = mask_logits.size()[1:]
 
-            mask_targets = tgt_masks.float().unsqueeze(dim=1)
+            mask_targets = tgt_masks[matched_tgt_ids].float().unsqueeze(dim=1)
             mask_targets = F.interpolate(mask_targets, size=(fH, fW), mode='bilinear', align_corners=False)
             mask_targets = mask_targets.squeeze(dim=1)
 
         elif self.mask_method == 'dense_roi':
-            batch_ids = storage_dict['batch_ids'][matched_qry_ids]
             pred_boxes = storage_dict['pred_boxes'][matched_qry_ids]
 
             images = storage_dict['images']
             roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
-            roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
+            roi_boxes = torch.cat([matched_tgt_ids[:, None], roi_boxes], dim=1)
 
             mask_targets = tgt_masks.float().unsqueeze(dim=1)
             mask_targets = self.tgt_roi_ext([mask_targets], roi_boxes)

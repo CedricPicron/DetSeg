@@ -263,7 +263,7 @@ model = dict(
                     gamma=2.0,
                     alpha=0.25,
                     reduction='sum',
-                    loss_weight=5.0,
+                    loss_weight=10.0,
                 ),
             ),
         ),
