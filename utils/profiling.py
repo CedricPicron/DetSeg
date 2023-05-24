@@ -1,7 +1,7 @@
 """
 Collection of profiling utilities.
 """
-
+from torch.nn.utils import clip_grad_norm_
 from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler
 from torch.profiler import schedule as profiler_schedule
 
@@ -82,7 +82,16 @@ def profile_model(model, dataloader, optimizer=None, max_grad_norm=-1, num_sampl
 
                 # Profile model
                 for _ in range(warmup + active):
-                    model(*inputs)
+                    loss_dict = model(images, tgt_dict)[0]
+
+                    optimizer.zero_grad(set_to_none=True)
+                    loss = sum(loss_dict.values())
+                    loss.backward()
+
+                    if max_grad_norm > 0:
+                        clip_grad_norm_(model.parameters(), max_grad_norm)
+
+                    optimizer.step()
                     prof.step()
 
                 # Break when 'num_samples' batches are processed

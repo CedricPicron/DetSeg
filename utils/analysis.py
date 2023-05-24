@@ -4,6 +4,7 @@ Collection of analysis utilities.
 import json
 
 import torch
+from torch.nn.utils import clip_grad_norm_
 from torch.utils.benchmark import Timer
 
 from utils.flops import FlopCountAnalysis, id_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
@@ -40,6 +41,35 @@ EXTRA_OPS = {
     'prim::PythonOp.MSDeformAttnFunction': msda_flop_jit,
     'prim::PythonOp.RoIAlignFunction': roi_align_mmcv_flop_jit,
 }
+
+
+def train_iter(model, images, tgt_dict, optimizer, max_grad_norm=-1):
+    """
+    Function performing a single training iteration.
+
+    This function is used to measure the training FPS.
+
+    Args:
+        model (nn.Module): Module containing the model.
+        images (Images): Images structure containing the batched images.
+        tgt_dict (Dict): Target dictionary with ground-truth information.
+        optimizer (torch.optim.Optimizer): Optimizer used to update the model parameters.
+        max_grad_norm (float): Maximum gradient norm of parameters throughout model (default=-1).
+    """
+
+    # Apply model on given input
+    loss_dict = model(images, tgt_dict)[0]
+
+    # Update model parameters
+    optimizer.zero_grad(set_to_none=True)
+
+    loss = sum(loss_dict.values())
+    loss.backward()
+
+    if max_grad_norm > 0:
+        clip_grad_norm_(model.parameters(), max_grad_norm)
+
+    optimizer.step()
 
 
 def analyze_model(model, dataloader, optimizer=None, max_grad_norm=-1, num_samples=100, analyze_train=True,
@@ -101,12 +131,10 @@ def analyze_model(model, dataloader, optimizer=None, max_grad_norm=-1, num_sampl
             images = images.to(device)
             tgt_dict = {k: v.to(device) for k, v in tgt_dict.items()}
 
-            # Get tuple of model inputs
-            inputs = (images, tgt_dict, optimizer, max_grad_norm)
-
             # Get training FPS
-            globals_dict = {'model': model, 'inputs': inputs}
-            timer = Timer(stmt="model(*inputs)", globals=globals_dict)
+            inputs = (model, images, tgt_dict, optimizer, max_grad_norm)
+            globals_dict = {'train_iter': train_iter, 'inputs': inputs}
+            timer = Timer(stmt="train_iter(*inputs)", globals=globals_dict)
 
             train_fps = 1 / timer.timeit(number=1).median
             avg_train_fps += train_fps / num_samples
