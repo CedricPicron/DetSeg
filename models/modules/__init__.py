@@ -18,4 +18,5 @@ from .position import *  # noqa: F401, F403
 from .refine_mask import *  # noqa: F401, F403
 from .sample import *  # noqa: F401, F403
 from .selector import *  # noqa: F401, F403
+from .sparse import *  # noqa: F401, F403
 from .utils import *  # noqa: F401, F403

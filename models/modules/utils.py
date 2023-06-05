@@ -88,7 +88,7 @@ class ApplyToSelected(nn.Module):
 
         Args:
             in_list (List): Input list containing the selected input to be processed by the underlying module.
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
 
         Returns:
             out_list (List): Output list replacing the selected input by its processed output.
@@ -96,7 +96,7 @@ class ApplyToSelected(nn.Module):
 
         # Get output list
         out_list = in_list.copy()
-        out_list[self.select_id] = self.module(in_list[self.select_id])
+        out_list[self.select_id] = self.module(in_list[self.select_id], **kwargs)
 
         return out_list
 
