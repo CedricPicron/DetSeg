@@ -1949,7 +1949,7 @@ class DinoHead(nn.Module):
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
             vis_score_thr (float): Threshold indicating the minimum score for a box to be drawn (default=0.4).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -2054,7 +2054,7 @@ class DinoHead(nn.Module):
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
             vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:

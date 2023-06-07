@@ -90,7 +90,7 @@ class BaseClsHead(nn.Module):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:

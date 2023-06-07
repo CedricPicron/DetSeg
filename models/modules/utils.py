@@ -80,7 +80,7 @@ class ApplyToSelected(nn.Module):
         self.select_id = select_id
 
         # Build underlying module
-        self.module = build_model(module_cfg)
+        self.module = build_model(module_cfg, sequential=True)
 
     def forward(self, in_list, **kwargs):
         """

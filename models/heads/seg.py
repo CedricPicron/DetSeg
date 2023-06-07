@@ -21,11 +21,14 @@ class BaseSegHead(nn.Module):
     Class implementing the BaseSegHead module.
 
     Attributes:
+        process_all_arys (bool): Boolean indicating whether to process all queries.
         qry (nn.Module): Optional module updating the query features.
         key (nn.Module): Optional module updating the key features.
         mask_method (str): String containing the method to get or update the segmentation mask.
         roi_ext (nn.Module): Optional module containing the RoI-extractor.
-        tgt_roi_ext (nn.Module): Optional module containing the target RoI-extractor.
+        get_bnd_mask (bool): Boolean indicating whether to get the segmentation boundary mask.
+        get_unc_mask (bool): Boolean indicating whether to get the segmentation uncertainty mask.
+        unc_thr (int): Integer containing the uncertainty threshold per query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
         score_attrs (Dict): Dictionary specifying the scoring mechanism possibly containing following keys:
@@ -43,12 +46,14 @@ class BaseSegHead(nn.Module):
         mask_thr (float): Value containing the normalized segmentation mask threshold.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
+        tgt_roi_ext (nn.Module): Optional module containing the target RoI-extractor.
         loss_sample (nn.Module): Optional module sampling mask loss points.
         loss (nn.Module): Module computing the segmentation mask loss.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, mask_method, metadata, loss_cfg, qry_cfg=None, key_cfg=None, roi_ext_cfg=None, get_segs=True,
+    def __init__(self, mask_method, metadata, loss_cfg, process_all_qrys=False, qry_cfg=None, key_cfg=None,
+                 roi_ext_cfg=None, get_bnd_mask=False, get_unc_mask=False, unc_thr=100, get_segs=True,
                  score_attrs=None, dup_attrs=None, max_segs=None, mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None,
                  apply_ids=None, **kwargs):
         """
@@ -58,9 +63,13 @@ class BaseSegHead(nn.Module):
             mask_method (str): String containing the method to get or update the segmentation mask.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
+            process_all_arys (bool): Boolean indicating whether to process all queries (default=False).
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             key_cfg (Dict): Configuration dictionary specifying the key module (default=None).
             roi_ext_cfg (Dict): Configuration dictionary specifying the RoI-extractor module (default=None).
+            get_bnd_mask (bool): Boolean indicating whether to get the segmentation boundary mask (default=False).
+            get_unc_mask (bool): Boolean indicating whether to get the segmentation uncertainty mask (default=False).
+            unc_thr (int): Integer containing the uncertainty threshold per query (default=100).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             score_attrs (Dict): Attribute dictionary specifying the scoring mechanism (default=None).
             dup_attrs (Dict): Dictionary specifying the duplicate removal or rescoring mechanism (default=None).
@@ -98,8 +107,12 @@ class BaseSegHead(nn.Module):
         self.loss = build_model(loss_cfg)
 
         # Set remaining attributes
-        self.mask_method = mask_method
+        self.process_all_qrys = process_all_qrys
+        self.get_bnd_mask = get_bnd_mask
+        self.get_unc_mask = get_unc_mask
+        self.unc_thr = unc_thr
         self.get_segs = get_segs
+        self.mask_method = mask_method
         self.score_attrs = score_attrs if score_attrs is not None else dict()
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
         self.max_segs = max_segs
@@ -195,7 +208,8 @@ class BaseSegHead(nn.Module):
                 - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
                 - batch_ids (LongTensor): batch indices of queries of shape [num_qrys];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
-                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys].
+                - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys];
+                - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW].
 
             pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
             kwargs (Dict): Dictionary of unused keyword arguments.
@@ -219,6 +233,7 @@ class BaseSegHead(nn.Module):
         batch_ids = storage_dict['batch_ids']
         pred_boxes = storage_dict.get('pred_boxes', None)
         box_scores = storage_dict.get('box_scores', None)
+        mask_logits = storage_dict.get('seg_mask_logits', None)
 
         # Get batch size and device
         batch_size = len(images)
@@ -300,7 +315,12 @@ class BaseSegHead(nn.Module):
 
             # Get mask scores and prediction masks
             qry_ids_i, non_unique_ids = qry_ids_i.unique(sorted=False, return_inverse=True)
-            mask_logits_i = self.get_mask_logits(qry_feats, qry_ids_i, storage_dict)
+
+            if self.process_all_qrys:
+                mask_logits_i = mask_logits[qry_ids_i]
+            else:
+                mask_logits_i = self.get_mask_logits(qry_feats, qry_ids_i, storage_dict)
+
             mask_scores_i = mask_logits_i.sigmoid()
 
             if self.mask_method == 'dense_image':
@@ -309,7 +329,7 @@ class BaseSegHead(nn.Module):
                 mask_scores_i = mask_scores_i.squeeze(dim=1)
 
             elif self.mask_method == 'dense_roi':
-                pred_boxes_i = storage_dict['pred_boxes'][qry_ids_i]
+                pred_boxes_i = pred_boxes[qry_ids_i]
                 pred_boxes_i = pred_boxes_i.to_format('xyxy').to_img_scale(images).boxes
 
                 mask_scores_i = mask_scores_i.unsqueeze(dim=1)
@@ -338,16 +358,16 @@ class BaseSegHead(nn.Module):
                     num_candidates = self.dup_attrs.get('nms_candidates', 1000)
                     candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
-                    qry_ids_i = qry_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
+                    pred_masks_i = pred_masks_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
                     pred_boxes_i = mask_to_box(pred_masks_i).to_format('xyxy')
                     iou_thr = self.dup_attrs.get('nms_thr', 0.65)
                     non_dup_ids = batched_nms(pred_boxes_i.boxes, pred_scores_i, pred_labels_i, iou_thr)
 
-                    qry_ids_i = qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
+                    pred_masks_i = pred_masks_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
 
                 else:
@@ -359,8 +379,8 @@ class BaseSegHead(nn.Module):
                 if len(pred_scores_i) > self.max_segs:
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
-                    qry_ids_i = qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
+                    pred_masks_i = pred_masks_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
             # Add predictions to prediction dictionary
@@ -404,7 +424,7 @@ class BaseSegHead(nn.Module):
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
             vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -495,19 +515,108 @@ class BaseSegHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, storage_dict, images_dict=None, **kwargs):
+    def forward_pred(self, qry_feats, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseSegHead module.
 
         Args:
-            storage_dict (Dict): Dictionary storing various items of interest.
+            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
+
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - cum_feats_batch (LongTensor): cumulative number of queries per batch entry [batch_size+1].
+
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to underlying methods.
 
         Returns:
-            storage_dict (Dict): Dictionary with (possibly) additional stored items of interest.
+            storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
+                - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW];
+                - seg_bnd_mask (BoolTensor): segmentation boundary mask of shape [batch_size, 1, fH, fW];
+                - seg_unc_mask (BoolTensor): segmentation uncertainty mask of shape [batch_size, 1, fH, fW].
+
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
+
+        Raises:
+            NotImplementedError: Error when the boundary mask is requested when using the 'dense_roi' mask method.
+            NotImplementedError: Error when the uncertainty mask is requested when using the 'dense_roi' mask method.
+            ValueError: Error when an invalid mask method is provided.
         """
+
+        # Compute mask logits for all queries if needed
+        if self.process_all_qrys:
+            seg_qry_ids = torch.arange(len(qry_feats), device=qry_feats.device)
+            mask_logits = self.get_mask_logits(qry_feats, seg_qry_ids, storage_dict)
+            storage_dict['seg_mask_logits'] = mask_logits
+
+        # Compute segmentation boundary mask if needed
+        if self.get_bnd_mask:
+
+            if self.mask_method == 'dense_image':
+                seg_mask_logits = storage_dict['seg_mask_logits'].unsqueeze(dim=1)
+                seg_masks = seg_mask_logits.sigmoid() > self.mask_thr
+
+                kernel = seg_mask_logits.new_ones([1, 1, 3, 3])
+                bnd_masks = F.conv2d(seg_masks.float(), kernel, padding=1)
+                bnd_masks = (bnd_masks > 0) & (bnd_masks < 9)
+
+                cum_feats_batch = storage_dict['cum_feats_batch']
+                batch_size = len(cum_feats_batch) - 1
+                bnd_mask_list = []
+
+                for i in range(batch_size):
+                    i0 = cum_feats_batch[i]
+                    i1 = cum_feats_batch[i+1]
+
+                    bnd_mask_i = bnd_masks[i0:i1].any(dim=0)
+                    bnd_mask_list.append(bnd_mask_i)
+
+                bnd_mask = torch.stack(bnd_mask_list, dim=0)
+                storage_dict['seg_bnd_mask'] = bnd_mask
+
+            elif self.mask_method == 'dense_roi':
+                error_msg = "Getting the boundary mask for the 'dense_roi' mask method is currently not supported."
+                raise NotImplementedError(error_msg)
+
+            else:
+                error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
+                raise ValueError(error_msg)
+
+        # Compute segmentation uncertainty mask if needed
+        if self.get_unc_mask:
+
+            if self.mask_method == 'dense_image':
+                seg_mask_logits = storage_dict['seg_mask_logits']
+                num_qrys, mH, mW = seg_mask_logits.size()
+
+                unc_maps = -seg_mask_logits.abs().flatten(1)
+                unc_ids = unc_maps.topk(self.unc_thr, dim=1, sorted=False)[1]
+                qry_ids = torch.arange(num_qrys, device=unc_maps.device)[:, None].expand(-1, self.unc_thr)
+
+                unc_masks = torch.zeros(num_qrys, mH*mW, device=unc_maps.device, dtype=torch.bool)
+                unc_masks[qry_ids, unc_ids] = True
+                unc_masks = unc_masks.view(num_qrys, 1, mH, mW)
+
+                cum_feats_batch = storage_dict['cum_feats_batch']
+                batch_size = len(cum_feats_batch) - 1
+                unc_mask_list = []
+
+                for i in range(batch_size):
+                    i0 = cum_feats_batch[i]
+                    i1 = cum_feats_batch[i+1]
+
+                    unc_mask_i = unc_masks[i0:i1].any(dim=0)
+                    unc_mask_list.append(unc_mask_i)
+
+                unc_mask = torch.stack(unc_mask_list, dim=0)
+                storage_dict['seg_unc_mask'] = unc_mask
+
+            elif self.mask_method == 'dense_roi':
+                error_msg = "Getting the uncertainty mask for the 'dense_roi' mask method is currently not supported."
+                raise NotImplementedError(error_msg)
+
+            else:
+                error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
+                raise ValueError(error_msg)
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
@@ -526,7 +635,8 @@ class BaseSegHead(nn.Module):
         Args:
             qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
 
-            storage_dict (Dict): Storage dictionary containing following keys (after matching):
+            storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
+                - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys].
 
@@ -535,7 +645,7 @@ class BaseSegHead(nn.Module):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
@@ -579,7 +689,10 @@ class BaseSegHead(nn.Module):
             return loss_dict, analysis_dict
 
         # Get mask logits
-        mask_logits = self.get_mask_logits(qry_feats, matched_qry_ids, storage_dict)
+        if self.process_all_qrys:
+            mask_logits = storage_dict['seg_mask_logits'][matched_qry_ids]
+        else:
+            mask_logits = self.get_mask_logits(qry_feats, matched_qry_ids, storage_dict)
 
         # Get mask targets
         tgt_masks = tgt_dict['masks']
@@ -756,7 +869,7 @@ class SegBndHead(nn.Module):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -1160,7 +1273,7 @@ class TopDownSegHead(nn.Module):
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
             vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -1527,7 +1640,7 @@ class TopDownSegHead(nn.Module):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses.
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
