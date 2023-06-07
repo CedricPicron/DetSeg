@@ -269,7 +269,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
             vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
@@ -415,7 +415,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
@@ -783,7 +783,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:
@@ -1144,7 +1144,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
             analysis_dict (Dict): Dictionary containing different analyses (default=None).
-            id (int): Integer containing the head id (default=None).
+            id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
         Returns:

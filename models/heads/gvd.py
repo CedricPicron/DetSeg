@@ -170,14 +170,14 @@ class GVD(nn.Module):
         storage_dict['batch_ids'] = batch_ids
 
         # Apply heads if needed
-        for head in self.heads:
+        for head_id, head in enumerate(self.heads):
             if 0 in head.apply_ids:
-                head(mode='pred', id=0, **local_kwargs, **kwargs)
+                head(mode='pred', id=f'0_{head_id}', **local_kwargs, **kwargs)
 
         if tgt_dict is not None:
-            for head in self.heads:
+            for head_id, head in enumerate(self.heads):
                 if 0 in head.apply_ids:
-                    head(mode='loss', id=0, **local_kwargs, **kwargs)
+                    head(mode='loss', id=f'0_{head_id}', **local_kwargs, **kwargs)
 
         # Iterate over decoder layers and apply heads when needed
         for dec_id, dec_layer in enumerate(self.dec_layers, 1):
@@ -187,14 +187,14 @@ class GVD(nn.Module):
             local_kwargs['qry_feats'] = group_feats
 
             # Apply heads if needed
-            for head in self.heads:
+            for head_id, head in enumerate(self.heads):
                 if dec_id in head.apply_ids:
-                    head(mode='pred', id=dec_id, **local_kwargs, **kwargs)
+                    head(mode='pred', id=f'{dec_id}_{head_id}', **local_kwargs, **kwargs)
 
             if tgt_dict is not None:
-                for head in self.heads:
+                for head_id, head in enumerate(self.heads):
                     if dec_id in head.apply_ids:
-                        head(mode='loss', id=dec_id, **local_kwargs, **kwargs)
+                        head(mode='loss', id=f'{dec_id}_{head_id}', **local_kwargs, **kwargs)
 
         # Get list with items to return
         return_list = [analysis_dict]
