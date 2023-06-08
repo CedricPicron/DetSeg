@@ -211,6 +211,7 @@ model = dict(
         dict(
             type='BaseSegHead',
             apply_ids=[6],
+            process_all_qrys=True,
             qry_cfg=[
                 dict(
                     type='nn.Linear',
@@ -219,8 +220,8 @@ model = dict(
                     bias=True,
                 ),
                 dict(
-                    type='nn.LayerNorm',
-                    normalized_shape=256,
+                    type='nn.ReLU',
+                    inplace=True,
                 ),
                 dict(
                     type='nn.Linear',
@@ -239,7 +240,91 @@ model = dict(
                     kernel_size=1,
                 ),
             ),
-            mask_type='image',
+            mask_type='roi',
+            roi_ext_cfg=dict(
+                type='mmdet.SingleRoIExtractor',
+                roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),
+                out_channels=256,
+                featmap_strides=[4],
+            ),
+            get_bnd_mask=True,
+            get_segs=False,
+            loss_sample_cfg=dict(
+                type='PointRendSampling',
+                num_points=12544,
+                oversample_ratio=3.0,
+                importance_ratio=0.75,
+            ),
+            loss_cfg=dict(
+                type='MaskLoss',
+                mask_loss_cfg=dict(
+                    type='mmdet.CrossEntropyLoss',
+                    use_sigmoid=True,
+                    reduction='sum',
+                    loss_weight=1.0,
+                ),
+            ),
+        ),
+        dict(
+            type='BaseSegHead',
+            apply_ids=[6],
+            qry_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+            ],
+            key_cfg=dict(
+                type='ApplyToSelected',
+                select_id=0,
+                module_cfg=[
+                    dict(
+                        type='IdBase2d',
+                        act_mask_key='seg_batch_bnd_mask',
+                        id_cfg=[
+                            [[
+                                dict(
+                                    type='IdConv2d',
+                                    in_channels=256,
+                                    out_channels=256,
+                                    kernel_size=3,
+                                ),
+                                dict(
+                                    type='nn.ReLU',
+                                    inplace=True,
+                                ),
+                            ] for _ in range(4)],
+                            dict(
+                                type='nn.Linear',
+                                in_features=256,
+                                out_features=256,
+                                bias=True,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            mask_update=True,
+            mask_type='roi',
+            update_mask_key='seg_qry_bnd_mask',
+            roi_ext_cfg=dict(
+                type='mmdet.SingleRoIExtractor',
+                roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),
+                out_channels=256,
+                featmap_strides=[4],
+            ),
             get_segs=True,
             dup_attrs=dict(
                 type='box_nms',
@@ -249,12 +334,20 @@ model = dict(
             ),
             max_segs=100,
             mask_thr=0.5,
+            loss_sample_cfg=dict(
+                type='PointRendSampling',
+                num_points=12544,
+                oversample_ratio=3.0,
+                importance_ratio=0.75,
+            ),
             loss_cfg=dict(
-                type='mmdet.DiceLoss',
-                use_sigmoid=True,
-                reduction='sum',
-                naive_dice=True,
-                loss_weight=1.0,
+                type='MaskLoss',
+                mask_loss_cfg=dict(
+                    type='mmdet.CrossEntropyLoss',
+                    use_sigmoid=True,
+                    reduction='sum',
+                    loss_weight=1.0,
+                ),
             ),
         ),
     ],

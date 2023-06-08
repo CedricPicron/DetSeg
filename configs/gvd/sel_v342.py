@@ -212,9 +212,6 @@ model = dict(
             type='BaseSegHead',
             apply_ids=[6],
             process_all_qrys=True,
-            get_unc_mask=True,
-            unc_thr=100,
-            get_segs=False,
             qry_cfg=[
                 dict(
                     type='nn.Linear',
@@ -243,7 +240,10 @@ model = dict(
                     kernel_size=1,
                 ),
             ),
-            mask_method='dense_image',
+            mask_type='image',
+            get_unc_mask=True,
+            unc_thr=100,
+            get_segs=False,
             loss_sample_cfg=dict(
                 type='PointRendSampling',
                 num_points=12544,
@@ -263,7 +263,6 @@ model = dict(
         dict(
             type='BaseSegHead',
             apply_ids=[6],
-            get_segs=True,
             qry_cfg=[
                 dict(
                     type='nn.Linear',
@@ -288,7 +287,7 @@ model = dict(
                 module_cfg=[
                     dict(
                         type='IdBase2d',
-                        act_mask_key='seg_unc_mask',
+                        act_mask_key='seg_batch_unc_mask',
                         id_cfg=[
                             [[
                                 dict(
@@ -312,13 +311,14 @@ model = dict(
                     ),
                 ],
             ),
-            mask_method='dense_roi',
+            mask_type='roi',
             roi_ext_cfg=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),
                 out_channels=256,
                 featmap_strides=[4],
             ),
+            get_segs=True,
             dup_attrs=dict(
                 type='box_nms',
                 needs_masks=False,
