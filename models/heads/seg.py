@@ -21,10 +21,13 @@ class BaseSegHead(nn.Module):
     Class implementing the BaseSegHead module.
 
     Attributes:
-        process_all_arys (bool): Boolean indicating whether to process all queries.
+        process_all_qrys (bool): Boolean indicating whether to process all queries.
         qry (nn.Module): Optional module updating the query features.
         key (nn.Module): Optional module updating the key features.
-        mask_method (str): String containing the method to get or update the segmentation mask.
+        mask_update (bool): Boolean indicating whether to update a previously predicted mask.
+        mask_type (str): String containing the type of predicted segmentation mask.
+        key_map_id (int): Integer containing the map index from which to extract key features.
+        update_mask_key (str): String with key to retrieve update mask from the storage dictionary.
         roi_ext (nn.Module): Optional module containing the RoI-extractor.
         get_bnd_mask (bool): Boolean indicating whether to get the segmentation boundary mask.
         get_unc_mask (bool): Boolean indicating whether to get the segmentation uncertainty mask.
@@ -48,24 +51,29 @@ class BaseSegHead(nn.Module):
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         tgt_roi_ext (nn.Module): Optional module containing the target RoI-extractor.
         loss_sample (nn.Module): Optional module sampling mask loss points.
+        loss_updated_only (bool): Boolean indicating whether to apply loss in updated points only.
         loss (nn.Module): Module computing the segmentation mask loss.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, mask_method, metadata, loss_cfg, process_all_qrys=False, qry_cfg=None, key_cfg=None,
-                 roi_ext_cfg=None, get_bnd_mask=False, get_unc_mask=False, unc_thr=100, get_segs=True,
-                 score_attrs=None, dup_attrs=None, max_segs=None, mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None,
-                 apply_ids=None, **kwargs):
+    def __init__(self, mask_type, metadata, loss_cfg, process_all_qrys=False, qry_cfg=None, key_cfg=None,
+                 mask_update=False, key_map_id=0, update_mask_key=None, roi_ext_cfg=None, get_bnd_mask=False,
+                 get_unc_mask=False, unc_thr=100, get_segs=True, score_attrs=None, dup_attrs=None, max_segs=None,
+                 mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None, loss_updated_only=True, apply_ids=None,
+                 **kwargs):
         """
         Initializes the BaseSegHead module.
 
         Args:
-            mask_method (str): String containing the method to get or update the segmentation mask.
+            mask_type (str): String containing the type of predicted segmentation mask.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
-            process_all_arys (bool): Boolean indicating whether to process all queries (default=False).
+            process_all_qrys (bool): Boolean indicating whether to process all queries (default=False).
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             key_cfg (Dict): Configuration dictionary specifying the key module (default=None).
+            mask_update (bool): Boolean indicating whether to update a previously predicted mask (default=False).
+            key_map_id (int): Integer containing the map index from which to extract key features (default=0).
+            update_mask_key (str): String with key to retrieve update mask from the storage dictionary (default=None).
             roi_ext_cfg (Dict): Configuration dictionary specifying the RoI-extractor module (default=None).
             get_bnd_mask (bool): Boolean indicating whether to get the segmentation boundary mask (default=False).
             get_unc_mask (bool): Boolean indicating whether to get the segmentation uncertainty mask (default=False).
@@ -77,6 +85,7 @@ class BaseSegHead(nn.Module):
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             loss_sample_cfg (Dict): Configuration dictionary specifying the loss sample module (default=None).
+            loss_updated_only (bool): Boolean indicating whether to apply loss in updated points only (default=True).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
@@ -108,16 +117,20 @@ class BaseSegHead(nn.Module):
 
         # Set remaining attributes
         self.process_all_qrys = process_all_qrys
+        self.mask_update = mask_update
+        self.mask_type = mask_type
+        self.key_map_id = key_map_id
+        self.update_mask_key = update_mask_key
         self.get_bnd_mask = get_bnd_mask
         self.get_unc_mask = get_unc_mask
         self.unc_thr = unc_thr
         self.get_segs = get_segs
-        self.mask_method = mask_method
         self.score_attrs = score_attrs if score_attrs is not None else dict()
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
         self.max_segs = max_segs
         self.mask_thr = mask_thr
         self.metadata = metadata
+        self.loss_updated_only = loss_updated_only
         self.apply_ids = apply_ids
 
     def get_mask_logits(self, qry_feats, seg_qry_ids, storage_dict):
@@ -132,13 +145,15 @@ class BaseSegHead(nn.Module):
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
                 - images (Images): images structure containing the batched images of size [batch_size];
                 - batch_ids (LongTensor): batch indices of queries of shape [num_qrys];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys].
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
+                - {self.update_mask_key} (BoolTensor): mask with locations to update of shape [num_qrys, 1, mH, mW];
+                - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW].
 
         Returns:
-            mask_logits (FloatTensor): Mask logits with shape depending on the segmentation method.
+            mask_logits (FloatTensor): Segmentation mask logits of shape [num_qrys, mH, mW].
 
         Raises:
-            ValueError: Error when an invalid mask method is provided.
+            ValueError: Error when an invalid mask type is provided.
         """
 
         # Get device
@@ -163,8 +178,52 @@ class BaseSegHead(nn.Module):
         batch_ids = storage_dict['batch_ids'][seg_qry_ids]
 
         # Get mask logits
-        if self.mask_method == 'dense_image':
-            key_feat_map = key_feat_maps[0]
+        if self.mask_update:
+
+            if self.mask_type == 'image':
+                key_feat_map = key_feat_maps[self.key_map_id]
+
+                update_mask = storage_dict[self.update_mask_key][seg_qry_ids]
+                mask_logits = storage_dict['seg_mask_logits'][seg_qry_ids]
+
+                for i in range(batch_size):
+                    batch_mask = batch_ids == i
+
+                    update_mask_i = update_mask[batch_mask, 0]
+                    qry_ids, y_ids, x_ids = update_mask_i.nonzero(as_tuple=True)
+
+                    qry_feats_i = qry_feats[batch_mask][qry_ids]
+                    key_feats_i = key_feat_map[i, :, y_ids, x_ids]
+                    update_logits = torch.einsum('kc,ck->k', qry_feats_i, key_feats_i)
+
+                    mask_logits_i = mask_logits[batch_mask]
+                    mask_logits_i[qry_ids, y_ids, x_ids] = update_logits
+                    mask_logits[batch_mask] = mask_logits_i
+
+            elif self.mask_type == 'roi':
+                pred_boxes = storage_dict['pred_boxes'][seg_qry_ids]
+                images = storage_dict['images']
+
+                roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
+                roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
+                roi_key_feat_map = self.roi_ext([key_feat_maps[self.key_map_id]], roi_boxes)
+
+                update_mask = storage_dict[self.update_mask_key][seg_qry_ids]
+                qry_ids, y_ids, x_ids = update_mask.squeeze(dim=1).nonzero(as_tuple=True)
+
+                qry_feats = qry_feats[qry_ids]
+                key_feats = roi_key_feat_map[qry_ids, :, y_ids, x_ids]
+                update_logits = torch.einsum('kc,kc->k', qry_feats, key_feats)
+
+                mask_logits = storage_dict['seg_mask_logits'][seg_qry_ids]
+                mask_logits[qry_ids, y_ids, x_ids] = update_logits
+
+            else:
+                error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
+                raise ValueError(error_msg)
+
+        elif self.mask_type == 'image':
+            key_feat_map = key_feat_maps[self.key_map_id]
 
             num_qrys = len(qry_feats)
             kH, kW = key_feat_map.size()[-2:]
@@ -179,18 +238,18 @@ class BaseSegHead(nn.Module):
                 mask_logits_i = torch.einsum('qc,chw->qhw', qry_feats_i, key_feat_map_i)
                 mask_logits[batch_mask] = mask_logits_i
 
-        elif self.mask_method == 'dense_roi':
+        elif self.mask_type == 'roi':
             pred_boxes = storage_dict['pred_boxes'][seg_qry_ids]
 
             images = storage_dict['images']
             roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
             roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
 
-            roi_key_feat_map = self.roi_ext(key_feat_maps[:1], roi_boxes)
+            roi_key_feat_map = self.roi_ext([key_feat_maps[self.key_map_id]], roi_boxes)
             mask_logits = torch.einsum('qc,qchw->qhw', qry_feats, roi_key_feat_map)
 
         else:
-            error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
+            error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
             raise ValueError(error_msg)
 
         return mask_logits
@@ -224,7 +283,7 @@ class BaseSegHead(nn.Module):
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal or rescoring mechanism is provided.
-            ValueError: Error when an invalid mask method is provided.
+            ValueError: Error when an invalid mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -323,12 +382,12 @@ class BaseSegHead(nn.Module):
 
             mask_scores_i = mask_logits_i.sigmoid()
 
-            if self.mask_method == 'dense_image':
+            if self.mask_type == 'image':
                 mask_scores_i = mask_scores_i.unsqueeze(dim=1)
                 mask_scores_i = F.interpolate(mask_scores_i, size=(iH, iW), mode='bilinear', align_corners=False)
                 mask_scores_i = mask_scores_i.squeeze(dim=1)
 
-            elif self.mask_method == 'dense_roi':
+            elif self.mask_type == 'roi':
                 pred_boxes_i = pred_boxes[qry_ids_i]
                 pred_boxes_i = pred_boxes_i.to_format('xyxy').to_img_scale(images).boxes
 
@@ -337,7 +396,7 @@ class BaseSegHead(nn.Module):
                 mask_scores_i = mask_scores_i.squeeze(dim=1)
 
             else:
-                error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
+                error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
                 raise ValueError(error_msg)
 
             mask_scores_i = mask_scores_i[non_unique_ids]
@@ -522,8 +581,11 @@ class BaseSegHead(nn.Module):
         Args:
             qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
 
-            storage_dict (Dict): Storage dictionary containing at least following key:
-                - cum_feats_batch (LongTensor): cumulative number of queries per batch entry [batch_size+1].
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - images (Images): images structure containing the batched images of size [batch_size];
+                - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
+                - cum_feats_batch (LongTensor): cumulative number of queries per batch entry [batch_size+1];
+                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to underlying methods.
@@ -531,15 +593,12 @@ class BaseSegHead(nn.Module):
         Returns:
             storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
                 - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW];
-                - seg_bnd_mask (BoolTensor): segmentation boundary mask of shape [batch_size, 1, fH, fW];
-                - seg_unc_mask (BoolTensor): segmentation uncertainty mask of shape [batch_size, 1, fH, fW].
+                - seg_qry_bnd_mask (BoolTensor): segmentation boundary mask of shape [num_qrys, 1, mH, mW];
+                - seg_batch_bnd_mask (BoolTensor): segmentation boundary mask of shape [batch_size, 1, fH, fW];
+                - seg_qry_unc_mask (BoolTensor): segmentation uncertainty mask of shape [num_qrys, 1, mH, mW];
+                - seg_batch_unc_mask (BoolTensor): segmentation uncertainty mask of shape [batch_size, 1, fH, fW].
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
-
-        Raises:
-            NotImplementedError: Error when the boundary mask is requested when using the 'dense_roi' mask method.
-            NotImplementedError: Error when the uncertainty mask is requested when using the 'dense_roi' mask method.
-            ValueError: Error when an invalid mask method is provided.
         """
 
         # Compute mask logits for all queries if needed
@@ -550,77 +609,87 @@ class BaseSegHead(nn.Module):
 
         # Compute segmentation boundary mask if needed
         if self.get_bnd_mask:
+            seg_mask_logits = storage_dict['seg_mask_logits'].unsqueeze(dim=1)
+            seg_masks = seg_mask_logits.sigmoid() > self.mask_thr
 
-            if self.mask_method == 'dense_image':
-                seg_mask_logits = storage_dict['seg_mask_logits'].unsqueeze(dim=1)
-                seg_masks = seg_mask_logits.sigmoid() > self.mask_thr
+            kernel = seg_mask_logits.new_ones([1, 1, 3, 3])
+            bnd_masks = F.conv2d(seg_masks.float(), kernel, padding=1)
 
-                kernel = seg_mask_logits.new_ones([1, 1, 3, 3])
-                bnd_masks = F.conv2d(seg_masks.float(), kernel, padding=1)
-                bnd_masks = (bnd_masks > 0) & (bnd_masks < 9)
+            bnd_masks = (bnd_masks > 0) & (bnd_masks < 9)
+            storage_dict['seg_qry_bnd_mask'] = bnd_masks
 
-                cum_feats_batch = storage_dict['cum_feats_batch']
-                batch_size = len(cum_feats_batch) - 1
-                bnd_mask_list = []
+            if self.mask_type == 'roi':
+                key_feat_map = storage_dict['feat_maps'][self.key_map_id]
+                fH, fW = key_feat_map.size()[2:]
 
-                for i in range(batch_size):
-                    i0 = cum_feats_batch[i]
-                    i1 = cum_feats_batch[i+1]
+                images = storage_dict['images']
+                boxes = storage_dict['pred_boxes'].clone()
 
-                    bnd_mask_i = bnd_masks[i0:i1].any(dim=0)
-                    bnd_mask_list.append(bnd_mask_i)
+                scale = torch.tensor([[fW, fH, fW, fH]], device=key_feat_map.device)
+                boxes = scale * boxes.to_format('xyxy').normalize(images).boxes
 
-                bnd_mask = torch.stack(bnd_mask_list, dim=0)
-                storage_dict['seg_bnd_mask'] = bnd_mask
+                bnd_masks = _do_paste_mask(bnd_masks, boxes, fH, fW, skip_empty=False)[0]
+                bnd_masks = bnd_masks > 0.5
 
-            elif self.mask_method == 'dense_roi':
-                error_msg = "Getting the boundary mask for the 'dense_roi' mask method is currently not supported."
-                raise NotImplementedError(error_msg)
+            cum_feats_batch = storage_dict['cum_feats_batch']
+            batch_size = len(cum_feats_batch) - 1
+            bnd_mask_list = []
 
-            else:
-                error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
-                raise ValueError(error_msg)
+            for i in range(batch_size):
+                i0 = cum_feats_batch[i]
+                i1 = cum_feats_batch[i+1]
+
+                bnd_mask_i = bnd_masks[i0:i1].any(dim=0)
+                bnd_mask_list.append(bnd_mask_i)
+
+            bnd_mask = torch.stack(bnd_mask_list, dim=0)
+            storage_dict['seg_batch_bnd_mask'] = bnd_mask
 
         # Compute segmentation uncertainty mask if needed
         if self.get_unc_mask:
+            seg_mask_logits = storage_dict['seg_mask_logits']
+            num_qrys, mH, mW = seg_mask_logits.size()
 
-            if self.mask_method == 'dense_image':
-                seg_mask_logits = storage_dict['seg_mask_logits']
-                num_qrys, mH, mW = seg_mask_logits.size()
+            unc_maps = -seg_mask_logits.abs().flatten(1)
+            unc_ids = unc_maps.topk(self.unc_thr, dim=1, sorted=False)[1]
+            qry_ids = torch.arange(num_qrys, device=unc_maps.device)[:, None].expand(-1, self.unc_thr)
 
-                unc_maps = -seg_mask_logits.abs().flatten(1)
-                unc_ids = unc_maps.topk(self.unc_thr, dim=1, sorted=False)[1]
-                qry_ids = torch.arange(num_qrys, device=unc_maps.device)[:, None].expand(-1, self.unc_thr)
+            unc_masks = torch.zeros(num_qrys, mH*mW, device=unc_maps.device, dtype=torch.bool)
+            unc_masks[qry_ids, unc_ids] = True
 
-                unc_masks = torch.zeros(num_qrys, mH*mW, device=unc_maps.device, dtype=torch.bool)
-                unc_masks[qry_ids, unc_ids] = True
-                unc_masks = unc_masks.view(num_qrys, 1, mH, mW)
+            unc_masks = unc_masks.view(num_qrys, 1, mH, mW)
+            storage_dict['seg_qry_unc_mask'] = unc_masks
 
-                cum_feats_batch = storage_dict['cum_feats_batch']
-                batch_size = len(cum_feats_batch) - 1
-                unc_mask_list = []
+            if self.mask_type == 'roi':
+                key_feat_map = storage_dict['feat_maps'][self.key_map_id]
+                fH, fW = key_feat_map.size()[2:]
 
-                for i in range(batch_size):
-                    i0 = cum_feats_batch[i]
-                    i1 = cum_feats_batch[i+1]
+                images = storage_dict['images']
+                boxes = storage_dict['pred_boxes'].clone()
 
-                    unc_mask_i = unc_masks[i0:i1].any(dim=0)
-                    unc_mask_list.append(unc_mask_i)
+                scale = torch.tensor([[fW, fH, fW, fH]], device=key_feat_map.device)
+                boxes = scale * boxes.to_format('xyxy').normalize(images).boxes
 
-                unc_mask = torch.stack(unc_mask_list, dim=0)
-                storage_dict['seg_unc_mask'] = unc_mask
+                unc_masks = _do_paste_mask(unc_masks, boxes, fH, fW, skip_empty=False)[0]
+                unc_masks = unc_masks > 0.5
 
-            elif self.mask_method == 'dense_roi':
-                error_msg = "Getting the uncertainty mask for the 'dense_roi' mask method is currently not supported."
-                raise NotImplementedError(error_msg)
+            cum_feats_batch = storage_dict['cum_feats_batch']
+            batch_size = len(cum_feats_batch) - 1
+            unc_mask_list = []
 
-            else:
-                error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
-                raise ValueError(error_msg)
+            for i in range(batch_size):
+                i0 = cum_feats_batch[i]
+                i1 = cum_feats_batch[i+1]
+
+                unc_mask_i = unc_masks[i0:i1].any(dim=0)
+                unc_mask_list.append(unc_mask_i)
+
+            unc_mask = torch.stack(unc_mask_list, dim=0)
+            storage_dict['seg_batch_unc_mask'] = unc_mask
 
         # Get segmentation predictions if needed
         if self.get_segs and not self.training:
-            self.compute_segs(storage_dict=storage_dict, **kwargs)
+            self.compute_segs(qry_feats, storage_dict=storage_dict, **kwargs)
 
         # Draw predicted and target segmentations if needed
         if self.get_segs and images_dict is not None:
@@ -636,6 +705,7 @@ class BaseSegHead(nn.Module):
             qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
 
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
+                - {self.update_mask_key} (BoolTensor): mask with locations to update of shape [num_qrys, 1, mH, mW];
                 - seg_mask_logits (FloatTensor): segmentation mask logits of shape [num_qrys, mH, mW];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys].
@@ -656,7 +726,7 @@ class BaseSegHead(nn.Module):
                 - mask_acc (FloatTensor): segmentation mask accuracy of shape [].
 
         Raises:
-            ValueError: Error when an invalid mask method is provided.
+            ValueError: Error when an invalid mask type is provided.
         """
 
         # Get device
@@ -697,14 +767,14 @@ class BaseSegHead(nn.Module):
         # Get mask targets
         tgt_masks = tgt_dict['masks']
 
-        if self.mask_method == 'dense_image':
+        if self.mask_type == 'image':
             fH, fW = mask_logits.size()[1:]
 
             mask_targets = tgt_masks[matched_tgt_ids].float().unsqueeze(dim=1)
             mask_targets = F.interpolate(mask_targets, size=(fH, fW), mode='bilinear', align_corners=False)
             mask_targets = mask_targets.squeeze(dim=1)
 
-        elif self.mask_method == 'dense_roi':
+        elif self.mask_type == 'roi':
             pred_boxes = storage_dict['pred_boxes'][matched_qry_ids]
 
             images = storage_dict['images']
@@ -716,29 +786,48 @@ class BaseSegHead(nn.Module):
             mask_targets = mask_targets.squeeze(dim=1)
 
         else:
-            error_msg = f"Invalid mask method in BaseSegHead (got '{self.mask_method}')."
+            error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
             raise ValueError(error_msg)
 
-        # Sample mask loss points if needed
+        # Get mask logits and target in desired points
         if self.loss_sample is not None:
             mask_logits, mask_targets = self.loss_sample(mask_logits, mask_targets)
 
+        elif self.mask_update and self.loss_updated_only:
+            update_mask = storage_dict[self.update_mask_key]
+            update_mask = update_mask[matched_qry_ids].squeeze(dim=1)
+
+            mask_logits = mask_logits[update_mask]
+            mask_targets = mask_targets[update_mask]
+
         # Get mask loss
-        mask_loss = self.loss(mask_logits, mask_targets)
+        mask_loss = 0.0 * qry_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
+        mask_loss += self.loss(mask_logits, mask_targets)
 
         key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
         loss_dict[key_name] = mask_loss
 
         # Get mask accuracy if needed
         if analysis_dict is not None:
-            mask_preds = mask_logits.flatten(1).sigmoid() > self.mask_thr
-            mask_targets = mask_targets.flatten(1) > 0.5
 
-            mask_inter = (mask_preds * mask_targets).sum(dim=1)
-            mask_union = mask_preds.sum(dim=1) + mask_targets.sum(dim=1) - mask_inter
+            if self.loss_sample is not None or (self.mask_update and self.loss_updated_only):
+                mask_preds = mask_logits.sigmoid() > self.mask_thr
+                mask_targets = mask_targets > 0.5
 
-            mask_acc = mask_inter / mask_union.clamp_(min=1)
-            mask_acc = mask_acc.mean()
+                if mask_preds.numel() > 0:
+                    mask_acc = (mask_preds == mask_targets).sum() / mask_preds.numel()
+                else:
+                    mask_acc = torch.tensor(1.0, device=device)
+
+            else:
+                mask_preds = mask_logits.flatten(1).sigmoid() > self.mask_thr
+                mask_targets = mask_targets.flatten(1) > 0.5
+
+                mask_inter = (mask_preds * mask_targets).sum(dim=1)
+                mask_union = mask_preds.sum(dim=1) + mask_targets.sum(dim=1) - mask_inter
+
+                mask_acc = mask_inter / mask_union.clamp_(min=1)
+                mask_acc = mask_acc.mean()
 
             key_name = f'mask_acc_{id}' if id is not None else 'mask_acc'
             analysis_dict[key_name] = 100 * mask_acc

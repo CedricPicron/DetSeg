@@ -239,7 +239,7 @@ model = dict(
                     kernel_size=1,
                 ),
             ),
-            mask_method='dense_image',
+            mask_type='image',
             get_segs=True,
             dup_attrs=dict(
                 type='box_nms',

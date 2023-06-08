@@ -249,7 +249,7 @@ model = dict(
                     ),
                 ],
             ),
-            mask_method='dense_roi',
+            mask_type='roi',
             roi_ext_cfg=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),
