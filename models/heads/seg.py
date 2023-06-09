@@ -24,6 +24,7 @@ class BaseSegHead(nn.Module):
         process_all_qrys (bool): Boolean indicating whether to process all queries.
         qry (nn.Module): Optional module updating the query features.
         key (nn.Module): Optional module updating the key features.
+        qry_key (nn.Module): Optional module computing the mask logits based on the query and key features.
         mask_update (bool): Boolean indicating whether to update a previously predicted mask.
         mask_type (str): String containing the type of predicted segmentation mask.
         key_map_id (int): Integer containing the map index from which to extract key features.
@@ -57,10 +58,10 @@ class BaseSegHead(nn.Module):
     """
 
     def __init__(self, mask_type, metadata, loss_cfg, process_all_qrys=False, qry_cfg=None, key_cfg=None,
-                 mask_update=False, key_map_id=0, update_mask_key=None, roi_ext_cfg=None, get_bnd_mask=False,
-                 get_unc_mask=False, unc_thr=100, get_segs=True, score_attrs=None, dup_attrs=None, max_segs=None,
-                 mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None, loss_updated_only=True, apply_ids=None,
-                 **kwargs):
+                 qry_key_cfg=None, mask_update=False, key_map_id=0, update_mask_key=None, roi_ext_cfg=None,
+                 get_bnd_mask=False, get_unc_mask=False, unc_thr=100, get_segs=True, score_attrs=None, dup_attrs=None,
+                 max_segs=None, mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None, loss_updated_only=True,
+                 apply_ids=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
@@ -71,6 +72,7 @@ class BaseSegHead(nn.Module):
             process_all_qrys (bool): Boolean indicating whether to process all queries (default=False).
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             key_cfg (Dict): Configuration dictionary specifying the key module (default=None).
+            qry_key_cfg (Dict): Configuration dictionary specifying the query-key module (default=None).
             mask_update (bool): Boolean indicating whether to update a previously predicted mask (default=False).
             key_map_id (int): Integer containing the map index from which to extract key features (default=0).
             update_mask_key (str): String with key to retrieve update mask from the storage dictionary (default=None).
@@ -93,9 +95,10 @@ class BaseSegHead(nn.Module):
         # Initialization of default nn.Module
         super().__init__()
 
-        # Build query and key modules if needed
+        # Build query, key and query-key modules if needed
         self.qry = build_model(qry_cfg, sequential=True) if qry_cfg is not None else None
         self.key = build_model(key_cfg, sequential=True) if key_cfg is not None else None
+        self.qry_key = build_model(qry_key_cfg) if qry_key_cfg is not None else None
 
         # Build RoI-extractor module if needed
         self.roi_ext = build_model(roi_ext_cfg) if roi_ext_cfg is not None else None
@@ -194,15 +197,19 @@ class BaseSegHead(nn.Module):
 
                     qry_feats_i = qry_feats[batch_mask][qry_ids]
                     key_feats_i = key_feat_map[i, :, y_ids, x_ids]
-                    update_logits = torch.einsum('kc,ck->k', qry_feats_i, key_feats_i)
+
+                    if self.qry_key is not None:
+                        update_logits = self.qry_key(qry_feats_i, key_feats_i.t()).squeeze(dim=1)
+                    else:
+                        update_logits = torch.einsum('kc,ck->k', qry_feats_i, key_feats_i)
 
                     mask_logits_i = mask_logits[batch_mask]
                     mask_logits_i[qry_ids, y_ids, x_ids] = update_logits
                     mask_logits[batch_mask] = mask_logits_i
 
             elif self.mask_type == 'roi':
-                pred_boxes = storage_dict['pred_boxes'][seg_qry_ids]
                 images = storage_dict['images']
+                pred_boxes = storage_dict['pred_boxes'][seg_qry_ids]
 
                 roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
                 roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
@@ -213,7 +220,11 @@ class BaseSegHead(nn.Module):
 
                 qry_feats = qry_feats[qry_ids]
                 key_feats = roi_key_feat_map[qry_ids, :, y_ids, x_ids]
-                update_logits = torch.einsum('kc,kc->k', qry_feats, key_feats)
+
+                if self.qry_key is not None:
+                    update_logits = self.qry_key(qry_feats, key_feats).squeeze(dim=1)
+                else:
+                    update_logits = torch.einsum('kc,kc->k', qry_feats, key_feats)
 
                 mask_logits = storage_dict['seg_mask_logits'][seg_qry_ids]
                 mask_logits[qry_ids, y_ids, x_ids] = update_logits
@@ -226,7 +237,7 @@ class BaseSegHead(nn.Module):
             key_feat_map = key_feat_maps[self.key_map_id]
 
             num_qrys = len(qry_feats)
-            kH, kW = key_feat_map.size()[-2:]
+            kH, kW = key_feat_map.size()[2:]
             mask_logits = torch.empty(num_qrys, kH, kW, dtype=torch.float, device=device)
 
             for i in range(batch_size):
@@ -235,18 +246,38 @@ class BaseSegHead(nn.Module):
                 qry_feats_i = qry_feats[batch_mask]
                 key_feat_map_i = key_feat_map[i]
 
-                mask_logits_i = torch.einsum('qc,chw->qhw', qry_feats_i, key_feat_map_i)
+                if self.qry_key is not None:
+                    qry_feats_i = qry_feats_i[:, None, :].expand(-1, kH*kW, -1).flatten(0, 1)
+                    key_feats_i = key_feat_map_i.permute(1, 2, 0)
+                    key_feats_i = key_feats_i[None, :, :, :].expand(num_qrys, -1, -1, -1).flatten(0, 2)
+
+                    mask_logits_i = self.qry_key(qry_feats_i, key_feats_i)
+                    mask_logits_i = mask_logits_i.view(num_qrys, kH, kW)
+
+                else:
+                    mask_logits_i = torch.einsum('qc,chw->qhw', qry_feats_i, key_feat_map_i)
+
                 mask_logits[batch_mask] = mask_logits_i
 
         elif self.mask_type == 'roi':
+            images = storage_dict['images']
             pred_boxes = storage_dict['pred_boxes'][seg_qry_ids]
 
-            images = storage_dict['images']
             roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
             roi_boxes = torch.cat([batch_ids[:, None], roi_boxes], dim=1)
-
             roi_key_feat_map = self.roi_ext([key_feat_maps[self.key_map_id]], roi_boxes)
-            mask_logits = torch.einsum('qc,qchw->qhw', qry_feats, roi_key_feat_map)
+
+            if self.qry_key is not None:
+                kH, kW = roi_key_feat_map.size()[2:]
+
+                qry_feats = qry_feats[:, None, :].expand(-1, kH*kW, -1).flatten(0, 1)
+                key_feats = roi_key_feat_map.permute(0, 2, 3, 1).flatten(0, 2)
+
+                mask_logits = self.qry_key(qry_feats, key_feats)
+                mask_logits = mask_logits.view(num_qrys, kH, kW)
+
+            else:
+                mask_logits = torch.einsum('qc,qchw->qhw', qry_feats, roi_key_feat_map)
 
         else:
             error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
@@ -775,9 +806,9 @@ class BaseSegHead(nn.Module):
             mask_targets = mask_targets.squeeze(dim=1)
 
         elif self.mask_type == 'roi':
+            images = storage_dict['images']
             pred_boxes = storage_dict['pred_boxes'][matched_qry_ids]
 
-            images = storage_dict['images']
             roi_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
             roi_boxes = torch.cat([matched_tgt_ids[:, None], roi_boxes], dim=1)
 
@@ -801,8 +832,10 @@ class BaseSegHead(nn.Module):
             mask_targets = mask_targets[update_mask]
 
         # Get mask loss
-        mask_loss = 0.0 * qry_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
-        mask_loss += self.loss(mask_logits, mask_targets)
+        if mask_logits.numel() == 0:
+            mask_loss = 0.0 * qry_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
+        else:
+            mask_loss = self.loss(mask_logits, mask_targets)
 
         if self.mask_update and self.loss_updated_only:
             mask_loss *= len(matched_qry_ids)
