@@ -337,7 +337,7 @@ model = dict(
             loss_cfg=dict(
                 type='mmdet.CrossEntropyLoss',
                 use_sigmoid=True,
-                reduction='sum',
+                reduction='mean',
                 loss_weight=1.0,
             ),
         ),

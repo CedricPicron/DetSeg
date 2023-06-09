@@ -804,6 +804,9 @@ class BaseSegHead(nn.Module):
         mask_loss = 0.0 * qry_feats.sum() + sum(0.0 * p.flatten()[0] for p in self.parameters())
         mask_loss += self.loss(mask_logits, mask_targets)
 
+        if self.mask_update and self.loss_updated_only:
+            mask_loss *= len(matched_qry_ids)
+
         key_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
         loss_dict[key_name] = mask_loss
 
