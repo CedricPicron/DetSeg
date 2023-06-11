@@ -199,7 +199,9 @@ class BaseSegHead(nn.Module):
                     key_feats_i = key_feat_map[i, :, y_ids, x_ids]
 
                     if self.qry_key is not None:
-                        update_logits = self.qry_key(qry_feats_i, key_feats_i.t()).squeeze(dim=1)
+                        feats_list = [qry_feats_i, key_feats_i.t()]
+                        update_logits = self.qry_key(feats_list, feats_list=feats_list).squeeze(dim=1)
+
                     else:
                         update_logits = torch.einsum('kc,ck->k', qry_feats_i, key_feats_i)
 
@@ -222,7 +224,9 @@ class BaseSegHead(nn.Module):
                 key_feats = roi_key_feat_map[qry_ids, :, y_ids, x_ids]
 
                 if self.qry_key is not None:
-                    update_logits = self.qry_key(qry_feats, key_feats).squeeze(dim=1)
+                    feats_list = [qry_feats, key_feats]
+                    update_logits = self.qry_key(feats_list, feats_list=feats_list).squeeze(dim=1)
+
                 else:
                     update_logits = torch.einsum('kc,kc->k', qry_feats, key_feats)
 
@@ -251,7 +255,8 @@ class BaseSegHead(nn.Module):
                     key_feats_i = key_feat_map_i.permute(1, 2, 0)
                     key_feats_i = key_feats_i[None, :, :, :].expand(num_qrys, -1, -1, -1).flatten(0, 2)
 
-                    mask_logits_i = self.qry_key(qry_feats_i, key_feats_i)
+                    feats_list = [qry_feats_i, key_feats_i]
+                    mask_logits_i = self.qry_key(feats_list, feats_list=feats_list)
                     mask_logits_i = mask_logits_i.view(num_qrys, kH, kW)
 
                 else:
@@ -268,12 +273,13 @@ class BaseSegHead(nn.Module):
             roi_key_feat_map = self.roi_ext([key_feat_maps[self.key_map_id]], roi_boxes)
 
             if self.qry_key is not None:
-                kH, kW = roi_key_feat_map.size()[2:]
+                num_qrys, _, kH, kW = roi_key_feat_map.size()
 
                 qry_feats = qry_feats[:, None, :].expand(-1, kH*kW, -1).flatten(0, 1)
                 key_feats = roi_key_feat_map.permute(0, 2, 3, 1).flatten(0, 2)
 
-                mask_logits = self.qry_key(qry_feats, key_feats)
+                feats_list = [qry_feats, key_feats]
+                mask_logits = self.qry_key(feats_list, feats_list=feats_list)
                 mask_logits = mask_logits.view(num_qrys, kH, kW)
 
             else:

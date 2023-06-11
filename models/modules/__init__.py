@@ -8,6 +8,7 @@ from .box_coder import *  # noqa: F401, F403
 from .container import *  # noqa: F401, F403
 from .convolution import *  # noqa: F401, F403
 from .ffn import *  # noqa: F401, F403
+from .fusion import *  # noqa: F401, F403
 from .interpolate import *  # noqa: F401, F403
 from .loss import *  # noqa: F401, F403
 from .matcher import *  # noqa: F401, F403
