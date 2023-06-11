@@ -26,7 +26,13 @@ def build_backbone(args):
     # Build backbone module
     if args.backbone_type == 'cfg':
         backbone_cfg = Config.fromfile(args.backbone_cfg_path)
+
+        backbone_out_ids = backbone_cfg.pop('out_ids', None)
+        backbone_out_sizes = backbone_cfg.pop('out_sizes', None)
+
         backbone = build_model(backbone_cfg.model)
+        backbone.out_ids = getattr(backbone, 'out_ids', backbone_out_ids)
+        backbone.out_sizes = getattr(backbone, 'out_sizes', backbone_out_sizes)
 
     elif args.backbone_type == 'mmdet':
         backbone = MMDetBackbone(args.mmdet_backbone_cfg_path)

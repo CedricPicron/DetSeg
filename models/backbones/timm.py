@@ -25,13 +25,13 @@ class TimmBackbone(nn.Module):
         out_sizes (List): List [num_out_maps] containing the feature sizes of the output feature maps.
     """
 
-    def __init__(self, model_name, out_ids, pretrained=True):
+    def __init__(self, model_name, out_map_ids, pretrained=True):
         """
         Initializes the TimmBackbone module.
 
         Args:
             model_name (str): String containing the model name.
-            out_ids (Tuple): Tuple containing the output map indices of shape [num_out_maps].
+            out_map_ids (Tuple): Tuple containing the output map indices of shape [num_out_maps].
             pretrained (bool): Boolean indicating whether to use pretrained model weights (default=True).
         """
 
@@ -42,7 +42,7 @@ class TimmBackbone(nn.Module):
         temp_model = timm.create_model(model_name, features_only=True)
         ids_offset = int(math.log2(temp_model.feature_info.reduction()[0]))
 
-        out_indices = [out_id-ids_offset for out_id in out_ids]
+        out_indices = [out_map_id-ids_offset for out_map_id in out_map_ids]
         self.model = timm.create_model(model_name, features_only=True, out_indices=out_indices, pretrained=pretrained)
 
         # Register input normalization buffers
@@ -53,7 +53,7 @@ class TimmBackbone(nn.Module):
         self.register_buffer('in_norm_std', torch.tensor(in_norm_std))
 
         # Set attributes related to output feature maps
-        self.out_ids = list(out_ids)
+        self.out_ids = list(out_map_ids)
         self.out_sizes = self.model.feature_info.channels()
 
     def forward(self, images, **kwargs):
