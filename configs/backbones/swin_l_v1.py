@@ -1,6 +1,6 @@
 cp = 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_large_patch4_window12_384_22k.pth'
 
-backbone = dict(
+model = dict(
         type='mmdet.SwinTransformer',
         pretrain_img_size=384,
         embed_dims=192,
