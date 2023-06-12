@@ -7,6 +7,7 @@ from pathlib import Path
 import time
 
 import torch
+from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler, SequentialSampler
 
@@ -143,6 +144,7 @@ def get_parser():
     return parser
 
 
+@record
 def main(args):
     """
     Function containing the main program script.
