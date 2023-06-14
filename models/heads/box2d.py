@@ -4,7 +4,7 @@ Collection of 2D bounding box heads.
 
 from detectron2.layers import batched_nms
 from detectron2.structures.instances import Instances
-from detectron2.utils.visualizer import Visualizer
+from detectron2.utils.visualizer import ColorMode, Visualizer
 from mmcv.ops import soft_nms
 from mmdet.models.layers.transformer.utils import inverse_sigmoid
 import torch
@@ -495,8 +495,8 @@ class BaseBox2dHead(nn.Module):
                 image = image.permute(1, 2, 0) * 255
                 image = image.to(torch.uint8).cpu().numpy()
 
-                metadata = self.metadata
-                visualizer = Visualizer(image, metadata=metadata)
+                color_mode = ColorMode.SEGMENTATION if hasattr(self.metadata, 'stuff_classes') else ColorMode.IMAGE
+                visualizer = Visualizer(image, metadata=self.metadata, instance_mode=color_mode)
 
                 if i1 > i0:
                     img_labels = draw_dict['labels'][i0:i1].cpu().numpy()

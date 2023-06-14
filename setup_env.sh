@@ -29,6 +29,7 @@ python -m pip install timm
 # Install from git repositories using pip
 python -m pip install git+https://github.com/CedricPicron/boundary-iou-api.git
 python -m pip install git+https://github.com/CedricPicron/Deformable-DETR.git
+python -m pip install git+https://github.com/CedricPicron/panopticapi.git
 python -m pip install git+https://github.com/facebookresearch/detectron2.git
 
 # Install local extensions

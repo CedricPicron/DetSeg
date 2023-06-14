@@ -17,6 +17,14 @@ ln -s $COCO_DIR/annotations/image_info_test-dev2017.json datasets/coco/annotatio
 ln -s $COCO_DIR/annotations/instances_train2017.json datasets/coco/annotations/instances_train2017.json
 ln -s $COCO_DIR/annotations/instances_val2017.json datasets/coco/annotations/instances_val2017.json
 
+ln -s $COCO_DIR/annotations/panoptic_train2017 datasets/coco/annotations/panoptic_train2017
+ln -s $COCO_DIR/annotations/panoptic_train2017.json datasets/coco/annotations/panoptic_train2017.json
+ln -s $COCO_DIR/annotations/panoptic_val2017 datasets/coco/annotations/panoptic_val2017
+ln -s $COCO_DIR/annotations/panoptic_val2017.json datasets/coco/annotations/panoptic_val2017.json
+
+# Convert COCO panoptic annotations to COCO detection format
+python tools/convert_coco_panoptic.py
+
 # Set LVIS symbolic links
 LVIS_DIR=/esat/raidho/cpicron/Datasets/lvis
 

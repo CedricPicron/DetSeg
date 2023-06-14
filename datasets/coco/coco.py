@@ -52,6 +52,26 @@ for name in names:
     MetadataCatalog.get(name).thing_classes = thing_classes
     MetadataCatalog.get(name).thing_colors = thing_colors
 
+# Add splits with panoptic annotations
+PANOPTIC_SPLITS = {}
+PANOPTIC_SPLITS['coco_2017_train_panoptic'] = ('coco/train2017', 'coco/annotations/panoptic_train2017_converted.json')
+PANOPTIC_SPLITS['coco_2017_val_panoptic'] = ('coco/val2017', 'coco/annotations/panoptic_val2017_converted.json')
+SPLITS['coco'].update(PANOPTIC_SPLITS)
+
+# Merge thing and stuff items
+for split in SPLITS['coco']:
+    split_metadata = MetadataCatalog.get(split)
+
+    split_metadata.classes = split_metadata.thing_classes
+    split_metadata.colors = split_metadata.thing_colors
+
+    thing_val = getattr(split_metadata, 'thing_dataset_id_to_contiguous_id', {})
+    stuff_val = getattr(split_metadata, 'stuff_dataset_id_to_contiguous_id', {})
+    merge_val = {**thing_val, **stuff_val}
+
+    split_metadata._RENAMED.pop('dataset_id_to_contiguous_id', None)
+    setattr(split_metadata, 'dataset_id_to_contiguous_id', merge_val)
+
 
 class CocoDataset(Dataset):
     """
@@ -112,7 +132,7 @@ class CocoDataset(Dataset):
 
         Args:
             annotations (List): List [num_targets] with annotation dictionaries at least containing the key:
-                - segmentation (List): list of polygons delineating the segmentation mask related to the annotation.
+                - segmentation (List): list of polygons or RLEs delineating the segmentation mask of the annotation.
 
             iH (int): Height of image corresponding to the input annotations.
             iW (int): Width of image corresponding to the input annotations.
@@ -127,11 +147,16 @@ class CocoDataset(Dataset):
         # Get segmentation masks corresponding to each segmentation
         masks = torch.empty(len(segmentations), iH, iW, dtype=torch.bool)
 
-        for i, polygons in enumerate(segmentations):
-            rle_objs = coco_mask.frPyObjects(polygons, iH, iW)
-            mask = coco_mask.decode(rle_objs)
-            mask = mask[:, :, None] if len(mask.shape) == 2 else mask
-            masks[i] = torch.as_tensor(mask, dtype=torch.bool).any(dim=2)
+        for i, mask_i in enumerate(segmentations):
+
+            if isinstance(mask_i, list):
+                mask_i = coco_mask.frPyObjects(mask_i, iH, iW)
+            elif isinstance(mask_i['counts'], list):
+                mask_i = coco_mask.frPyObjects(mask_i, iH, iW)
+
+            mask_i = coco_mask.decode(mask_i)
+            mask_i = mask_i[:, :, None] if len(mask_i.shape) == 2 else mask_i
+            masks[i] = torch.as_tensor(mask_i, dtype=torch.bool).any(dim=2)
 
         return masks
 
@@ -171,7 +196,7 @@ class CocoDataset(Dataset):
             annotations = [anno for anno in annotations if 'iscrowd' not in anno or anno['iscrowd'] == 0]
 
             # Get object class labels (in contiguous label id space)
-            id_dict = self.metadata.thing_dataset_id_to_contiguous_id
+            id_dict = self.metadata.dataset_id_to_contiguous_id
             labels = [id_dict[annotation['category_id']] for annotation in annotations]
             labels = torch.tensor(labels, dtype=torch.int64)
 
@@ -346,7 +371,7 @@ class CocoEvaluator(object):
         image_ids = image_ids[batch_ids.cpu()]
 
         # Convert labels to original non-contiguous id space
-        orig_ids = list(self.metadata.thing_dataset_id_to_contiguous_id.keys())
+        orig_ids = list(self.metadata.dataset_id_to_contiguous_id.keys())
         orig_ids = labels.new_tensor(orig_ids)
         labels = orig_ids[labels]
 
