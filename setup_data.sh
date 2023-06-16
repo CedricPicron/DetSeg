@@ -25,6 +25,15 @@ ln -s $COCO_DIR/annotations/panoptic_val2017.json datasets/coco/annotations/pano
 # Convert COCO panoptic annotations to COCO detection format
 python tools/convert_coco_panoptic.py
 
+# Only track symbolic links of converted COCO panoptic annotations
+ANN_DIR=/esat/dragon/cpicron/Projects/GroupDetr/datasets/coco/annotations
+
+mv $ANN_DIR/panoptic_train2017_converted.json $ANN_DIR/panoptic_train2017_converted_ignored.json
+mv $ANN_DIR/panoptic_val2017_converted.json $ANN_DIR/panoptic_val2017_converted_ignored.json
+
+ln -s $ANN_DIR/panoptic_train2017_converted_ignored.json $ANN_DIR/panoptic_train2017_converted.json
+ln -s $ANN_DIR/panoptic_val2017_converted_ignored.json $ANN_DIR/panoptic_val2017_converted.json
+
 # Set LVIS symbolic links
 LVIS_DIR=/esat/raidho/cpicron/Datasets/lvis
 
