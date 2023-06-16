@@ -125,10 +125,21 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
             evaluator_i.metrics = []
 
             if 'masks' in pred_dict:
-                metrics = ['bbox', 'segm', 'boundary'] if eval_with_bnd else ['bbox', 'segm']
+                metrics = ['segm']
+
+                if eval_with_bnd:
+                    metrics.append('boundary')
+
+                if evaluator_i.result_format == 'default':
+                    metrics.insert(0, 'bbox')
+
                 evaluator_i.add_metrics(metrics)
 
             elif 'boxes' in pred_dict:
+                if evaluator_i.result_format == 'panoptic':
+                    evaluators.append(None)
+                    continue
+
                 evaluator_i.add_metrics(['bbox'])
 
             if len(evaluator_i.metrics) > 0:
@@ -152,7 +163,7 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     header = "Evaluation:" if epoch is None else f"Eval epoch {epoch}:"
 
     # Iterate over evaluation images
-    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
+    for i, (images, tgt_dict) in enumerate(metric_logger.log_every(dataloader, print_freq, header)):
 
         # Place images and target dictionary on correct device
         images = images.to(device)

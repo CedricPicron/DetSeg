@@ -1113,6 +1113,7 @@ class TopDownSegHead(nn.Module):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+        pred_mask_type (str): String containing the type of predicted segmentation mask.
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
@@ -1128,8 +1129,8 @@ class TopDownSegHead(nn.Module):
     def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, key_min_id,
                  key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg, seg_loss_weights,
                  ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None,
-                 roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, matcher_cfg=None, roi_sizes=None,
-                 apply_ids=None, **kwargs):
+                 roi_ins_cfg=None, get_segs=True, dup_attrs=None, max_segs=None, pred_mask_type='instance',
+                 matcher_cfg=None, roi_sizes=None, apply_ids=None, **kwargs):
         """
         Initializes the TopDownSegHead module.
 
@@ -1159,6 +1160,7 @@ class TopDownSegHead(nn.Module):
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            pred_mask_type (str): String containing the type of predicted segmentation mask (default='instance').
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
@@ -1217,6 +1219,7 @@ class TopDownSegHead(nn.Module):
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
+        self.pred_mask_type = pred_mask_type
         self.mask_thr = mask_thr
         self.metadata = metadata
         self.seg_loss_weights = seg_loss_weights
@@ -1250,6 +1253,7 @@ class TopDownSegHead(nn.Module):
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve various items from storage dictionary
@@ -1358,7 +1362,20 @@ class TopDownSegHead(nn.Module):
 
             mask_scores = _do_paste_mask(mask_scores, pred_boxes_i, iH, iW, skip_empty=False)[0]
             mask_scores = mask_scores[pred_inv_ids]
-            pred_masks_i = mask_scores > self.mask_thr
+
+            if self.pred_mask_type == 'instance':
+                pred_masks_i = mask_scores > self.mask_thr
+
+            elif self.pred_mask_type == 'panoptic':
+                max_ids = mask_scores.argmax(dim=0, keepdim=True)
+                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                pred_masks_i = torch.zeros_like(mask_scores, dtype=torch.bool)
+                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+            else:
+                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)

@@ -54,17 +54,12 @@ def mask_inv_transform(in_masks, images, batch_ids):
                 out_masks_i = F.crop(out_masks_i, top, left, height, width)
 
             elif transform_type == 'resize':
-                (width_ratio, height_ratio) = transform[1]
-                (old_height, old_width) = out_masks_i.size()[1:]
-
-                new_height = int(old_height / height_ratio)
-                new_width = int(old_width / width_ratio)
-                new_size = (new_height, new_width)
+                new_width, new_height = transform[2]
 
                 if len(out_masks_i) > 0:
-                    out_masks_i = F.resize(out_masks_i, new_size)
+                    out_masks_i = F.resize(out_masks_i, (new_height, new_width))
                 else:
-                    out_masks_i = out_masks_i.new_zeros([0, *new_size])
+                    out_masks_i = out_masks_i.new_zeros([0, new_height, new_width])
 
             else:
                 error_msg = f"Unknown transform type (got '{transform_type}')."

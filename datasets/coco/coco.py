@@ -6,10 +6,12 @@ import json
 import logging
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 from boundary_iou.coco_instance_api.coco import COCO
 from boundary_iou.coco_instance_api.cocoeval import COCOeval
+from boundary_iou.coco_panoptic_api.evaluation import pq_compute
 from boundary_iou.lvis_instance_api.eval import LVISEval
 from boundary_iou.lvis_instance_api.lvis import LVIS
 from boundary_iou.lvis_instance_api.results import LVISResults
@@ -18,6 +20,7 @@ from detectron2.data.datasets.builtin import _PREDEFINED_SPLITS_COCO as SPLITS
 from detectron2.layers import batched_nms
 import numpy as np
 import pandas as pd
+from panopticapi.converters.detection2panoptic_coco_format import convert_detection_to_panoptic_coco_format
 from PIL import Image
 from pycocotools import mask as coco_mask
 import torch
@@ -253,9 +256,13 @@ class CocoEvaluator(object):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         metrics (List): List with strings containing the evaluation metrics to be used.
         result_dicts (Dict): Dictionary of lists containing prediction results in COCO results format for each metric.
+        result_format (str): String containing the type of result format.
 
         eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
         nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections.
+
+        If result_format is 'panoptic':
+            image_dicts (List): List of dictionaries containing information about each dataset image.
 
         has_gt_anns (bool): Boolean indicating whether evaluation dataset has ground-truth annotations.
 
@@ -269,16 +276,22 @@ class CocoEvaluator(object):
                 lvis (LVIS): Object containing the LVIS annotations.
     """
 
-    def __init__(self, eval_dataset, ann_format=None, lvis_ann_file=None, metrics=None, nms_thr=0.5):
+    def __init__(self, eval_dataset, ann_format=None, annotation_file=None, info_file=None, metrics=None, nms_thr=0.5,
+                 result_format='default'):
         """
         Initializes the CocoEvaluator evaluator.
 
         Args:
             eval_dataset (CocoDataset): The evaluation dataset.
             ann_format (str): String containing the annotation format (default=None).
-            lvis_ann_file (str): String containing the path to the file with LVIS annotations (default=None).
+            annotation_file (Path): Path to annotation file with COCO annotations (default=None).
+            info_file (Path): Path to file with additional image information, but no annotations (default=None).
             metrics (List): List with strings containing the evaluation metrics to be used (default=None).
             nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
+            result_format (str): String containing the type of result format (default='default').
+
+        Raises:
+            ValueError: Error when neither annotation nor info file is provided when using 'panoptic' result format.
         """
 
         # Set base attributes
@@ -286,10 +299,24 @@ class CocoEvaluator(object):
         self.metadata = eval_dataset.metadata
         self.metrics = metrics if metrics is not None else []
         self.result_dicts = []
+        self.result_format = result_format
 
         # Set NMS attributes
         self.eval_nms = len(eval_dataset.transforms) > 1
         self.nms_thr = nms_thr
+
+        # Get list of image dictionaries if needed
+        if self.result_format == 'panoptic':
+            if annotation_file is not None:
+                json_file_name = annotation_file
+            elif info_file is not None:
+                json_file_name = info_file
+            else:
+                error_msg = "Neither annotation nor info file provided when using 'panoptic' result format."
+                raise ValueError(error_msg)
+
+            with open(json_file_name) as json_file:
+                self.image_dicts = json.load(json_file)['images']
 
         # Set attributes related to ground-truth annotations
         self.has_gt_anns = hasattr(eval_dataset, 'coco')
@@ -301,7 +328,7 @@ class CocoEvaluator(object):
                 self.coco = eval_dataset.coco
 
             elif self.ann_format == 'lvis':
-                self.lvis = LVIS(lvis_ann_file)
+                self.lvis = LVIS(annotation_file)
 
     def add_metrics(self, metrics):
         """
@@ -364,6 +391,23 @@ class CocoEvaluator(object):
         # Transform segmentation masks to original image space and convert them to desired format
         if segms is not None:
             segms = mask_inv_transform(segms, images, batch_ids)
+
+            if self.result_format == 'panoptic':
+                segms = torch.stack(segms, dim=0)
+
+                max_ids = segms.float().argmax(dim=0, keepdim=True)
+                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                segms = torch.zeros_like(segms)
+                segms.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+                non_empty_mask = segms.flatten(1).sum(dim=1) > 0
+                labels = labels[non_empty_mask]
+                boxes = boxes[non_empty_mask] if boxes is not None else None
+                segms = [segm for segm in segms[non_empty_mask]]
+                scores = scores[non_empty_mask]
+                batch_ids = batch_ids[non_empty_mask]
+
             segms = mask_to_rle(segms)
 
         # Get image indices corresponding to predictions
@@ -433,6 +477,7 @@ class CocoEvaluator(object):
             eval_dict (Dict): Dictionary with evaluation results for each metric (if annotations are available).
 
         Raises:
+            ValueError: Error when CocoEvaluator evaluator has unknown result format.
             ValueError: Error when CocoEvaluator evaluator has unknown annotation format.
         """
 
@@ -489,69 +534,127 @@ class CocoEvaluator(object):
             data.drop(index=drop_result_ids, inplace=True)
             self.result_dicts = data.to_dict('records')
 
+        # Get results in panoptic format if needed
+        if self.result_format == 'panoptic':
+            for i, result_dict in enumerate(self.result_dicts):
+                result_dict['id'] = i
+
+            ann_dict = {}
+            ann_dict['images'] = [img_dict for img_dict in self.image_dicts if img_dict['id'] in self.image_ids]
+            ann_dict['annotations'] = self.result_dicts
+
+            tmp_dir = TemporaryDirectory()
+            tmp_dir_path = Path(tmp_dir.name)
+            in_json_file = tmp_dir_path / 'in.json'
+
+            with open(in_json_file, 'w') as json_file:
+                json.dump(ann_dict, json_file)
+
+            in_json_file = str(in_json_file)
+            seg_folder = str(tmp_dir_path / f'{save_name}')
+            out_json_file = str(tmp_dir_path / f'{save_name}.json')
+            cat_json = 'datasets/coco/annotations/panoptic_coco_categories.json'
+
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stdout(devnull):
+                    args = (in_json_file, seg_folder, out_json_file, cat_json)
+                    convert_detection_to_panoptic_coco_format(*args)
+
         # Save result dictionaries if needed
         if output_dir is not None:
             if save_results or not self.has_gt_anns:
-                json_file_name = output_dir / f'{save_name}.json'
                 zip_file_name = output_dir / f'{save_name}.zip'
 
-                with open(json_file_name, 'w') as json_file:
-                    json.dump(self.result_dicts, json_file)
+                if self.result_format == 'default':
+                    json_file_name = output_dir / f'{save_name}.json'
 
-                with ZipFile(zip_file_name, 'w') as zip_file:
-                    zip_file.write(json_file_name, arcname=f'{save_name}.json')
-                    os.remove(json_file_name)
+                    with open(json_file_name, 'w') as json_file:
+                        json.dump(self.result_dicts, json_file)
+
+                    with ZipFile(zip_file_name, 'w') as zip_file:
+                        zip_file.write(json_file_name, arcname=f'{save_name}.json')
+                        os.remove(json_file_name)
+
+                elif self.result_format == 'panoptic':
+                    with ZipFile(zip_file_name, 'w') as zip_file:
+                        zip_file.write(out_json_file, arcname=f'{save_name}.json')
+                        zip_file.write(seg_folder, arcname=f'{save_name}')
+
+                else:
+                    error_msg = f"Unknown result format '{self.result_format}' for CocoEvaluator evaluator."
+                    raise ValueError(error_msg)
 
         # Return if no ground-truth annotations are available
         if not self.has_gt_anns:
+            if self.result_format == 'panoptic':
+                tmp_dir.cleanup()
             return
 
         # Compare predictions with ground-truth annotations
         eval_dict = {}
 
-        for metric_id, metric in enumerate(self.metrics):
+        if self.result_format == 'default':
+            for metric_id, metric in enumerate(self.metrics):
 
-            if self.ann_format == 'coco':
-                with open(os.devnull, 'w') as devnull:
-                    with contextlib.redirect_stdout(devnull):
+                if self.ann_format == 'coco':
+                    with open(os.devnull, 'w') as devnull:
+                        with contextlib.redirect_stdout(devnull):
 
-                        if metric_id == 0:
-                            coco_res = self.coco.loadRes(self.result_dicts)
+                            if metric_id == 0:
+                                coco_res = self.coco.loadRes(self.result_dicts)
 
-                        sub_evaluator = COCOeval(self.coco, coco_res, iouType=metric)
-                        sub_evaluator.params.imgIds = self.image_ids
-                        sub_evaluator.evaluate()
-                        sub_evaluator.accumulate()
+                            sub_evaluator = COCOeval(self.coco, coco_res, iouType=metric)
+                            sub_evaluator.params.imgIds = self.image_ids
+                            sub_evaluator.evaluate()
+                            sub_evaluator.accumulate()
 
+                    print()
+                    print(f"Evaluation metric: {metric}")
+                    sub_evaluator.summarize()
+                    eval_dict[metric] = sub_evaluator.stats.tolist()
+
+                elif self.ann_format == 'lvis':
+                    prev_log_lvl = logging.root.manager.disable
+                    logging.disable()
+
+                    with open(os.devnull, 'w') as devnull:
+                        with contextlib.redirect_stdout(devnull):
+
+                            if metric_id == 0:
+                                lvis_res = LVISResults(self.lvis, self.result_dicts)
+
+                            sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
+                            sub_evaluator.params.img_ids = self.image_ids
+
+                    sub_evaluator.evaluate()
+                    sub_evaluator.accumulate()
+                    sub_evaluator.summarize(show_freq_groups=False)
+                    logging.disable(prev_log_lvl)
+
+                    print()
+                    print(f"Evaluation metric: {metric}")
+                    sub_evaluator.print_results()
+                    eval_dict[metric] = list(sub_evaluator.get_results().values())
+
+                else:
+                    error_msg = f"Unknown annotation format '{self.evaluator_type}' for CocoEvaluator evaluator."
+                    raise ValueError(error_msg)
+
+        elif self.result_format == 'panoptic':
+            gt_json_file = 'datasets/coco/annotations/panoptic_val2017.json'
+            gt_folder = 'datasets/coco/annotations/panoptic_val2017'
+            args = (gt_json_file, out_json_file, gt_folder, seg_folder)
+
+            for metric in self.metrics:
+                print()
                 print(f"Evaluation metric: {metric}")
-                sub_evaluator.summarize()
-                eval_dict[metric] = sub_evaluator.stats.tolist()
+                pq_compute(*args, gt_img_ids=self.image_ids, iou_type=metric, verbose=False)
 
-            elif self.ann_format == 'lvis':
-                prev_log_lvl = logging.root.manager.disable
-                logging.disable()
+            tmp_dir.cleanup()
 
-                with open(os.devnull, 'w') as devnull:
-                    with contextlib.redirect_stdout(devnull):
-
-                        if metric_id == 0:
-                            lvis_res = LVISResults(self.lvis, self.result_dicts)
-
-                        sub_evaluator = LVISEval(self.lvis, lvis_res, iou_type=metric)
-                        sub_evaluator.params.img_ids = self.image_ids
-
-                sub_evaluator.evaluate()
-                sub_evaluator.accumulate()
-                sub_evaluator.summarize(show_freq_groups=False)
-                logging.disable(prev_log_lvl)
-
-                print(f"Evaluation metric: {metric}")
-                sub_evaluator.print_results()
-                eval_dict[metric] = list(sub_evaluator.get_results().values())
-
-            else:
-                error_msg = f"Unknown annotation format '{self.evaluator_type}' for CocoEvaluator evaluator."
-                raise ValueError(error_msg)
+        else:
+            error_msg = f"Unknown result format '{self.result_format}' for CocoEvaluator evaluator."
+            raise ValueError(error_msg)
 
         return eval_dict
 
@@ -596,12 +699,16 @@ def build_coco(args):
     datasets['eval'] = CocoDataset(image_dir, eval_transforms, metadata, **file_kwargs)
 
     # Get evaluator
+    nms_thr = args.eval_nms_thr
+
     if 'lvis' in args.eval_split and 'val' in args.eval_split:
-        lvis_ann_file = root / SPLITS['lvis'][f'{args.eval_split}_cocofied'][1]
-        nms_thr = args.eval_nms_thr
-        evaluator = CocoEvaluator(datasets['eval'], ann_format='lvis', lvis_ann_file=lvis_ann_file, nms_thr=nms_thr)
+        file_kwargs['annotation_file'] = root / SPLITS['lvis'][f'{args.eval_split}_cocofied'][1]
+        evaluator = CocoEvaluator(datasets['eval'], ann_format='lvis', nms_thr=nms_thr, **file_kwargs)
+
+    elif 'panoptic' in args.eval_split:
+        evaluator = CocoEvaluator(datasets['eval'], nms_thr=nms_thr, result_format='panoptic', **file_kwargs)
 
     else:
-        evaluator = CocoEvaluator(datasets['eval'], nms_thr=args.eval_nms_thr)
+        evaluator = CocoEvaluator(datasets['eval'], nms_thr=nms_thr)
 
     return datasets, evaluator

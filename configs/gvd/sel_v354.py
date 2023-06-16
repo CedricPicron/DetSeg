@@ -189,7 +189,7 @@ model = dict(
             box_coder_cfg=dict(
               type='RcnnBoxCoder',
             ),
-            get_dets=True,
+            get_dets=False,
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
@@ -267,6 +267,7 @@ model = dict(
                 nms_thr=0.5,
             ),
             max_segs=100,
+            pred_mask_type='panoptic',
         ),
     ],
     head_apply_ids=[6],

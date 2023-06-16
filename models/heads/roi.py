@@ -41,13 +41,14 @@ class StandardRoIHead(MMDetStandardRoIHead):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+        pred_mask_type (str): String containing the type of predicted segmentation mask.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module matching predictions with targets.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None,
-                 max_segs=None, matcher_cfg=None, apply_ids=None, **kwargs):
+                 max_segs=None, pred_mask_type='instance', matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
@@ -59,6 +60,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            pred_mask_type (str): String containing the type of predicted segmentation mask (default='instance').
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
@@ -79,6 +81,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
+        self.pred_mask_type = pred_mask_type
         self.metadata = metadata
         self.apply_ids = apply_ids
 
@@ -110,6 +113,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -223,7 +227,20 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_scores_i > 0.5
+
+            if self.pred_mask_type == 'instance':
+                pred_masks_i = mask_scores_i > 0.5
+
+            elif self.pred_mask_type == 'panoptic':
+                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
+                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
+                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+            else:
+                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
@@ -628,6 +645,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -743,7 +761,20 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_scores_i > 0.5
+
+            if self.pred_mask_type == 'instance':
+                pred_masks_i = mask_scores_i > 0.5
+
+            elif self.pred_mask_type == 'panoptic':
+                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
+                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
+                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+            else:
+                error_msg = f"Invalid prediction mask type in PointRendRoIHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
@@ -977,6 +1008,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -1104,7 +1136,20 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             mask_scores_i = mask_logits_i[-1].sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            pred_masks_i = mask_scores_i > 0.5
+
+            if self.pred_mask_type == 'instance':
+                pred_masks_i = mask_scores_i > 0.5
+
+            elif self.pred_mask_type == 'panoptic':
+                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
+                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
+                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+            else:
+                error_msg = f"Invalid prediction mask type in RefineMaskRoIHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)

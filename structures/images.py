@@ -335,7 +335,7 @@ class Images(object):
 
         # Add resize operation to list of transforms
         for img_transforms in self.transforms:
-            img_transforms.append(('resize', resize_ratio))
+            img_transforms.append(('resize', resize_ratio, image_size))
 
         return self, size, resize_ratio
 
