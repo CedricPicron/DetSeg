@@ -648,7 +648,8 @@ class CocoEvaluator(object):
             for metric in self.metrics:
                 print()
                 print(f"Evaluation metric: {metric}")
-                pq_compute(*args, gt_img_ids=self.image_ids, iou_type=metric, verbose=False)
+                eval_dict[metric] = pq_compute(*args, gt_img_ids=self.image_ids, iou_type=metric, verbose=False)
+                eval_dict[metric].pop('per_class')
 
             tmp_dir.cleanup()
 

@@ -163,7 +163,7 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     header = "Evaluation:" if epoch is None else f"Eval epoch {epoch}:"
 
     # Iterate over evaluation images
-    for i, (images, tgt_dict) in enumerate(metric_logger.log_every(dataloader, print_freq, header)):
+    for images, tgt_dict in metric_logger.log_every(dataloader, print_freq, header):
 
         # Place images and target dictionary on correct device
         images = images.to(device)
