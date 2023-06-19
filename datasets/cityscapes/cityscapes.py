@@ -169,6 +169,7 @@ class CityscapesEvaluator(object):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         metrics (List): List [num_metrics] with strings specifying the evaluation metrics.
         result_dicts (List): List [num_preds] with prediction-specific result dictionaries.
+        result_format (str): String containing the type of result format.
 
         eval_nms (bool): Boolean indicating whether to perform NMS during evaluation.
         nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections.
@@ -176,7 +177,7 @@ class CityscapesEvaluator(object):
         has_gt_anns (bool): Boolean indicating whether evaluation dataset has ground-truth annotations.
     """
 
-    def __init__(self, eval_dataset, metrics=None, nms_thr=0.5):
+    def __init__(self, eval_dataset, metrics=None, nms_thr=0.5, result_format='default'):
         """
         Initializes the CityscapesEvaluator evaluator.
 
@@ -184,6 +185,7 @@ class CityscapesEvaluator(object):
             eval_dataset (CityscapesDataset): The evaluation dataset.
             metrics (List): List [num_metrics] with strings specifying the evaluation metrics (default=None).
             nms_thr (float): IoU threshold used during evaluation NMS to remove duplicate detections (default=0.5).
+            result_format (str): String containing the type of result format (default='default').
         """
 
         # Set base attributes
@@ -192,6 +194,7 @@ class CityscapesEvaluator(object):
         self.metadata = eval_dataset.metadata
         self.metrics = metrics if metrics is not None else []
         self.result_dicts = []
+        self.result_format = result_format
 
         # Set NMS attributes
         self.eval_nms = len(eval_dataset.transforms) > 1
@@ -231,11 +234,13 @@ class CityscapesEvaluator(object):
             pred_dict (Dict): Prediction dictionary potentially containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
-                - masks (BoolTensor): predicted segmentation masks of shape [num_preds, mH, mW];
+                - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
+                - mask_thr (float): value containing the normalized segmentation mask threshold.
 
         Raises:
+            ValueError: Error when CityscapesEvaluator evaluator has unknown result format.
             ValueError: Error when no box predictions are provided when using evaluation NMS.
         """
 
@@ -245,7 +250,7 @@ class CityscapesEvaluator(object):
         # Extract predictions from prediction dictionary
         labels = pred_dict['labels']
         boxes = pred_dict.get('boxes', None)
-        segms = pred_dict.get('masks', None)
+        mask_scores = pred_dict.get('mask_scores', None)
         scores = pred_dict['scores']
         batch_ids = pred_dict['batch_ids']
 
@@ -255,14 +260,20 @@ class CityscapesEvaluator(object):
             boxes = boxes[well_defined].to_format('xyxy')
 
             labels = labels[well_defined]
-            segms = segms[well_defined] if segms is not None else None
+            mask_scores = mask_scores[well_defined] if mask_scores is not None else None
             scores = scores[well_defined]
             batch_ids = batch_ids[well_defined]
 
-        # Transform segmentation masks to original image space
-        if segms is not None:
-            segms = mask_inv_transform(segms, images, batch_ids)
-            segms = mask_to_rle(segms)
+        # Get segmentation masks in original image space
+        if mask_scores is not None:
+
+            if self.result_format == 'default':
+                masks = mask_scores > pred_dict.get('mask_thr', 0.5)
+                masks = mask_inv_transform(masks, images, batch_ids)
+
+            else:
+                error_msg = f"Unknown result format '{self.result_format}' for CityscapesEvaluator evaluator."
+                raise ValueError(error_msg)
 
         # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
@@ -292,8 +303,8 @@ class CityscapesEvaluator(object):
                 error_msg = "Box predictions must be provided when using evaluation NMS."
                 raise ValueError(error_msg)
 
-        if segms is not None:
-            result_dict['segmentation'] = segms
+        if mask_scores is not None:
+            result_dict['segmentation'] = mask_to_rle(masks)
 
         # Get list of result dictionaries
         result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')

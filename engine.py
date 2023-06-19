@@ -118,25 +118,27 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
     if evaluator is not None:
         sample_images = next(iter(dataloader))[0]
         pred_dicts = model(sample_images.to(device))[0]
+
+        result_format = getattr(evaluator, 'result_format', 'default')
         evaluators = []
 
         for pred_dict in pred_dicts:
             evaluator_i = deepcopy(evaluator)
             evaluator_i.metrics = []
 
-            if 'masks' in pred_dict:
+            if 'mask_scores' in pred_dict:
                 metrics = ['segm']
 
                 if eval_with_bnd:
                     metrics.append('boundary')
 
-                if evaluator_i.result_format == 'default':
+                if result_format == 'default':
                     metrics.insert(0, 'bbox')
 
                 evaluator_i.add_metrics(metrics)
 
             elif 'boxes' in pred_dict:
-                if evaluator_i.result_format == 'panoptic':
+                if result_format == 'panoptic':
                     evaluators.append(None)
                     continue
 

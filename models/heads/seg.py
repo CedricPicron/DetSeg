@@ -48,6 +48,7 @@ class BaseSegHead(nn.Module):
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
         mask_thr (float): Value containing the normalized segmentation mask threshold.
+        pred_mask_type (str): String containing the type of predicted segmentation mask.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         tgt_roi_ext (nn.Module): Optional module containing the target RoI-extractor.
@@ -60,8 +61,8 @@ class BaseSegHead(nn.Module):
     def __init__(self, mask_type, metadata, loss_cfg, process_all_qrys=False, qry_cfg=None, key_cfg=None,
                  qry_key_cfg=None, mask_update=False, key_map_id=0, update_mask_key=None, roi_ext_cfg=None,
                  get_bnd_mask=False, get_unc_mask=False, unc_thr=100, get_segs=True, score_attrs=None, dup_attrs=None,
-                 max_segs=None, mask_thr=0.5, matcher_cfg=None, loss_sample_cfg=None, loss_updated_only=True,
-                 apply_ids=None, **kwargs):
+                 max_segs=None, mask_thr=0.5, pred_mask_type='instance', matcher_cfg=None, loss_sample_cfg=None,
+                 loss_updated_only=True, apply_ids=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
@@ -83,8 +84,9 @@ class BaseSegHead(nn.Module):
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             score_attrs (Dict): Attribute dictionary specifying the scoring mechanism (default=None).
             dup_attrs (Dict): Dictionary specifying the duplicate removal or rescoring mechanism (default=None).
-            mask_thr (float): Value containing the normalized segmentation mask threshold (default=0.5).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            mask_thr (float): Value containing the normalized segmentation mask threshold (default=0.5).
+            pred_mask_type (str): String containing the type of predicted segmentation mask (default='instance').
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             loss_sample_cfg (Dict): Configuration dictionary specifying the loss sample module (default=None).
             loss_updated_only (bool): Boolean indicating whether to apply loss in updated points only (default=True).
@@ -132,6 +134,7 @@ class BaseSegHead(nn.Module):
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
         self.max_segs = max_segs
         self.mask_thr = mask_thr
+        self.pred_mask_type = pred_mask_type
         self.metadata = metadata
         self.loss_updated_only = loss_updated_only
         self.apply_ids = apply_ids
@@ -314,7 +317,7 @@ class BaseSegHead(nn.Module):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -360,8 +363,9 @@ class BaseSegHead(nn.Module):
             pred_scores = (pred_scores**cls_power) * (box_scores**box_power)
 
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
+        pred_dict['mask_thr'] = self.mask_thr
 
         # Iterate over every batch entry
         for i in range(batch_size):
@@ -430,7 +434,6 @@ class BaseSegHead(nn.Module):
 
                 mask_scores_i = mask_scores_i.unsqueeze(dim=1)
                 mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-                mask_scores_i = mask_scores_i.squeeze(dim=1)
 
             else:
                 error_msg = f"Invalid mask type in BaseSegHead (got '{self.mask_type}')."
@@ -441,10 +444,10 @@ class BaseSegHead(nn.Module):
 
             # Update prediction scores based on mask scores
             mask_areas = pred_masks_i.flatten(1).sum(dim=1).clamp_(min=1)
-            mask_scores_i = (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1) / mask_areas
+            avg_mask_scores = (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1) / mask_areas
 
             mask_power = self.score_attrs.get('mask_power', 1.0)
-            pred_scores_i = pred_scores_i * (mask_scores_i ** mask_power)
+            pred_scores_i = pred_scores_i * (avg_mask_scores ** mask_power)
 
             # Remove duplicate predictions if needed
             if dup_type is not None and dup_needs_masks:
@@ -455,6 +458,7 @@ class BaseSegHead(nn.Module):
                     candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
                     pred_labels_i = pred_labels_i[candidate_ids]
+                    mask_scores_i = mask_scores_i[candidate_ids]
                     pred_masks_i = pred_masks_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
@@ -463,7 +467,7 @@ class BaseSegHead(nn.Module):
                     non_dup_ids = batched_nms(pred_boxes_i.boxes, pred_scores_i, pred_labels_i, iou_thr)
 
                     pred_labels_i = pred_labels_i[non_dup_ids]
-                    pred_masks_i = pred_masks_i[non_dup_ids]
+                    mask_scores_i = mask_scores_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
 
                 else:
@@ -476,12 +480,16 @@ class BaseSegHead(nn.Module):
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
                     pred_labels_i = pred_labels_i[top_pred_ids]
-                    pred_masks_i = pred_masks_i[top_pred_ids]
+                    mask_scores_i = mask_scores_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
+
+            # Reweight mask scores if needed
+            if self.pred_mask_type == 'panoptic':
+                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
@@ -510,7 +518,7 @@ class BaseSegHead(nn.Module):
             pred_dicts (List): List with prediction dictionaries containing as last entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -519,16 +527,20 @@ class BaseSegHead(nn.Module):
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
-            vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
+            vis_score_thr (float): Threshold indicating the minimum score for an instance to be drawn (default=0.4).
             id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             images_dict (Dict): Dictionary containing additional images annotated with segmentations.
+
+        Raises:
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
-        # Retrieve images from storage dictionary
+        # Retrieve images from storage dictionary and get batch size
         images = storage_dict['images']
+        batch_size = len(images)
 
         # Initialize list of draw dictionaries and list of dictionary names
         draw_dicts = []
@@ -536,42 +548,98 @@ class BaseSegHead(nn.Module):
 
         # Get prediction draw dictionary and dictionary name
         pred_dict = pred_dicts[-1]
+        draw_dict = {}
 
-        pred_scores = pred_dict['scores']
-        sufficient_score = pred_scores >= vis_score_thr
+        if self.pred_mask_type == 'instance':
+            pred_scores = pred_dict['scores']
+            sufficient_score = pred_scores >= vis_score_thr
 
-        pred_labels = pred_dict['labels'][sufficient_score]
-        pred_masks = pred_dict['masks'][sufficient_score]
-        pred_scores = pred_scores[sufficient_score]
-        pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            draw_dict['labels'] = pred_dict['labels'][sufficient_score]
+            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['scores'] = pred_scores[sufficient_score]
 
-        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
-        pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
 
-        draw_dict_keys = ['labels', 'masks', 'scores', 'sizes']
-        draw_dict_values = [pred_labels, pred_masks, pred_scores, pred_sizes]
+        elif self.pred_mask_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
 
-        draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            pred_labels = pred_dict['labels']
+            mask_scores = pred_dict['mask_scores']
+            pred_batch_ids = pred_dict['batch_ids']
+
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_labels.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
+
+            mask_list = []
+            segments = []
+
+            for i0, i1 in zip(pred_sizes[:-1], pred_sizes[1:]):
+                mask_i = mask_scores[i0:i1].argmax(dim=0)
+                mask_list.append(mask_i)
+
+                for j in range(i1-i0):
+                    cat_id = pred_labels[i0+j]
+                    is_thing = cat_id in thing_ids
+
+                    segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                    segments.append(segment_ij)
+
+            draw_dict['masks'] = torch.stack(mask_list, dim=0)
+            draw_dict['segments'] = segments
+
+        else:
+            error_msg = f"Invalid prediction mask type in BaseSegHead (got '{self.pred_mask_type}')."
+            raise ValueError(error_msg)
+
         draw_dicts.append(draw_dict)
-
         dict_name = f"seg_pred_{id}" if id is not None else "seg_pred"
         dict_names.append(dict_name)
 
         # Get target draw dictionary and dictionary name if needed
         if tgt_dict is not None and not any('seg_tgt' in key for key in images_dict.keys()):
-            tgt_labels = tgt_dict['labels']
-            tgt_masks = tgt_dict['masks']
-            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
-            tgt_sizes = tgt_dict['sizes']
+            draw_dict = {}
 
-            draw_dict_values = [tgt_labels, tgt_masks, tgt_scores, tgt_sizes]
-            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            if self.pred_mask_type == 'instance':
+                draw_dict['labels'] = tgt_dict['labels']
+                draw_dict['masks'] = tgt_dict['masks']
+                draw_dict['scores'] = torch.ones_like(tgt_dict['labels'], dtype=torch.float)
+                draw_dict['sizes'] = tgt_dict['sizes']
+
+            elif self.pred_mask_type == 'panoptic':
+                tgt_labels = tgt_dict['labels']
+                tgt_masks = tgt_dict['masks']
+                tgt_sizes = tgt_dict['sizes']
+
+                mask_list = []
+                segments = []
+
+                for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
+                    mask_i = tgt_masks[i0:i1].int().argmax(dim=0)
+                    mask_list.append(mask_i)
+
+                    for j in range(i1-i0):
+                        cat_id = tgt_labels[i0+j]
+                        is_thing = cat_id in thing_ids
+
+                        segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                        segments.append(segment_ij)
+
+                draw_dict['masks'] = torch.stack(mask_list, dim=0)
+                draw_dict['segments'] = segments
+                draw_dict['sizes'] = tgt_sizes
+
+            else:
+                error_msg = f"Invalid prediction mask type in BaseSegHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             draw_dicts.append(draw_dict)
             dict_names.append('seg_tgt')
 
-        # Get number of images and image sizes without padding in (width, height) format
-        num_images = len(images)
+        # Get image sizes without padding in (width, height) format
         img_sizes = images.size(mode='without_padding')
 
         # Get image sizes with padding in (height, width) format
@@ -582,32 +650,43 @@ class BaseSegHead(nn.Module):
         for dict_name, draw_dict in zip(dict_names, draw_dicts):
             sizes = draw_dict['sizes']
 
-            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                img_size = img_sizes[image_id]
+            for i, i0, i1 in zip(range(batch_size), sizes[:-1], sizes[1:]):
+                img_size = img_sizes[i]
                 img_size = (img_size[1], img_size[0])
 
-                image = images.images[image_id].clone()
+                image = images.images[i].clone()
                 image = T.crop(image, 0, 0, *img_size)
                 image = image.permute(1, 2, 0) * 255
                 image = image.to(torch.uint8).cpu().numpy()
 
-                color_mode = ColorMode.SEGMENTATION if hasattr(self.metadata, 'stuff_classes') else ColorMode.IMAGE
-                visualizer = Visualizer(image, metadata=self.metadata, instance_mode=color_mode)
+                if self.pred_mask_type == 'instance':
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.IMAGE)
 
-                if i1 > i0:
-                    img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
-                    img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+                    if i1 > i0:
+                        labels_i = draw_dict['labels'][i0:i1].cpu().numpy()
+                        scores_i = draw_dict['scores'][i0:i1].cpu().numpy()
 
-                    img_masks = draw_dict['masks'][i0:i1]
-                    img_masks = T.resize(img_masks, img_sizes_pad)
-                    img_masks = T.crop(img_masks, 0, 0, *img_size)
-                    img_masks = img_masks.cpu().numpy()
+                        masks_i = draw_dict['masks'][i0:i1]
+                        masks_i = T.resize(masks_i, img_sizes_pad)
+                        masks_i = T.crop(masks_i, 0, 0, *img_size)
+                        masks_i = masks_i.cpu().numpy()
 
-                    instances = Instances(img_size, pred_classes=img_labels, pred_masks=img_masks, scores=img_scores)
-                    visualizer.draw_instance_predictions(instances)
+                        instances = Instances(img_size, pred_classes=labels_i, pred_masks=masks_i, scores=scores_i)
+                        visualizer.draw_instance_predictions(instances)
+
+                elif self.pred_mask_type == 'panoptic':
+                    mask_i = draw_dict['masks'][i].cpu()
+                    segments_i = draw_dict['segments'][i0:i1]
+
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.SEGMENTATION)
+                    visualizer.draw_panoptic_seg(mask_i, segments_i)
+
+                else:
+                    error_msg = f"Invalid prediction mask type in BaseSegHead (got '{self.pred_mask_type}')."
+                    raise ValueError(error_msg)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'{dict_name}_{image_id}'] = annotated_image
+                images_dict[f'{dict_name}_{i}'] = annotated_image
 
         return images_dict
 
@@ -1113,8 +1192,8 @@ class TopDownSegHead(nn.Module):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
-        pred_mask_type (str): String containing the type of predicted segmentation mask.
         mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
+        pred_mask_type (str): String containing the type of predicted segmentation mask.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes.
@@ -1219,8 +1298,8 @@ class TopDownSegHead(nn.Module):
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
-        self.pred_mask_type = pred_mask_type
         self.mask_thr = mask_thr
+        self.pred_mask_type = pred_mask_type
         self.metadata = metadata
         self.seg_loss_weights = seg_loss_weights
         self.ref_loss_weights = ref_loss_weights
@@ -1247,13 +1326,12 @@ class TopDownSegHead(nn.Module):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
-            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve various items from storage dictionary
@@ -1283,8 +1361,9 @@ class TopDownSegHead(nn.Module):
         batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
+        pred_dict['mask_thr'] = self.mask_thr
 
         # Iterate over every batch entry
         for i in range(batch_size):
@@ -1357,32 +1436,22 @@ class TopDownSegHead(nn.Module):
                     rH = rW = self.roi_sizes[j+1]
                     mask_logits = F.interpolate(mask_logits, (rH, rW), mode='bilinear', align_corners=False)
 
-            mask_scores = mask_logits.sigmoid()
+            mask_scores_i = mask_logits.sigmoid()
             pred_boxes_i = pred_boxes[seg_qry_ids]
 
-            mask_scores = _do_paste_mask(mask_scores, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            mask_scores = mask_scores[pred_inv_ids]
+            mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            mask_scores_i = mask_scores_i[pred_inv_ids]
 
-            if self.pred_mask_type == 'instance':
-                pred_masks_i = mask_scores > self.mask_thr
-
-            elif self.pred_mask_type == 'panoptic':
-                max_ids = mask_scores.argmax(dim=0, keepdim=True)
-                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
-
-                pred_masks_i = torch.zeros_like(mask_scores, dtype=torch.bool)
-                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
-
-            else:
-                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
-                raise ValueError(error_msg)
-
-            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores).flatten(1).sum(dim=1)
+            pred_masks_i = mask_scores_i > self.mask_thr
+            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+
+            if self.pred_mask_type == 'panoptic':
+                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
@@ -1411,7 +1480,7 @@ class TopDownSegHead(nn.Module):
             pred_dicts (List): List with prediction dictionaries containing as last entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -1420,16 +1489,20 @@ class TopDownSegHead(nn.Module):
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
-            vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
+            vis_score_thr (float): Threshold indicating the minimum score for an instance to be drawn (default=0.4).
             id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             images_dict (Dict): Dictionary containing additional images annotated with segmentations.
+
+        Raises:
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
-        # Retrieve images from storage dictionary
+        # Retrieve images from storage dictionary and get batch size
         images = storage_dict['images']
+        batch_size = len(images)
 
         # Initialize list of draw dictionaries and list of dictionary names
         draw_dicts = []
@@ -1437,42 +1510,98 @@ class TopDownSegHead(nn.Module):
 
         # Get prediction draw dictionary and dictionary name
         pred_dict = pred_dicts[-1]
+        draw_dict = {}
 
-        pred_scores = pred_dict['scores']
-        sufficient_score = pred_scores >= vis_score_thr
+        if self.pred_mask_type == 'instance':
+            pred_scores = pred_dict['scores']
+            sufficient_score = pred_scores >= vis_score_thr
 
-        pred_labels = pred_dict['labels'][sufficient_score]
-        pred_masks = pred_dict['masks'][sufficient_score]
-        pred_scores = pred_scores[sufficient_score]
-        pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            draw_dict['labels'] = pred_dict['labels'][sufficient_score]
+            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['scores'] = pred_scores[sufficient_score]
 
-        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
-        pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
 
-        draw_dict_keys = ['labels', 'masks', 'scores', 'sizes']
-        draw_dict_values = [pred_labels, pred_masks, pred_scores, pred_sizes]
+        elif self.pred_mask_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
 
-        draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            pred_labels = pred_dict['labels']
+            mask_scores = pred_dict['mask_scores']
+            pred_batch_ids = pred_dict['batch_ids']
+
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_labels.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
+
+            mask_list = []
+            segments = []
+
+            for i0, i1 in zip(pred_sizes[:-1], pred_sizes[1:]):
+                mask_i = mask_scores[i0:i1].argmax(dim=0)
+                mask_list.append(mask_i)
+
+                for j in range(i1-i0):
+                    cat_id = pred_labels[i0+j]
+                    is_thing = cat_id in thing_ids
+
+                    segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                    segments.append(segment_ij)
+
+            draw_dict['masks'] = torch.stack(mask_list, dim=0)
+            draw_dict['segments'] = segments
+
+        else:
+            error_msg = f"Invalid prediction mask type in TopDownSegHead (got '{self.pred_mask_type}')."
+            raise ValueError(error_msg)
+
         draw_dicts.append(draw_dict)
-
         dict_name = f"seg_pred_{id}" if id is not None else "seg_pred"
         dict_names.append(dict_name)
 
         # Get target draw dictionary and dictionary name if needed
         if tgt_dict is not None and not any('seg_tgt' in key for key in images_dict.keys()):
-            tgt_labels = tgt_dict['labels']
-            tgt_masks = tgt_dict['masks']
-            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
-            tgt_sizes = tgt_dict['sizes']
+            draw_dict = {}
 
-            draw_dict_values = [tgt_labels, tgt_masks, tgt_scores, tgt_sizes]
-            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            if self.pred_mask_type == 'instance':
+                draw_dict['labels'] = tgt_dict['labels']
+                draw_dict['masks'] = tgt_dict['masks']
+                draw_dict['scores'] = torch.ones_like(tgt_dict['labels'], dtype=torch.float)
+                draw_dict['sizes'] = tgt_dict['sizes']
+
+            elif self.pred_mask_type == 'panoptic':
+                tgt_labels = tgt_dict['labels']
+                tgt_masks = tgt_dict['masks']
+                tgt_sizes = tgt_dict['sizes']
+
+                mask_list = []
+                segments = []
+
+                for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
+                    mask_i = tgt_masks[i0:i1].int().argmax(dim=0)
+                    mask_list.append(mask_i)
+
+                    for j in range(i1-i0):
+                        cat_id = tgt_labels[i0+j]
+                        is_thing = cat_id in thing_ids
+
+                        segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                        segments.append(segment_ij)
+
+                draw_dict['masks'] = torch.stack(mask_list, dim=0)
+                draw_dict['segments'] = segments
+                draw_dict['sizes'] = tgt_sizes
+
+            else:
+                error_msg = f"Invalid prediction mask type in TopDownSegHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             draw_dicts.append(draw_dict)
             dict_names.append('seg_tgt')
 
-        # Get number of images and image sizes without padding in (width, height) format
-        num_images = len(images)
+        # Get image sizes without padding in (width, height) format
         img_sizes = images.size(mode='without_padding')
 
         # Get image sizes with padding in (height, width) format
@@ -1483,32 +1612,43 @@ class TopDownSegHead(nn.Module):
         for dict_name, draw_dict in zip(dict_names, draw_dicts):
             sizes = draw_dict['sizes']
 
-            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                img_size = img_sizes[image_id]
+            for i, i0, i1 in zip(range(batch_size), sizes[:-1], sizes[1:]):
+                img_size = img_sizes[i]
                 img_size = (img_size[1], img_size[0])
 
-                image = images.images[image_id].clone()
+                image = images.images[i].clone()
                 image = T.crop(image, 0, 0, *img_size)
                 image = image.permute(1, 2, 0) * 255
                 image = image.to(torch.uint8).cpu().numpy()
 
-                color_mode = ColorMode.SEGMENTATION if hasattr(self.metadata, 'stuff_classes') else ColorMode.IMAGE
-                visualizer = Visualizer(image, metadata=self.metadata, instance_mode=color_mode)
+                if self.pred_mask_type == 'instance':
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.IMAGE)
 
-                if i1 > i0:
-                    img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
-                    img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+                    if i1 > i0:
+                        labels_i = draw_dict['labels'][i0:i1].cpu().numpy()
+                        scores_i = draw_dict['scores'][i0:i1].cpu().numpy()
 
-                    img_masks = draw_dict['masks'][i0:i1]
-                    img_masks = T.resize(img_masks, img_sizes_pad)
-                    img_masks = T.crop(img_masks, 0, 0, *img_size)
-                    img_masks = img_masks.cpu().numpy()
+                        masks_i = draw_dict['masks'][i0:i1]
+                        masks_i = T.resize(masks_i, img_sizes_pad)
+                        masks_i = T.crop(masks_i, 0, 0, *img_size)
+                        masks_i = masks_i.cpu().numpy()
 
-                    instances = Instances(img_size, pred_classes=img_labels, pred_masks=img_masks, scores=img_scores)
-                    visualizer.draw_instance_predictions(instances)
+                        instances = Instances(img_size, pred_classes=labels_i, pred_masks=masks_i, scores=scores_i)
+                        visualizer.draw_instance_predictions(instances)
+
+                elif self.pred_mask_type == 'panoptic':
+                    mask_i = draw_dict['masks'][i].cpu()
+                    segments_i = draw_dict['segments'][i0:i1]
+
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.SEGMENTATION)
+                    visualizer.draw_panoptic_seg(mask_i, segments_i)
+
+                else:
+                    error_msg = f"Invalid prediction mask type in TopDownSegHead (got '{self.pred_mask_type}')."
+                    raise ValueError(error_msg)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'{dict_name}_{image_id}'] = annotated_image
+                images_dict[f'{dict_name}_{i}'] = annotated_image
 
         return images_dict
 

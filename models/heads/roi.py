@@ -107,13 +107,12 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
-            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -148,7 +147,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -228,26 +227,16 @@ class StandardRoIHead(MMDetStandardRoIHead):
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
 
-            if self.pred_mask_type == 'instance':
-                pred_masks_i = mask_scores_i > 0.5
-
-            elif self.pred_mask_type == 'panoptic':
-                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
-                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
-
-                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
-                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
-
-            else:
-                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
-                raise ValueError(error_msg)
-
+            pred_masks_i = mask_scores_i > 0.5
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
+            if self.pred_mask_type == 'panoptic':
+                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
@@ -276,7 +265,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing as last entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, fH, fW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -285,16 +274,20 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW];
                 - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
 
-            vis_score_thr (float): Threshold indicating the minimum score for a segmentation to be drawn (default=0.4).
+            vis_score_thr (float): Threshold indicating the minimum score for an instance to be drawn (default=0.4).
             id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             images_dict (Dict): Dictionary containing additional images annotated with segmentations.
+
+        Raises:
+            ValueError: Error when an invalid prediction mask type is provided.
         """
 
-        # Retrieve images from storage dictionary
+        # Retrieve images from storage dictionary and get batch size
         images = storage_dict['images']
+        batch_size = len(images)
 
         # Initialize list of draw dictionaries and list of dictionary names
         draw_dicts = []
@@ -302,42 +295,98 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         # Get prediction draw dictionary and dictionary name
         pred_dict = pred_dicts[-1]
+        draw_dict = {}
 
-        pred_scores = pred_dict['scores']
-        sufficient_score = pred_scores >= vis_score_thr
+        if self.pred_mask_type == 'instance':
+            pred_scores = pred_dict['scores']
+            sufficient_score = pred_scores >= vis_score_thr
 
-        pred_labels = pred_dict['labels'][sufficient_score]
-        pred_masks = pred_dict['masks'][sufficient_score]
-        pred_scores = pred_scores[sufficient_score]
-        pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            draw_dict['labels'] = pred_dict['labels'][sufficient_score]
+            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['scores'] = pred_scores[sufficient_score]
 
-        pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(len(images))]
-        pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
 
-        draw_dict_keys = ['labels', 'masks', 'scores', 'sizes']
-        draw_dict_values = [pred_labels, pred_masks, pred_scores, pred_sizes]
+        elif self.pred_mask_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
 
-        draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            pred_labels = pred_dict['labels']
+            mask_scores = pred_dict['mask_scores']
+            pred_batch_ids = pred_dict['batch_ids']
+
+            pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=pred_labels.device).cumsum(dim=0)
+            draw_dict['sizes'] = pred_sizes
+
+            mask_list = []
+            segments = []
+
+            for i0, i1 in zip(pred_sizes[:-1], pred_sizes[1:]):
+                mask_i = mask_scores[i0:i1].argmax(dim=0)
+                mask_list.append(mask_i)
+
+                for j in range(i1-i0):
+                    cat_id = pred_labels[i0+j]
+                    is_thing = cat_id in thing_ids
+
+                    segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                    segments.append(segment_ij)
+
+            draw_dict['masks'] = torch.stack(mask_list, dim=0)
+            draw_dict['segments'] = segments
+
+        else:
+            error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+            raise ValueError(error_msg)
+
         draw_dicts.append(draw_dict)
-
         dict_name = f"seg_pred_{id}" if id is not None else "seg_pred"
         dict_names.append(dict_name)
 
         # Get target draw dictionary and dictionary name if needed
         if tgt_dict is not None and not any('seg_tgt' in key for key in images_dict.keys()):
-            tgt_labels = tgt_dict['labels']
-            tgt_masks = tgt_dict['masks']
-            tgt_scores = torch.ones_like(tgt_labels, dtype=torch.float)
-            tgt_sizes = tgt_dict['sizes']
+            draw_dict = {}
 
-            draw_dict_values = [tgt_labels, tgt_masks, tgt_scores, tgt_sizes]
-            draw_dict = {k: v for k, v in zip(draw_dict_keys, draw_dict_values)}
+            if self.pred_mask_type == 'instance':
+                draw_dict['labels'] = tgt_dict['labels']
+                draw_dict['masks'] = tgt_dict['masks']
+                draw_dict['scores'] = torch.ones_like(tgt_dict['labels'], dtype=torch.float)
+                draw_dict['sizes'] = tgt_dict['sizes']
+
+            elif self.pred_mask_type == 'panoptic':
+                tgt_labels = tgt_dict['labels']
+                tgt_masks = tgt_dict['masks']
+                tgt_sizes = tgt_dict['sizes']
+
+                mask_list = []
+                segments = []
+
+                for i0, i1 in zip(tgt_sizes[:-1], tgt_sizes[1:]):
+                    mask_i = tgt_masks[i0:i1].int().argmax(dim=0)
+                    mask_list.append(mask_i)
+
+                    for j in range(i1-i0):
+                        cat_id = tgt_labels[i0+j]
+                        is_thing = cat_id in thing_ids
+
+                        segment_ij = {'id': j, 'category_id': cat_id, 'isthing': is_thing}
+                        segments.append(segment_ij)
+
+                draw_dict['masks'] = torch.stack(mask_list, dim=0)
+                draw_dict['segments'] = segments
+                draw_dict['sizes'] = tgt_sizes
+
+            else:
+                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                raise ValueError(error_msg)
 
             draw_dicts.append(draw_dict)
             dict_names.append('seg_tgt')
 
-        # Get number of images and image sizes without padding in (width, height) format
-        num_images = len(images)
+        # Get image sizes without padding in (width, height) format
         img_sizes = images.size(mode='without_padding')
 
         # Get image sizes with padding in (height, width) format
@@ -348,32 +397,43 @@ class StandardRoIHead(MMDetStandardRoIHead):
         for dict_name, draw_dict in zip(dict_names, draw_dicts):
             sizes = draw_dict['sizes']
 
-            for image_id, i0, i1 in zip(range(num_images), sizes[:-1], sizes[1:]):
-                img_size = img_sizes[image_id]
+            for i, i0, i1 in zip(range(batch_size), sizes[:-1], sizes[1:]):
+                img_size = img_sizes[i]
                 img_size = (img_size[1], img_size[0])
 
-                image = images.images[image_id].clone()
+                image = images.images[i].clone()
                 image = T.crop(image, 0, 0, *img_size)
                 image = image.permute(1, 2, 0) * 255
                 image = image.to(torch.uint8).cpu().numpy()
 
-                color_mode = ColorMode.SEGMENTATION if hasattr(self.metadata, 'stuff_classes') else ColorMode.IMAGE
-                visualizer = Visualizer(image, metadata=self.metadata, instance_mode=color_mode)
+                if self.pred_mask_type == 'instance':
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.IMAGE)
 
-                if i1 > i0:
-                    img_labels = draw_dict['labels'][i0:i1].cpu().numpy()
-                    img_scores = draw_dict['scores'][i0:i1].cpu().numpy()
+                    if i1 > i0:
+                        labels_i = draw_dict['labels'][i0:i1].cpu().numpy()
+                        scores_i = draw_dict['scores'][i0:i1].cpu().numpy()
 
-                    img_masks = draw_dict['masks'][i0:i1]
-                    img_masks = T.resize(img_masks, img_sizes_pad)
-                    img_masks = T.crop(img_masks, 0, 0, *img_size)
-                    img_masks = img_masks.cpu().numpy()
+                        masks_i = draw_dict['masks'][i0:i1]
+                        masks_i = T.resize(masks_i, img_sizes_pad)
+                        masks_i = T.crop(masks_i, 0, 0, *img_size)
+                        masks_i = masks_i.cpu().numpy()
 
-                    instances = Instances(img_size, pred_classes=img_labels, pred_masks=img_masks, scores=img_scores)
-                    visualizer.draw_instance_predictions(instances)
+                        instances = Instances(img_size, pred_classes=labels_i, pred_masks=masks_i, scores=scores_i)
+                        visualizer.draw_instance_predictions(instances)
+
+                elif self.pred_mask_type == 'panoptic':
+                    mask_i = draw_dict['masks'][i].cpu()
+                    segments_i = draw_dict['segments'][i0:i1]
+
+                    visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.SEGMENTATION)
+                    visualizer.draw_panoptic_seg(mask_i, segments_i)
+
+                else:
+                    error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                    raise ValueError(error_msg)
 
                 annotated_image = visualizer.output.get_image()
-                images_dict[f'{dict_name}_{image_id}'] = annotated_image
+                images_dict[f'{dict_name}_{i}'] = annotated_image
 
         return images_dict
 
@@ -639,13 +699,12 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
-            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -680,7 +739,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -762,26 +821,16 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
 
-            if self.pred_mask_type == 'instance':
-                pred_masks_i = mask_scores_i > 0.5
-
-            elif self.pred_mask_type == 'panoptic':
-                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
-                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
-
-                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
-                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
-
-            else:
-                error_msg = f"Invalid prediction mask type in PointRendRoIHead (got '{self.pred_mask_type}')."
-                raise ValueError(error_msg)
-
+            pred_masks_i = mask_scores_i > 0.5
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
+            if self.pred_mask_type == 'panoptic':
+                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
@@ -1002,13 +1051,12 @@ class RefineMaskRoIHead(StandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
+                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
-            ValueError: Error when an invalid prediction mask type is provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -1047,7 +1095,7 @@ class RefineMaskRoIHead(StandardRoIHead):
         itp_kwargs = {'mode': 'bilinear', 'align_corners': True}
 
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -1137,26 +1185,16 @@ class RefineMaskRoIHead(StandardRoIHead):
             mask_scores_i = mask_logits_i[-1].sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
 
-            if self.pred_mask_type == 'instance':
-                pred_masks_i = mask_scores_i > 0.5
-
-            elif self.pred_mask_type == 'panoptic':
-                max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
-                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
-
-                pred_masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
-                pred_masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
-
-            else:
-                error_msg = f"Invalid prediction mask type in RefineMaskRoIHead (got '{self.pred_mask_type}')."
-                raise ValueError(error_msg)
-
+            pred_masks_i = mask_scores_i > 0.5
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
+            if self.pred_mask_type == 'panoptic':
+                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['masks'].append(pred_masks_i)
+            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(batch_ids_i)
 

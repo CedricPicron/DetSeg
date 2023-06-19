@@ -360,11 +360,13 @@ class CocoEvaluator(object):
             pred_dict (Dict): Prediction dictionary potentially containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
-                - masks (BoolTensor): predicted segmentation masks of shape [num_preds, mH, mW];
+                - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
+                - mask_thr (float): value containing the normalized segmentation mask threshold.
 
         Raises:
+            ValueError: Error when CocoEvaluator evaluator has unknown result format.
             ValueError: Error when no box predictions are provided when using evaluation NMS.
         """
 
@@ -374,7 +376,7 @@ class CocoEvaluator(object):
         # Extract predictions from prediction dictionary
         labels = pred_dict['labels']
         boxes = pred_dict.get('boxes', None)
-        segms = pred_dict.get('masks', None)
+        mask_scores = pred_dict.get('mask_scores', None)
         scores = pred_dict['scores']
         batch_ids = pred_dict['batch_ids']
 
@@ -384,31 +386,36 @@ class CocoEvaluator(object):
             boxes = boxes[well_defined].to_format('xywh')
 
             labels = labels[well_defined]
-            segms = segms[well_defined] if segms is not None else None
+            mask_scores = mask_scores[well_defined] if mask_scores is not None else None
             scores = scores[well_defined]
             batch_ids = batch_ids[well_defined]
 
-        # Transform segmentation masks to original image space and convert them to desired format
-        if segms is not None:
-            segms = mask_inv_transform(segms, images, batch_ids)
+        # Get segmentation masks in original image space
+        if mask_scores is not None:
 
-            if self.result_format == 'panoptic':
-                segms = torch.stack(segms, dim=0)
+            if self.result_format == 'default':
+                masks = mask_scores > pred_dict.get('mask_thr', 0.5)
+                masks = mask_inv_transform(masks, images, batch_ids)
 
-                max_ids = segms.float().argmax(dim=0, keepdim=True)
+            elif self.result_format == 'panoptic':
+                mask_scores = mask_inv_transform(mask_scores, images, batch_ids)
+
+                max_ids = mask_scores.argmax(dim=0, keepdim=True)
                 scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
 
-                segms = torch.zeros_like(segms)
-                segms.scatter_(dim=0, index=max_ids, src=scatter_src)
+                masks = torch.zeros_like(mask_scores, dtype=torch.bool)
+                masks.scatter_(dim=0, index=max_ids, src=scatter_src)
 
-                non_empty_mask = segms.flatten(1).sum(dim=1) > 0
+                non_empty_mask = masks.flatten(1).sum(dim=1) > 0
                 labels = labels[non_empty_mask]
                 boxes = boxes[non_empty_mask] if boxes is not None else None
-                segms = [segm for segm in segms[non_empty_mask]]
+                masks = masks[non_empty_mask]
                 scores = scores[non_empty_mask]
                 batch_ids = batch_ids[non_empty_mask]
 
-            segms = mask_to_rle(segms)
+            else:
+                error_msg = f"Unknown result format '{self.result_format}' for CocoEvaluator evaluator."
+                raise ValueError(error_msg)
 
         # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
@@ -438,8 +445,8 @@ class CocoEvaluator(object):
             error_msg = "Box predictions must be provided when using evaluation NMS."
             raise ValueError(error_msg)
 
-        if segms is not None:
-            result_dict['segmentation'] = segms
+        if mask_scores is not None:
+            result_dict['segmentation'] = mask_to_rle(masks)
 
         # Get list of result dictionaries
         result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
@@ -455,7 +462,7 @@ class CocoEvaluator(object):
                 if boxes is not None:
                     result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
 
-                if segms is not None:
+                if mask_scores is not None:
                     result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
 
                 result_dicts.append(result_dict)
