@@ -494,7 +494,7 @@ class BaseSegHead(nn.Module):
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
         # Concatenate predictions of different batch entries
-        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'mask_thr'})
 
         # Add prediction dictionary to list of prediction dictionaries
         pred_dicts.append(pred_dict)
@@ -1456,7 +1456,7 @@ class TopDownSegHead(nn.Module):
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
 
         # Concatenate predictions of different batch entries
-        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
+        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items() if k != 'mask_thr'})
 
         # Add prediction dictionary to list of prediction dictionaries
         pred_dicts.append(pred_dict)
