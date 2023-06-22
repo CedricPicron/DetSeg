@@ -295,19 +295,21 @@ class AnchorSelector(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - feat_maps (List): list [num_maps] with maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure of size [batch_size] containing the batched images.
+                - images (Images): Images structure of size [batch_size] containing the batched images.
 
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
-            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
-                - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors];
+            sel_dict (Dict): Selection dictionary (possibly) containing following keys:
                 - sel_ids (LongTensor): indices of selected feature-anchor combinations of shape [num_sels];
-                - cum_feats_batch (LongTensor): cumulative number of selected features per batch entry [batch_size+1];
+                - batch_ids (LongTensor): batch indices of selected features of shape [num_sels];
                 - feat_ids (LongTensor): indices of selected features of shape [num_sels];
                 - sel_feats (FloatTensor): selected features after post-processing of shape [num_sels, feat_size];
-                - sel_boxes (Boxes): structure with boxes corresponding to selected features of size [num_sels];
+                - sel_boxes (Boxes): Boxes structure corresponding to selected features of size [num_sels];
                 - sel_box_encs (FloatTensor): optional encodings of selected boxes of shape [num_sels, feat_size].
+
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - anchors (Boxes): structure with axis-aligned anchor boxes of size [num_anchors].
 
         Raises:
             ValueError: Error when an invalid feature selection type is provided.
@@ -326,20 +328,16 @@ class AnchorSelector(nn.Module):
 
         # Perform selection
         sel_logits, sel_ids = self.perform_selection(feat_maps, storage_dict, **kwargs)[:2]
-        storage_dict['sel_ids'] = sel_ids
+        sel_dict = {'sel_ids': sel_ids}
 
-        # Get cumulative number of selected features per batch entry
-        batch_size = sel_logits.size(dim=0)
+        # Get batch indices
         batch_ids = torch.div(sel_ids, len(anchors), rounding_mode='floor')
-
-        cum_feats_batch = torch.stack([(batch_ids == i).sum() for i in range(batch_size)]).cumsum(dim=0)
-        cum_feats_batch = torch.cat([cum_feats_batch.new_zeros([1]), cum_feats_batch], dim=0)
-        storage_dict['cum_feats_batch'] = cum_feats_batch
+        sel_dict['batch_ids'] = batch_ids
 
         # Get indices of selected features
         num_cell_anchors = self.anchor.num_cell_anchors
         feat_ids = torch.div(sel_ids, num_cell_anchors, rounding_mode='floor')
-        storage_dict['feat_ids'] = feat_ids
+        sel_dict['feat_ids'] = feat_ids
 
         # Get selected features
         if self.feat_sel_type == 'map':
@@ -361,14 +359,14 @@ class AnchorSelector(nn.Module):
             cell_anchor_ids = sel_ids % num_cell_anchors
             sel_feats = self.post(sel_feats, module_ids=cell_anchor_ids)
 
-        # Add selected features to storage dictionary
-        storage_dict['sel_feats'] = sel_feats
+        # Add selected features to selection dictionary
+        sel_dict['sel_feats'] = sel_feats
 
         # Get boxes corresponding to selected features
         anchor_ids = sel_ids % len(anchors)
         sel_boxes = anchors[anchor_ids]
         sel_boxes.batch_ids = batch_ids
-        storage_dict['sel_boxes'] = sel_boxes
+        sel_dict['sel_boxes'] = sel_boxes
 
         # Get encodings of selected boxes if needed
         if self.box_encoder is not None:
@@ -376,6 +374,6 @@ class AnchorSelector(nn.Module):
             norm_boxes = sel_boxes.clone().normalize(images).to_format('cxcywh')
 
             box_encs = self.box_encoder(norm_boxes.boxes)
-            storage_dict['sel_box_encs'] = box_encs
+            sel_dict['sel_box_encs'] = box_encs
 
-        return storage_dict
+        return sel_dict, storage_dict

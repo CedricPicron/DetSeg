@@ -56,22 +56,26 @@ class BaseDuplicateHead(nn.Module):
         # Set apply_ids attribute
         self.apply_ids = apply_ids
 
-    def forward_pred(self, qry_feats, storage_dict, **kwargs):
+    def forward_pred(self, storage_dict, **kwargs):
         """
         Forward prediction method of the BaseDuplicateHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_feats, qry_feat_size].
-            storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest.
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - qry_feats (FloatTensor): query features of shape [num_qrys, qry_feat_size].
+
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - dup_logits (FloatTensor): duplicate logits of shape [num_feats, num_feats].
+                - dup_logits (FloatTensor): duplicate logits of shape [num_qrys, num_qrys].
 
         Raises:
             ValueError: Error when an invalid fusion type is provided.
         """
+
+        # Retrieve query features
+        qry_feats = storage_dict['qry_feats']
 
         # Apply pre-fusion module if needed
         if self.pre_fusion is not None:
@@ -87,9 +91,9 @@ class BaseDuplicateHead(nn.Module):
 
         # Apply post-fusion module if needed
         if self.post_fusion is not None:
-            num_feats = len(qry_feats)
+            num_qrys = len(qry_feats)
             dup_feats = self.post_fusion(dup_feats.flatten(0, 1))
-            dup_feats = dup_feats.view(num_feats, num_feats, -1)
+            dup_feats = dup_feats.view(num_qrys, num_qrys, -1)
 
         # Get duplicate logits
         dup_logits = dup_feats.squeeze(dim=2)
@@ -103,9 +107,9 @@ class BaseDuplicateHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys (after matching):
-                - dup_logits (FloatTensor): duplicate logits of shape [num_feats, num_feats];
-                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_queries];
-                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_queries].
+                - dup_logits (FloatTensor): duplicate logits of shape [num_qrys, num_qrys];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - labels (LongTensor): target class indices of shape [num_targets].

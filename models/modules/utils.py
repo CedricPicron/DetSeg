@@ -380,6 +380,75 @@ class IdAvg2d(nn.Module):
 
 
 @MODELS.register_module()
+class QryInit(nn.Module):
+    """
+    Class implementing the QryInit module.
+
+    Attributes:
+        qry_init (nn.Module): Module implementing the query initialization module.
+        rename_dict (Dict): Dictionary used to rename the keys from the original query dictionary.
+    """
+
+    def __init__(self, qry_init_cfg, rename_dict=None):
+        """
+        Initializes the QryInit module.
+
+        Args:
+            qry_init_cfg (Dict): Configuration dictionary specifying the query initialization module.
+            rename_dict (Dict): Dictionary used to rename the keys from the original query dictionary (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build query initialization module
+        self.qry_init = build_model(qry_init_cfg)
+
+        # Set attribute with rename dictionary
+        self.rename_dict = rename_dict if rename_dict is not None else {}
+
+    def forward(self, in_qry_feats, storage_dict, **kwargs):
+        """
+        Forward method of the QryInit module.
+
+        Args:
+            in_qry_feats (None): None.
+            storage_dict (Dict): Dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of keyword arguments passed to the query initialization module.
+
+        Returns:
+            out_qry_feats (FloatTensor): Output query features of shape [num_out_qrys, qry_feat_size].
+
+        Raises:
+            ValueError: Error when the 'in_qry_feats' input is not None.
+        """
+
+        # Check whether 'in_qry_feats' input is None
+        if in_qry_feats is not None:
+            error_msg = f"The 'in_qry_feats' input from the QryInit module should be None (got {type(in_qry_feats)})."
+            raise ValueError(error_msg)
+
+        # Apply query initialization module
+        qry_dict, storage_dict = self.qry_init(storage_dict=storage_dict, **kwargs)
+
+        # Rename specific keys from query dictionary
+        for old_key, new_key in self.rename_dict.items():
+            qry_dict[new_key] = qry_dict.pop(old_key, None)
+
+        # Add elements from query dictionary to storage dictionary
+        for k, v in qry_dict.items():
+            if k in storage_dict.keys():
+                storage_dict[k] = torch.cat([storage_dict[k], v], dim=0)
+            else:
+                storage_dict[k] = v
+
+        # Get output query features
+        out_qry_feats = storage_dict['qry_feats']
+
+        return out_qry_feats
+
+
+@MODELS.register_module()
 class SkipConnection(nn.Module):
     """
     Class implementing the SkipConnection module.

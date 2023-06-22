@@ -100,11 +100,12 @@ class GVD(nn.Module):
 
             device = self.group_init_feats.device
             num_feats_batch = self.group_init_feats.size(dim=0)
-            cum_feats_batch = torch.arange(batch_size+1, device=device) * num_feats_batch
-            storage_dict['cum_feats_batch'] = cum_feats_batch
+            batch_ids = torch.arange(batch_size, device=device).repeat_interleave(num_feats_batch)
+            storage_dict['batch_ids'] = batch_ids
 
         elif self.group_init_mode == 'selected':
-            self.group_init_sel(storage_dict=storage_dict, **kwargs)
+            sel_dict, storage_dict = self.group_init_sel(storage_dict=storage_dict, **kwargs)
+            storage_dict.update(sel_dict)
 
             group_init_feats = storage_dict.pop('sel_feats')
             storage_dict['prior_boxes'] = storage_dict.pop('sel_boxes', None)
@@ -116,20 +117,14 @@ class GVD(nn.Module):
 
         return group_init_feats
 
-    def forward(self, feat_maps, tgt_dict=None, images=None, visualize=False, **kwargs):
+    def forward(self, feat_maps, images=None, tgt_dict=None, visualize=False, **kwargs):
         """
         Forward method of the GVD head.
 
         Args:
             feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
-
-            tgt_dict (Dict): Optional target dictionary used during trainval possibly containing following keys:
-                - labels (LongTensor): tensor of shape [num_targets_total] containing the class indices;
-                - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_targets_total];
-                - sizes (LongTensor): tensor of shape [batch_size+1] with the cumulative target sizes of batch entries;
-                - masks (BoolTensor): padded segmentation masks of shape [num_targets_total, max_iH, max_iW].
-
             images (Images): Images structure of size [batch_size] containing the batched images (default=None).
+            tgt_dict (Dict): Target dictionary with ground-truth information used during trainval (default=None).
             visualize (bool): Boolean indicating whether to compute dictionary with visualizations (default=False).
             kwargs (Dict): Dictionary of additional keyword arguments passed to some underlying modules and methods.
 
@@ -159,15 +154,7 @@ class GVD(nn.Module):
 
         # Perform group initialization
         group_feats = self.group_init(**local_kwargs, **kwargs)
-        local_kwargs['qry_feats'] = group_feats
-
-        # Get and add batch indices to storage dictionary
-        cum_feats_batch = storage_dict['cum_feats_batch']
-        batch_size = len(cum_feats_batch) - 1
-
-        batch_ids = torch.arange(batch_size, device=cum_feats_batch.device)
-        batch_ids = batch_ids.repeat_interleave(cum_feats_batch.diff())
-        storage_dict['batch_ids'] = batch_ids
+        storage_dict['qry_feats'] = group_feats
 
         # Apply heads if needed
         for head_id, head in enumerate(self.heads):
@@ -184,7 +171,7 @@ class GVD(nn.Module):
 
             # Apply decoder layer
             group_feats = dec_layer(group_feats, **local_kwargs, **kwargs)
-            local_kwargs['qry_feats'] = group_feats
+            storage_dict['qry_feats'] = group_feats
 
             # Apply heads if needed
             for head_id, head in enumerate(self.heads):

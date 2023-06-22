@@ -2,6 +2,7 @@
 Import head modules to guarantee their registration.
 """
 
+from .bde import BDE  # noqa: F401
 from .box2d import BaseBox2dHead  # noqa: F401
 from .cls import BaseClsHead  # noqa: F401
 from .dup import BaseDuplicateHead  # noqa: F401

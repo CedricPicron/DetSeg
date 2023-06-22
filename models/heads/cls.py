@@ -52,19 +52,23 @@ class BaseClsHead(nn.Module):
         self.soft_label_type = soft_label_type
         self.apply_ids = apply_ids
 
-    def forward_pred(self, qry_feats, storage_dict, **kwargs):
+    def forward_pred(self, storage_dict, **kwargs):
         """
         Forward prediction method of the BaseClsHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
-            storage_dict (Dict): Dictionary storing all kinds of key-value pairs of interest.
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - qry_feats (FloatTensor): query features of shape [num_qrys, qry_feat_size].
+
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
                 - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels].
         """
+
+        # Retrieve query features
+        qry_feats = storage_dict['qry_feats']
 
         # Get classification logits
         cls_logits = self.logits(qry_feats)

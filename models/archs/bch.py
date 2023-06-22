@@ -76,11 +76,12 @@ class BCH(nn.Module):
         feat_maps = self.core(feat_maps, images=images)
 
         # Apply heads and merge non-prediction dictionaries originating from different heads
-        head_kwargs = {'tgt_dict': tgt_dict, 'images': images, 'visualize': visualize, **kwargs}
+        head_kwargs = {'images': images, 'tgt_dict': tgt_dict, 'visualize': visualize, **kwargs}
         head_dicts = [head(feat_maps, **head_kwargs) for head in self.heads.values()]
 
         if self.training:
             output_dicts = [dict(ChainMap(*dicts)) for dicts in zip(*head_dicts)]
+
         else:
             zipped_dicts = list(zip(*head_dicts))
             pred_dicts = list(chain.from_iterable(zipped_dicts[0]))

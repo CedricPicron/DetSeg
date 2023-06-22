@@ -227,15 +227,17 @@ class BoxCrossAttn(nn.Module):
     Attributes:
         feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (or None).
         attn (nn.Module): Module performing the actual box-based cross-attention.
+        out_size (int): Integer containing the output feature size (or None).
     """
 
-    def __init__(self, attn_cfg, feat_map_ids=None):
+    def __init__(self, attn_cfg, feat_map_ids=None, out_size=None):
         """
         Initializes the BoxCrossAttn module.
 
         Args:
             attn_cfg (Dict): Configuration dictionary specifying the underlying box-based cross-attention module.
             feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
+            out_size (int): Integer containing the output feature size (default=None).
         """
 
         # Initialization of default nn.Module
@@ -247,6 +249,9 @@ class BoxCrossAttn(nn.Module):
         # Build underlying box-based cross-attention module
         self.attn = build_model(attn_cfg)
 
+        # Set attribute with output feature size
+        self.out_size = out_size
+
     def forward(self, in_feats, storage_dict, **kwargs):
         """
         Forward method of the BoxCrossAttn module.
@@ -255,10 +260,10 @@ class BoxCrossAttn(nn.Module):
             in_feats (FloatTensor): Input features of shape [num_feats, in_size].
 
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
+                - batch_ids (LongTensor): batch indices corresponding to input features of shape [num_feats];
                 - feat_maps (List): list of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW];
-                - images (Images): images structure of size [batch_size] containing the batched images;
+                - images (Images): Images structure of size [batch_size] containing the batched images;
                 - prior_boxes (Boxes): structure with prior bounding boxes of size [num_feats];
-                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - add_encs (FloatTensor): encodings added to queries and keys of shape [num_feats, in_size].
 
             kwargs: Dictionary of unused keyword arguments.
@@ -271,11 +276,11 @@ class BoxCrossAttn(nn.Module):
         device = in_feats.device
 
         # Retrieve desired items from storage dictionary
+        batch_ids = storage_dict['batch_ids']
         feat_maps = storage_dict['feat_maps']
         images = storage_dict['images']
         prior_boxes = storage_dict['prior_boxes']
-        cum_feats_batch = storage_dict['cum_feats_batch']
-        add_encs = storage_dict['add_encs']
+        add_encs = storage_dict.get('add_encs', None)
 
         # Select desired feature maps if needed
         if self.feat_map_ids is not None:
@@ -291,23 +296,22 @@ class BoxCrossAttn(nn.Module):
 
         # Perform box-based cross-attention
         attn_kwargs = {'sample_map_shapes': sample_map_shapes, 'sample_map_start_ids': sample_map_start_ids}
-        batch_size = len(cum_feats_batch) - 1
-        out_feats_list = []
+        batch_size = len(images)
+
+        num_feats, in_size = in_feats.size()
+        out_size = self.out_size if self.out_size is not None else in_size
+        out_feats = in_feats.new_empty([num_feats, out_size])
 
         for i in range(batch_size):
-            i0 = cum_feats_batch[i].item()
-            i1 = cum_feats_batch[i+1].item()
+            mask_i = batch_ids == i
 
-            attn_kwargs['sample_priors'] = sample_priors[i0:i1]
+            attn_kwargs['sample_priors'] = sample_priors[mask_i]
             attn_kwargs['sample_feats'] = sample_feats[i]
 
             if add_encs is not None:
-                attn_kwargs['add_encs'] = add_encs[i0:i1]
+                attn_kwargs['add_encs'] = add_encs[mask_i]
 
-            out_feats_i = self.attn(in_feats[i0:i1], **attn_kwargs)
-            out_feats_list.append(out_feats_i)
-
-        out_feats = torch.cat(out_feats_list, dim=0)
+            out_feats[mask_i] = self.attn(in_feats[mask_i], **attn_kwargs)
 
         return out_feats
 
@@ -489,126 +493,6 @@ class DeformableAttn(nn.Module):
 
         # Get output features
         out_feats = in_feats + delta_feats if self.skip else delta_feats
-
-        return out_feats
-
-
-@MODELS.register_module()
-class LegacySelfAttn1d(nn.Module):
-    """
-    Class implementing the LegacySelfAttn1d module.
-
-    Attributes:
-        norm (nn.Module): Optional normalization module of the LegacySelfAttn1d module.
-        act_fn (nn.Module): Optional module with the activation function of the LegacySelfAttn1d module.
-        mha (nn.MultiheadAttention): Multi-head attention module of the LegacySelfAttn1d module.
-        skip (bool): Boolean indicating whether skip connection is used or not.
-    """
-
-    def __init__(self, in_size, out_size=-1, norm='', act_fn='', skip=True, num_heads=8):
-        """
-        Initializes the LegacySelfAttn1d module.
-
-        Args:
-            in_size (int): Size of input features.
-            out_size (int): Size of output features (default=-1).
-            norm (str): String containing the type of normalization (default='').
-            act_fn (str): String containing the type of activation function (default='').
-            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
-            num_heads (int): Integer containing the number of attention heads (default=8).
-
-        Raises:
-            ValueError: Error when unsupported type of normalization is provided.
-            ValueError: Error when unsupported type of activation function is provided.
-            ValueError: Error when input and output feature sizes are different when skip connection is used.
-            ValueError: Error when the output feature size is not specified when no skip connection is used.
-        """
-
-        # Initialization of default nn.Module
-        super().__init__()
-
-        # Initialization of optional normalization module
-        if not norm:
-            pass
-        elif norm == 'layer':
-            self.norm = nn.LayerNorm(in_size)
-        else:
-            error_msg = f"The LegacySelfAttn1d module does not support the '{norm}' normalization type."
-            raise ValueError(error_msg)
-
-        # Initialization of optional module with activation function
-        if not act_fn:
-            pass
-        elif act_fn == 'gelu':
-            self.act_fn = nn.GELU()
-        elif act_fn == 'relu':
-            self.act_fn = nn.ReLU(inplace=False) if not norm and skip else nn.ReLU(inplace=True)
-        else:
-            error_msg = f"The LegacySelfAttn1d module does not support the '{act_fn}' activation function."
-
-        # Get and check output feature size
-        if skip and out_size == -1:
-            out_size = in_size
-
-        elif skip and in_size != out_size:
-            error_msg = f"Input ({in_size}) and output ({out_size}) sizes must match when skip connection is used."
-            raise ValueError(error_msg)
-
-        elif not skip and out_size == -1:
-            error_msg = "The output feature size must be specified when no skip connection is used."
-            raise ValueError(error_msg)
-
-        # Initialization of multi-head attention module
-        self.mha = nn.MultiheadAttention(in_size, num_heads)
-        self.mha.out_proj = nn.Linear(in_size, out_size)
-        nn.init.zeros_(self.mha.out_proj.bias)
-
-        # Set skip attribute
-        self.skip = skip
-
-    def forward(self, in_feats, mul_encs=None, add_encs=None, cum_feats_batch=None, **kwargs):
-        """
-        Forward method of the LegacySelfAttn1d module.
-
-        Args:
-            in_feats (FloatTensor): Input features of shape [num_feats, in_size].
-            mul_encs (FloatTensor): Encodings multiplied by queries/keys of shape [num_feats, in_size] (default=None).
-            add_encs (FloatTensor): Encodings added to queries/keys of shape [num_feats, in_size] (default=None).
-            cum_feats_batch (LongTensor): Cumulative number of features per batch entry [batch_size+1] (default=None).
-            kwargs (Dict): Dictionary of keyword arguments not used by this module.
-
-        Returns:
-            out_feats (FloatTensor): Output features of shape [num_feats, out_size].
-        """
-
-        # Apply optional normalization and activation function modules
-        delta_feats = in_feats
-        delta_feats = self.norm(delta_feats) if hasattr(self, 'norm') else delta_feats
-        delta_feats = self.act_fn(delta_feats) if hasattr(self, 'act_fn') else delta_feats
-
-        # Get query-key and value features
-        qk_feats = val_feats = delta_feats[:, None, :]
-
-        if mul_encs is not None:
-            qk_feats = qk_feats * mul_encs[:, None, :]
-
-        if add_encs is not None:
-            qk_feats = qk_feats + add_encs[:, None, :]
-
-        # Apply multi-head attention module
-        num_feats = len(in_feats)
-        out_size = self.mha.out_proj.weight.size(dim=0)
-        mha_feats = in_feats.new_empty([num_feats, 1, out_size])
-
-        if cum_feats_batch is None:
-            cum_feats_batch = torch.tensor([0, num_feats], device=in_feats.device)
-
-        for i0, i1 in zip(cum_feats_batch[:-1], cum_feats_batch[1:]):
-            mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], need_weights=False)[0]
-
-        # Get output features
-        mha_feats = mha_feats[:, 0, :]
-        out_feats = in_feats + mha_feats if self.skip else mha_feats
 
         return out_feats
 
@@ -2268,9 +2152,10 @@ class SelfAttn1d(nn.Module):
             in_feats (FloatTensor): Input features of shape [num_feats, in_size].
 
             storage_dict (Dict): Dictionary storing all kinds of key-value pairs, possibly containing following keys:
+                - batch_ids (LongTensor): batch indices corresponding to input features of shape [num_feats];
+                - images (Images): Images structure of size [batch_size] containing the batched images;
                 - mul_encs (FloatTensor): encodings multiplied by queries/keys of shape [num_feats, in_size];
                 - add_encs (FloatTensor): encodings added to queries/keys of shape [num_feats, in_size];
-                - cum_feats_batch (LongTensor): cumulative number of features per batch entry [batch_size+1];
                 - attn_mask_list (List): list [batch_size] with attention masks of shape [num_feats_i, num_feats_i].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
@@ -2280,9 +2165,10 @@ class SelfAttn1d(nn.Module):
         """
 
         # Retrieve desired items from storage dictionary
+        batch_ids = storage_dict['batch_ids']
+        images = storage_dict['images']
         mul_encs = storage_dict.get('mul_encs', None)
         add_encs = storage_dict.get('add_encs', None)
-        cum_feats_batch = storage_dict['cum_feats_batch']
         attn_mask_list = storage_dict.get('attn_mask_list', None)
 
         # Apply optional normalization and activation function modules
@@ -2300,7 +2186,7 @@ class SelfAttn1d(nn.Module):
             qk_feats = qk_feats + add_encs[:, None, :]
 
         # Apply multi-head attention module
-        batch_size = len(cum_feats_batch) - 1
+        batch_size = len(images)
         mha_kwargs = {'need_weights': False}
 
         num_feats = len(in_feats)
@@ -2308,11 +2194,10 @@ class SelfAttn1d(nn.Module):
         mha_feats = in_feats.new_empty([num_feats, 1, out_size])
 
         for i in range(batch_size):
-            i0 = cum_feats_batch[i]
-            i1 = cum_feats_batch[i+1]
+            mask_i = batch_ids == i
 
             mha_kwargs['attn_mask'] = attn_mask_list[i] if attn_mask_list is not None else None
-            mha_feats[i0:i1] = self.mha(qk_feats[i0:i1], qk_feats[i0:i1], val_feats[i0:i1], **mha_kwargs)[0]
+            mha_feats[mask_i] = self.mha(qk_feats[mask_i], qk_feats[mask_i], val_feats[mask_i], **mha_kwargs)[0]
 
         # Get output features
         mha_feats = mha_feats[:, 0, :]

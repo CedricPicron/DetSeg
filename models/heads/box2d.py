@@ -124,9 +124,9 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys:
+                - images (Images): Images structure containing the batched images of size [batch_size];
                 - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
                 - dup_logits (FloatTensor): duplicate logits of shape [num_qrys, num_qrys];
-                - cum_feats_batch (LongTensor): cumulative number of queries per batch entry [batch_size+1];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
                 - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys].
 
@@ -151,15 +151,15 @@ class BaseBox2dHead(nn.Module):
         """
 
         # Retrieve desired items from storage dictionary
+        images = storage_dict['images']
         cls_logits = storage_dict['cls_logits']
-        cum_feats_batch = storage_dict['cum_feats_batch']
         pred_boxes = storage_dict['pred_boxes']
         box_scores = storage_dict.get('box_scores', None)
 
         # Get number of queries, number of labels, device and batch size
         num_qrys, num_labels = cls_logits.size()
         device = cls_logits.device
-        batch_size = len(cum_feats_batch) - 1
+        batch_size = len(images)
 
         # Only keep entries with well-defined boxes
         well_defined = pred_boxes.well_defined()
@@ -408,7 +408,7 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
-                - images (Images): images structure containing the batched images of size [batch_size].
+                - images (Images): Images structure containing the batched images of size [batch_size].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets.
 
@@ -511,15 +511,14 @@ class BaseBox2dHead(nn.Module):
 
         return images_dict
 
-    def forward_pred(self, qry_feats, storage_dict, images_dict=None, **kwargs):
+    def forward_pred(self, storage_dict, images_dict=None, **kwargs):
         """
         Forward prediction method of the BaseBox2dHead module.
 
         Args:
-            qry_feats (FloatTensor): Query features of shape [num_qrys, qry_feat_size].
-
-            storage_dict (Dict): Storage dictionary possibly containing following key:
-                - images (Images): images structure containing the batched images of size [batch_size];
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - qry_feats (FloatTensor): query features of shape [num_qrys, qry_feat_size];
+                - images (Images): Images structure containing the batched images of size [batch_size];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_qrys].
 
             images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
@@ -535,6 +534,9 @@ class BaseBox2dHead(nn.Module):
 
             images_dict (Dict): Dictionary containing additional images annotated with 2D object detections (if given).
         """
+
+        # Retrieve query features
+        qry_feats = storage_dict['qry_feats']
 
         # Detach query features if needed
         if self.detach_qry_feats:
@@ -581,7 +583,7 @@ class BaseBox2dHead(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
-                - images (Images): images structure containing the batched images of size [batch_size];
+                - images (Images): Images structure containing the batched images of size [batch_size];
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_qrys, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_qrys];

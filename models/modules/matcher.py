@@ -58,7 +58,7 @@ class BoxMatcher(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
-                - images (Images): images structure containing the batched images of size [batch_size];
+                - images (Images): Images structure containing the batched images of size [batch_size];
                 - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_qrys].
 
             tgt_dict (Dict): Target dictionary (possibly) containing following keys:
