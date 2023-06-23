@@ -266,10 +266,24 @@ class CityscapesEvaluator(object):
 
         # Get segmentation masks in original image space
         if mask_scores is not None:
+            sorted = (batch_ids.diff() >= 0).all().item()
+
+            if not sorted:
+                batch_ids, sort_ids = batch_ids.sort()
+
+                labels = labels[sort_ids]
+                boxes = boxes[sort_ids] if boxes is not None else None
+                mask_scores = mask_scores[sort_ids]
+                scores = scores[sort_ids]
+
+            batch_size = len(images)
+            pred_sizes = [0] + [(batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=batch_ids.device).cumsum(dim=0)
 
             if self.result_format == 'default':
                 masks = mask_scores > pred_dict.get('mask_thr', 0.5)
-                masks = mask_inv_transform(masks, images, batch_ids)
+                masks = mask_inv_transform(masks, images, pred_sizes)
+                masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
 
             else:
                 error_msg = f"Unknown result format '{self.result_format}' for CityscapesEvaluator evaluator."

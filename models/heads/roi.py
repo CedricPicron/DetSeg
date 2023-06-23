@@ -421,7 +421,8 @@ class StandardRoIHead(MMDetStandardRoIHead):
                         visualizer.draw_instance_predictions(instances)
 
                 elif self.pred_mask_type == 'panoptic':
-                    mask_i = draw_dict['masks'][i].cpu()
+                    mask_i = draw_dict['masks'][i]
+                    mask_i = T.crop(mask_i, 0, 0, *img_size).cpu()
                     segments_i = draw_dict['segments'][i0:i1]
 
                     visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.SEGMENTATION)

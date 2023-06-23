@@ -392,24 +392,50 @@ class CocoEvaluator(object):
 
         # Get segmentation masks in original image space
         if mask_scores is not None:
+            sorted = (batch_ids.diff() >= 0).all().item()
+
+            if not sorted:
+                batch_ids, sort_ids = batch_ids.sort()
+
+                labels = labels[sort_ids]
+                boxes = boxes[sort_ids] if boxes is not None else None
+                mask_scores = mask_scores[sort_ids]
+                scores = scores[sort_ids]
+
+            batch_size = len(images)
+            pred_sizes = [0] + [(batch_ids == i).sum() for i in range(batch_size)]
+            pred_sizes = torch.tensor(pred_sizes, device=batch_ids.device).cumsum(dim=0)
 
             if self.result_format == 'default':
                 masks = mask_scores > pred_dict.get('mask_thr', 0.5)
-                masks = mask_inv_transform(masks, images, batch_ids)
+                masks = mask_inv_transform(masks, images, pred_sizes)
+                masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
 
             elif self.result_format == 'panoptic':
-                mask_scores = mask_inv_transform(mask_scores, images, batch_ids)
+                mask_scores = mask_inv_transform(mask_scores, images, pred_sizes)
 
-                max_ids = mask_scores.argmax(dim=0, keepdim=True)
-                scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+                masks = []
+                non_empty_list = []
 
-                masks = torch.zeros_like(mask_scores, dtype=torch.bool)
-                masks.scatter_(dim=0, index=max_ids, src=scatter_src)
+                for i in range(batch_size):
+                    mask_scores_i = mask_scores[i]
 
-                non_empty_mask = masks.flatten(1).sum(dim=1) > 0
+                    max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
+                    scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
+
+                    masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
+                    masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
+
+                    non_empty_i = masks_i.flatten(1).sum(dim=1) > 0
+                    non_empty_list.append(non_empty_i)
+
+                    masks_i = masks_i[non_empty_i]
+                    masks_i = [mask_ij for mask_ij in masks_i]
+                    masks.extend(masks_i)
+
+                non_empty_mask = torch.cat(non_empty_list, dim=0)
                 labels = labels[non_empty_mask]
                 boxes = boxes[non_empty_mask] if boxes is not None else None
-                masks = masks[non_empty_mask]
                 scores = scores[non_empty_mask]
                 batch_ids = batch_ids[non_empty_mask]
 

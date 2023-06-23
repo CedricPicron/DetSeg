@@ -3,42 +3,40 @@ Collection of utility functions related to masks.
 """
 
 import numpy as np
-import torch
 from pycocotools import mask as coco_mask
 import torchvision.transforms.functional as F
 
 
-def mask_inv_transform(in_masks, images, batch_ids):
+def mask_inv_transform(in_masks, images, cum_masks_batch):
     """
     Transforms the given masks back to the original image space as encoded by the given Images structure.
 
     Args:
-        in_masks (Tensor): Input masks (or mask scores) of shape [num_masks, in_height, in_width].
+        in_masks (Tensor): Input masks (or mask scores) of shape [num_masks, iH, iW].
         images (Images): Images structure [batch_size] containing batched images with their entire transform history.
-        batch_ids (LongTensor): Tensor containing the batch indices of each input mask of shape [num_masks].
+        cum_masks_batch (LongTensor): Tensor with cumulative number of masks per batch entry of shape [batch_size+1].
 
     Returns:
-        out_masks (Tensor): Output masks (or mask scores) of shape [num_masks, out_height, out_width].
+        out_masks_list (List): List [batch_size] with output masks (or mask scores) of shape [num_masks_i, oH, oW].
 
     Raises:
         ValueError: Error when one of the transforms has an unknown transform type.
     """
 
     # Resize input masks to image size after transforms if needed
-    num_masks, mH, mW = in_masks.size()
+    mH, mW = in_masks.size()[1:]
     iW, iH = images.size()
 
     if (mH != iH) or (mW != iW):
         in_masks = F.resize(in_masks, size=(iH, iW))
 
     # Get list with output masks
-    mask_ids = torch.arange(num_masks, device=in_masks.device)
-    masks_list = [None for _ in range(num_masks)]
+    out_masks_list = []
 
     for i, transforms_i in enumerate(images.transforms):
-        batch_mask = batch_ids == i
-        mask_ids_i = mask_ids[batch_mask]
-        masks_i = in_masks[batch_mask]
+        i0 = cum_masks_batch[i].item()
+        i1 = cum_masks_batch[i+1].item()
+        masks_i = in_masks[i0:i1]
 
         for transform in reversed(transforms_i):
             transform_type = transform[0]
@@ -67,13 +65,9 @@ def mask_inv_transform(in_masks, images, batch_ids):
                 error_msg = f"Unknown transform type (got '{transform_type}')."
                 raise ValueError(error_msg)
 
-        for j, mask_id in enumerate(mask_ids_i.tolist()):
-            masks_list[mask_id] = masks_i[j]
+        out_masks_list.append(masks_i)
 
-    # Get output masks
-    out_masks = torch.stack(masks_list, dim=0)
-
-    return out_masks
+    return out_masks_list
 
 
 def mask_to_rle(masks):
@@ -81,7 +75,7 @@ def mask_to_rle(masks):
     Function encoding the dense input masks using run-length encoding (RLE).
 
     Args:
-        masks (BoolTensor): Dense input masks of shape [num_masks, height, width].
+        masks (List): List of size [num_masks] containing the dense input masks of shape [height, width].
 
     Returns:
         rles (List): List of size [num_masks] containing the RLEs of the dense input masks.
