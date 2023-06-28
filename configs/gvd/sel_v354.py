@@ -267,7 +267,7 @@ model = dict(
                 nms_thr=0.5,
             ),
             max_segs=100,
-            pred_mask_type='panoptic',
+            seg_type='panoptic',
         ),
     ],
     head_apply_ids=[6],

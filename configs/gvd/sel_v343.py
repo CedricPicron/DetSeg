@@ -292,7 +292,7 @@ model = dict(
                 module_cfg=[
                     dict(
                         type='IdBase2d',
-                        act_mask_key='seg_batch_bnd_mask',
+                        act_mask_key='seg_img_bnd_mask',
                         id_cfg=[
                             [[
                                 dict(

@@ -247,7 +247,7 @@ model = dict(
                         [
                             dict(
                                 type='GetBoxesTensor',
-                                boxes_key='qry_boxes',
+                                boxes_key='pred_boxes',
                                 clone=True,
                                 format='cxcywh',
                                 normalize='with_padding',

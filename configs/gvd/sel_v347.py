@@ -292,7 +292,7 @@ model = dict(
                 module_cfg=[
                     dict(
                         type='IdBase2d',
-                        act_mask_key='seg_batch_bnd_mask',
+                        act_mask_key='seg_img_bnd_mask',
                         id_cfg=[
                             [[
                                 dict(
@@ -318,7 +318,7 @@ model = dict(
             ),
             mask_update=True,
             mask_type='roi',
-            update_mask_key='seg_qry_bnd_mask',
+            update_mask_key='seg_qry_bnd_masks',
             roi_ext_cfg=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),

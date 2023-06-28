@@ -129,7 +129,7 @@ class BaseDuplicateHead(nn.Module):
 
         # Perform matching if matcher is available
         if self.matcher is not None:
-            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
         dup_logits = storage_dict['dup_logits']

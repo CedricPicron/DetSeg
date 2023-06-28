@@ -6,6 +6,7 @@ import math
 
 import torch
 from torch import nn
+from torch.nn.parameter import Parameter
 
 from models.build import build_model, MODELS
 from models.modules.container import Sequential
@@ -182,7 +183,7 @@ class AnchorSelector(nn.Module):
                 raise ValueError(error_msg)
 
             # Perform matching
-            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
             # Get selection loss
             match_labels = storage_dict['match_labels']
@@ -280,7 +281,7 @@ class AnchorSelector(nn.Module):
             max_old_id = sel_ids.amax().item() if num_sels > 0 else 0
             max_old_id = max(max_old_id, top_old_ids.amax().item()) if top_old_ids.numel() > 0 else max_old_id
 
-            new_ids = torch.full(size=[max_old_id+1], fill_value=-1, dtype=torch.int64, device=device)
+            new_ids = torch.full(size=[max_old_id+2], fill_value=-1, dtype=torch.int64, device=device)
             new_ids[sel_ids] = torch.arange(num_sels, device=device)
 
             top_new_ids = new_ids[top_old_ids]
@@ -377,3 +378,63 @@ class AnchorSelector(nn.Module):
             sel_dict['sel_box_encs'] = box_encs
 
         return sel_dict, storage_dict
+
+
+@MODELS.register_module()
+class EmbeddingSelector(nn.Module):
+    """
+    Class implementing the EmbeddingSelector module.
+
+    Attributes:
+        embeds (Parameter): Learnable parameter containing the embeddings of shape [num_embeds, embed_size].
+    """
+
+    def __init__(self, num_embeds, embed_size):
+        """
+        Initializes the EmbeddingSelector module.
+
+        Args:
+            num_embeds (int): Integer containing the number of embeddings.
+            embed_size (int): Integer containing the feature size of the embeddings.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Get intial embeddings
+        self.embeds = Parameter(torch.empty(num_embeds, embed_size), requires_grad=True)
+        nn.init.normal_(self.embeds)
+
+    def forward(self, storage_dict, embed_mask=None, **kwargs):
+        """
+        Forward method of the EmbeddingSelector module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - images (Images): Images structure of size [batch_size] containing the batched images.
+
+            embed_mask (Tensor): Boolean or integer mask selecting the desired embeddings (default=None).
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            embed_dict (Dict): Embedding dictionary containing following keys:
+                - embed_feats (FloatTensor): selected embeddings of shape [num_sel_embeds, embed_size];
+                - batch_ids (LongTensor): batch indices of selected embeddings of shape [num_sel_embeds].
+
+            storage_dict (Dict): Storage dictionary containing the same items as before.
+        """
+
+        # Get batch size and device
+        images = storage_dict['images']
+        batch_size = len(images)
+        device = self.embeds.device
+
+        # Get selected embeddings and corresponding batch indices
+        embed_feats = self.embeds if embed_mask is None else self.embeds[embed_mask]
+        num_feats_i = len(embed_feats)
+
+        embed_feats = embed_feats[None, :, :].expand(batch_size, -1, -1).flatten(0, 1)
+        batch_ids = torch.arange(batch_size, device=device)[:, None].expand(-1, num_feats_i).flatten()
+        embed_dict = {'embed_feats': embed_feats, 'batch_ids': batch_ids}
+
+        return embed_dict, storage_dict

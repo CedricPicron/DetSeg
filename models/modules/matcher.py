@@ -23,12 +23,14 @@ class BoxMatcher(nn.Module):
     Attributes:
         qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
         share_qry_boxes (bool): Boolean indicating whether to share query boxes between images.
+        match_tgt_labels (LongTensor): Non-persistent buffer of target class labels required to have a match (or None).
         box_metric (str): String containing the metric computing similarities between query and target boxes.
         center_in_mask (bool): Boolean indicating whether match requires the query box center inside the target mask.
         sim_matcher (nn.Module): Module matching queries with targets based on the given similarity matrix.
     """
 
-    def __init__(self, qry_key, sim_matcher_cfg, share_qry_boxes=False, box_metric='iou', center_in_mask=False):
+    def __init__(self, qry_key, sim_matcher_cfg, share_qry_boxes=False, match_tgt_labels=None, box_metric='iou',
+                 center_in_mask=False):
         """
         Initializes the BoxMatcher module.
 
@@ -36,6 +38,7 @@ class BoxMatcher(nn.Module):
             qry_key (str): String with key to retrieve the queries boxes from the storage dictionary.
             sim_matcher_cfg (Dict): Configuration dictionary specifying the similarity matcher.
             share_qry_boxes (bool): Boolean indicating whether to share query boxes between images (default=False).
+            match_tgt_labels (List): List of target class labels required to have a match (default=None).
             box_metric (str): String with metric computing similarities between query and target boxes (default='iou').
             center_in_mask (bool): Whether match requires the query box center inside the target mask (default=False).
         """
@@ -45,6 +48,12 @@ class BoxMatcher(nn.Module):
 
         # Build similarity matcher
         self.sim_matcher = build_model(sim_matcher_cfg)
+
+        # Set attribute with match target labels
+        if match_tgt_labels is not None:
+            self.register_buffer('match_tgt_labels', torch.tensor(match_tgt_labels), persistent=False)
+        else:
+            self.match_tgt_labels = None
 
         # Set remaining attributes
         self.qry_key = qry_key
@@ -62,7 +71,8 @@ class BoxMatcher(nn.Module):
                 - {self.qry_key} (Boxes): structure containing axis-aligned query boxes of size [num_qrys].
 
             tgt_dict (Dict): Target dictionary (possibly) containing following keys:
-                - boxes (Boxes): structure containing axis-aligned target boxes of size [num_targets].
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - boxes (Boxes): structure containing axis-aligned target boxes of size [num_targets];
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
@@ -81,6 +91,10 @@ class BoxMatcher(nn.Module):
         # Retrieve query and target boxes
         qry_boxes = storage_dict[self.qry_key]
         tgt_boxes = tgt_dict['boxes']
+
+        # Retrieve target labels if needed
+        if self.match_tgt_labels is not None:
+            tgt_labels = tgt_dict['labels']
 
         # Retrieve target masks and get mask sizes if needed
         if self.center_in_mask:
@@ -107,7 +121,7 @@ class BoxMatcher(nn.Module):
         qry_offset = 0
         tgt_offset = 0
 
-        # Intialize lists for per image outputs
+        # Initialize empty lists
         match_labels_list = []
         matched_qry_ids_list = []
         matched_tgt_ids_list = []
@@ -122,8 +136,20 @@ class BoxMatcher(nn.Module):
             num_qrys = len(qry_boxes_i)
             num_targets = len(tgt_boxes_i)
 
+            # Only keep targets with specific target labels if needed
+            if self.match_tgt_labels is not None:
+                i0 = tgt_offset
+                i1 = tgt_offset + num_targets
+                tgt_labels_i = tgt_labels[i0:i1]
+
+                tgt_label_mask = (tgt_labels_i[:, None] == self.match_tgt_labels[None, :]).any(dim=1)
+                tgt_boxes_i = tgt_boxes_i[tgt_label_mask]
+
+            # Get number of target boxes after label filter
+            num_targets_i = len(tgt_boxes_i)
+
             # Case where there are both queries and targets
-            if (num_qrys > 0) and (num_targets > 0):
+            if (num_qrys > 0) and (num_targets_i > 0):
 
                 # Get similarity matrix between query and target boxes
                 if self.box_metric == 'giou':
@@ -142,6 +168,9 @@ class BoxMatcher(nn.Module):
                     i1 = tgt_offset + num_targets
                     tgt_masks_i = tgt_masks[i0:i1]
 
+                    if self.match_tgt_labels is not None:
+                        tgt_masks_i = tgt_masks_i[tgt_label_mask]
+
                     qry_xy = qry_boxes_i.to_format('cxcywh').to_img_scale(images).boxes[:, :2].long()
                     qry_xy[:, 0].clamp_(max=iW-1)
                     qry_xy[:, 1].clamp_(max=iH-1)
@@ -159,6 +188,11 @@ class BoxMatcher(nn.Module):
                 matched_qry_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
                 matched_tgt_ids_i = torch.zeros(0, dtype=torch.int64, device=device)
 
+            # Update matched target indices if needed
+            if self.match_tgt_labels is not None:
+                tgt_ids = tgt_label_mask.nonzero(as_tuple=False)[:, 0]
+                matched_tgt_ids_i = tgt_ids[matched_tgt_ids_i]
+
             # Add query and target offsets to indices
             matched_qry_ids_i = matched_qry_ids_i + qry_offset
             matched_tgt_ids_i = matched_tgt_ids_i + tgt_offset
@@ -171,12 +205,19 @@ class BoxMatcher(nn.Module):
             # Get image-specific top query indices if requested
             if self.sim_matcher.get_top_qry_ids:
 
-                if (num_qrys > 0) and (num_targets > 0):
+                if (num_qrys > 0) and (num_targets_i > 0):
                     top_qry_ids_i = match_results[3]
 
                 else:
-                    top_limit = self.sim_matcher.top_limit
-                    top_qry_ids_i = torch.zeros(top_limit, num_targets, dtype=torch.int64, device=device)
+                    size = (self.sim_matcher.top_limit, num_targets_i)
+                    top_qry_ids_i = torch.full(size=size, fill_value=-1, dtype=torch.int64, device=device)
+
+                if self.match_tgt_labels is not None:
+                    local_top_qry_ids_i = top_qry_ids_i
+
+                    size = (self.sim_matcher.top_limit, num_targets)
+                    top_qry_ids_i = torch.full(size=size, fill_value=-1, dtype=torch.int64, device=device)
+                    top_qry_ids_i[:, tgt_label_mask] = local_top_qry_ids_i
 
                 top_qry_ids_i = top_qry_ids_i + qry_offset
                 top_qry_ids_list.append(top_qry_ids_i)
@@ -192,6 +233,113 @@ class BoxMatcher(nn.Module):
 
         if self.sim_matcher.get_top_qry_ids:
             storage_dict['top_qry_ids'] = torch.cat(top_qry_ids_list, dim=1)
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class FixedClsMatcher(nn.Module):
+    """
+    Class implementing the FixedClsMatcher module.
+
+    Attributes:
+        qry_cls_labels (LongTensor): Non-persistent buffer containing the query class labels of shape [num_qrys_i].
+        qry_mask_key (str): String with key to retrieve the query mask from the storage dictionary (or None).
+    """
+
+    def __init__(self, qry_cls_labels, qry_mask_key=None):
+        """
+        Initializes the FixedClsMatcher module.
+
+        Args:
+            qry_cls_labels (List): List [num_qrys_i] containing the class labels corresponding to each selected query.
+            qry_mask_key (str): String with key to retrieve the query mask from the storage dictionary (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Add buffer with query class labels
+        qry_cls_labels = torch.tensor(qry_cls_labels)
+        self.register_buffer('qry_cls_labels', qry_cls_labels, persistent=False)
+
+        # Set remaining attribute
+        self.qry_mask_key = qry_mask_key
+
+    def forward(self, storage_dict, tgt_dict, **kwargs):
+        """
+        Forward method of the FixedClsMatcher module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary (potentially) containing following keys:
+                - qry_feats (FloatTensor): query features of shape [num_qrys, qry_feat_size];
+                - batch_ids (LongTensor): batch indices of queries of shape [num_qrys];
+                - {self.qry_key_mask} (Tensor): tensor with mask selecting the desired queries.
+
+            tgt_dict (Dict): Target dictionary containing at least following key:
+                - labels (LongTensor): target class indices of shape [num_targets];
+                - sizes (LongTensor): cumulative number of targets per batch entry of size [batch_size+1].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - match_labels (LongTensor): match labels corresponding to each selected query of shape [num_qrys_i];
+                - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
+                - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
+        """
+
+        # Retrieve desired items from storage dictionary
+        qry_feats = storage_dict['qry_feats']
+        batch_ids = storage_dict['batch_ids']
+
+        # Retrieve desired items from target dictionary
+        tgt_labels = tgt_dict['labels']
+        tgt_sizes = tgt_dict['sizes']
+
+        # Get device
+        device = qry_feats.device
+
+        # Initialize empty lists
+        match_labels_list = []
+        matched_qry_ids_list = []
+        matched_tgt_ids_list = []
+
+        # Get masked batch and query indices if needed
+        if self.qry_mask_key is not None:
+            qry_mask = storage_dict[self.qry_mask_key]
+            batch_ids = batch_ids[qry_mask]
+
+            num_qrys = len(qry_feats)
+            qry_ids = torch.arange(num_qrys, device=device)
+            qry_ids = qry_ids[qry_mask]
+
+        # Perform matching per image
+        for i, (i0, i1) in enumerate(zip(tgt_sizes[:-1], tgt_sizes[1:])):
+
+            # Get mask with positive matches
+            pos_mask = self.qry_cls_labels[:, None] == tgt_labels[None, i0:i1]
+
+            # Get match labels
+            match_labels_i = torch.zeros(len(pos_mask), dtype=torch.int64, device=device)
+            match_labels_i[pos_mask.sum(dim=1) > 0] = 1
+            match_labels_list.append(match_labels_i)
+
+            # Get query and target indices of positive matches
+            matched_qry_ids_i, matched_tgt_ids_i = pos_mask.nonzero(as_tuple=True)
+            matched_tgt_ids_i += i0
+
+            if self.qry_mask_key is not None:
+                qry_ids_i = qry_ids[batch_ids == i]
+                matched_qry_ids_i = qry_ids_i[matched_qry_ids_i]
+
+            matched_qry_ids_list.append(matched_qry_ids_i)
+            matched_tgt_ids_list.append(matched_tgt_ids_i)
+
+        # Add matching results to storage dictionary
+        storage_dict['match_labels'] = torch.cat(match_labels_list, dim=0)
+        storage_dict['matched_qry_ids'] = torch.cat(matched_qry_ids_list, dim=0)
+        storage_dict['matched_tgt_ids'] = torch.cat(matched_tgt_ids_list, dim=0)
 
         return storage_dict
 

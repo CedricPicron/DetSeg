@@ -34,6 +34,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         fuse_qry (nn.Module): Optional module fusing the query features with the RoI features.
 
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
+        seg_type (str): String containing the type of predicted segmentations.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
@@ -41,14 +42,13 @@ class StandardRoIHead(MMDetStandardRoIHead):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
-        pred_mask_type (str): String containing the type of predicted segmentation mask.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module matching predictions with targets.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
-    def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, dup_attrs=None,
-                 max_segs=None, pred_mask_type='instance', matcher_cfg=None, apply_ids=None, **kwargs):
+    def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, seg_type='instance',
+                 dup_attrs=None, max_segs=None, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
@@ -58,9 +58,9 @@ class StandardRoIHead(MMDetStandardRoIHead):
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
+            seg_type (str): String containing the type of predicted segmentations (default='instance').
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
-            pred_mask_type (str): String containing the type of predicted segmentation mask (default='instance').
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
@@ -81,7 +81,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         self.get_segs = get_segs
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
-        self.pred_mask_type = pred_mask_type
+        self.seg_type = seg_type
         self.metadata = metadata
         self.apply_ids = apply_ids
 
@@ -127,21 +127,28 @@ class StandardRoIHead(MMDetStandardRoIHead):
         # Get image width and height with padding
         iW, iH = images.size()
 
-        # Get number of features, number of classes and device
+        # Get number of queries and number of classes
         num_qrys = cls_logits.size(dim=0)
         num_classes = cls_logits.size(dim=1) - 1
+
+        # Get batch size and device
+        batch_size = len(images)
         device = cls_logits.device
 
-        # Get feature indices
-        feat_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+        # Get query and batch indices
+        qry_ids = torch.arange(num_qrys, device=device)
+
+        if self.seg_type == 'instance':
+            qry_ids = qry_ids[:, None].expand(-1, num_classes).reshape(-1)
+            batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Get prediction labels and scores
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
-        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+        if self.seg_type == 'instance':
+            pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
+            pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
-        # Get batch size and batch indices
-        batch_size = len(images)
-        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+        else:
+            pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
@@ -153,7 +160,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             # Get predictions corresponding to batch entry
             batch_mask = batch_ids == i
 
-            feat_ids_i = feat_ids[batch_mask]
+            qry_ids_i = qry_ids[batch_mask]
             pred_labels_i = pred_labels[batch_mask]
             pred_scores_i = pred_scores[batch_mask]
 
@@ -166,17 +173,17 @@ class StandardRoIHead(MMDetStandardRoIHead):
                     num_preds_i = len(pred_scores_i)
                     candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
-                    feat_ids_i = feat_ids_i[candidate_ids]
+                    qry_ids_i = qry_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
+                    pred_boxes_i = pred_boxes[qry_ids_i].to_format('xyxy')
                     pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
 
-                    feat_ids_i = feat_ids_i[non_dup_ids]
+                    qry_ids_i = qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
@@ -190,7 +197,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 if len(pred_scores_i) > self.max_segs:
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
-                    feat_ids_i = feat_ids_i[top_pred_ids]
+                    qry_ids_i = qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
@@ -212,7 +219,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             if self.fuse_qry is not None:
                 qry_feats = storage_dict['qry_feats']
 
-                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = qry_feats[qry_ids_i]
                 qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
                 qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
 
@@ -230,7 +237,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
-            if self.pred_mask_type == 'panoptic':
+            if self.seg_type == 'panoptic':
                 mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
 
             # Add predictions to prediction dictionary
@@ -281,7 +288,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             images_dict (Dict): Dictionary containing additional images annotated with segmentations.
 
         Raises:
-            ValueError: Error when an invalid prediction mask type is provided.
+            ValueError: Error when an invalid segmentation type is provided.
         """
 
         # Retrieve images from storage dictionary and get batch size
@@ -296,7 +303,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         pred_dict = pred_dicts[-1]
         draw_dict = {}
 
-        if self.pred_mask_type == 'instance':
+        if self.seg_type == 'instance':
             pred_scores = pred_dict['scores']
             sufficient_score = pred_scores >= vis_score_thr
 
@@ -309,7 +316,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_sizes = torch.tensor(pred_sizes, device=pred_scores.device).cumsum(dim=0)
             draw_dict['sizes'] = pred_sizes
 
-        elif self.pred_mask_type == 'panoptic':
+        elif self.seg_type == 'panoptic':
             thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
 
             pred_labels = pred_dict['labels']
@@ -338,7 +345,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             draw_dict['segments'] = segments
 
         else:
-            error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+            error_msg = f"Invalid segmentation type in StandardRoIHead (got '{self.seg_type}')."
             raise ValueError(error_msg)
 
         draw_dicts.append(draw_dict)
@@ -349,13 +356,13 @@ class StandardRoIHead(MMDetStandardRoIHead):
         if tgt_dict is not None and not any('seg_tgt' in key for key in images_dict.keys()):
             draw_dict = {}
 
-            if self.pred_mask_type == 'instance':
+            if self.seg_type == 'instance':
                 draw_dict['labels'] = tgt_dict['labels']
                 draw_dict['masks'] = tgt_dict['masks']
                 draw_dict['scores'] = torch.ones_like(tgt_dict['labels'], dtype=torch.float)
                 draw_dict['sizes'] = tgt_dict['sizes']
 
-            elif self.pred_mask_type == 'panoptic':
+            elif self.seg_type == 'panoptic':
                 tgt_labels = tgt_dict['labels']
                 tgt_masks = tgt_dict['masks']
                 tgt_sizes = tgt_dict['sizes']
@@ -379,7 +386,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 draw_dict['sizes'] = tgt_sizes
 
             else:
-                error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                error_msg = f"Invalid segmentation type in StandardRoIHead (got '{self.seg_type}')."
                 raise ValueError(error_msg)
 
             draw_dicts.append(draw_dict)
@@ -405,7 +412,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                 image = image.permute(1, 2, 0) * 255
                 image = image.to(torch.uint8).cpu().numpy()
 
-                if self.pred_mask_type == 'instance':
+                if self.seg_type == 'instance':
                     visualizer = Visualizer(image, metadata=self.metadata, instance_mode=ColorMode.IMAGE)
 
                     if i1 > i0:
@@ -420,7 +427,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                         instances = Instances(img_size, pred_classes=labels_i, pred_masks=masks_i, scores=scores_i)
                         visualizer.draw_instance_predictions(instances)
 
-                elif self.pred_mask_type == 'panoptic':
+                elif self.seg_type == 'panoptic':
                     mask_i = draw_dict['masks'][i]
                     mask_i = T.crop(mask_i, 0, 0, *img_size).cpu()
                     segments_i = draw_dict['segments'][i0:i1]
@@ -429,7 +436,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                     visualizer.draw_panoptic_seg(mask_i, segments_i)
 
                 else:
-                    error_msg = f"Invalid prediction mask type in StandardRoIHead (got '{self.pred_mask_type}')."
+                    error_msg = f"Invalid segmentation type in StandardRoIHead (got '{self.seg_type}')."
                     raise ValueError(error_msg)
 
                 annotated_image = visualizer.output.get_image()
@@ -504,7 +511,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
         # Perform matching if matcher is available
         if self.matcher is not None:
-            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
         batch_ids = storage_dict['batch_ids']
@@ -717,21 +724,28 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         # Get image width and height with padding
         iW, iH = images.size()
 
-        # Get number of features, number of classes and device
+        # Get number of queries and number of classes
         num_qrys = cls_logits.size(dim=0)
         num_classes = cls_logits.size(dim=1) - 1
+
+        # Get batch size and device
+        batch_size = len(images)
         device = cls_logits.device
 
-        # Get feature indices
-        feat_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+        # Get query and batch indices
+        qry_ids = torch.arange(num_qrys, device=device)
+
+        if self.seg_type == 'instance':
+            qry_ids = qry_ids[:, None].expand(-1, num_classes).reshape(-1)
+            batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Get prediction labels and scores
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
-        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+        if self.seg_type == 'instance':
+            pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
+            pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
-        # Get batch size and batch indices
-        batch_size = len(images)
-        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+        else:
+            pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
 
         # Initialize prediction dictionary
         pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
@@ -743,7 +757,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             # Get predictions corresponding to batch entry
             batch_mask = batch_ids == i
 
-            feat_ids_i = feat_ids[batch_mask]
+            qry_ids_i = qry_ids[batch_mask]
             pred_labels_i = pred_labels[batch_mask]
             pred_scores_i = pred_scores[batch_mask]
 
@@ -756,17 +770,17 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                     num_preds_i = len(pred_scores_i)
                     candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
-                    feat_ids_i = feat_ids_i[candidate_ids]
+                    qry_ids_i = qry_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
+                    pred_boxes_i = pred_boxes[qry_ids_i].to_format('xyxy')
                     pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
 
-                    feat_ids_i = feat_ids_i[non_dup_ids]
+                    qry_ids_i = qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
@@ -780,7 +794,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                 if len(pred_scores_i) > self.max_segs:
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
-                    feat_ids_i = feat_ids_i[top_pred_ids]
+                    qry_ids_i = qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
@@ -802,7 +816,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             if self.fuse_qry is not None:
                 qry_feats = storage_dict['qry_feats']
 
-                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = qry_feats[qry_ids_i]
                 qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
                 qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
 
@@ -822,7 +836,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
-            if self.pred_mask_type == 'panoptic':
+            if self.seg_type == 'panoptic':
                 mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
 
             # Add predictions to prediction dictionary
@@ -874,7 +888,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
         # Perform matching if matcher is available
         if self.matcher is not None:
-            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
         batch_ids = storage_dict['batch_ids']
@@ -1066,21 +1080,28 @@ class RefineMaskRoIHead(StandardRoIHead):
         # Get image width and height with padding
         iW, iH = images.size()
 
-        # Get number of features, number of classes and device
+        # Get number of queries and number of classes
         num_qrys = cls_logits.size(dim=0)
         num_classes = cls_logits.size(dim=1) - 1
+
+        # Get batch size and device
+        batch_size = len(images)
         device = cls_logits.device
 
-        # Get feature indices
-        feat_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, num_classes).reshape(-1)
+        # Get query and batch indices
+        qry_ids = torch.arange(num_qrys, device=device)
+
+        if self.seg_type == 'instance':
+            qry_ids = qry_ids[:, None].expand(-1, num_classes).reshape(-1)
+            batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
 
         # Get prediction labels and scores
-        pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
-        pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+        if self.seg_type == 'instance':
+            pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
+            pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
 
-        # Get batch size and batch indices
-        batch_size = len(images)
-        batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+        else:
+            pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
 
         # Get number of stages and interpolation keyword arguments
         num_stages = len(self.mask_head.stage_sup_size)
@@ -1096,7 +1117,7 @@ class RefineMaskRoIHead(StandardRoIHead):
             # Get predictions corresponding to batch entry
             batch_mask = batch_ids == i
 
-            feat_ids_i = feat_ids[batch_mask]
+            qry_ids_i = qry_ids[batch_mask]
             pred_labels_i = pred_labels[batch_mask]
             pred_scores_i = pred_scores[batch_mask]
 
@@ -1109,17 +1130,17 @@ class RefineMaskRoIHead(StandardRoIHead):
                     num_preds_i = len(pred_scores_i)
                     candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds_i))[1]
 
-                    feat_ids_i = feat_ids_i[candidate_ids]
+                    qry_ids_i = qry_ids_i[candidate_ids]
                     pred_labels_i = pred_labels_i[candidate_ids]
                     pred_scores_i = pred_scores_i[candidate_ids]
 
-                    pred_boxes_i = pred_boxes[feat_ids_i].to_format('xyxy')
+                    pred_boxes_i = pred_boxes[qry_ids_i].to_format('xyxy')
                     pred_boxes_i = pred_boxes_i.to_img_scale(images).boxes
 
                     iou_thr = self.dup_attrs['nms_thr']
                     non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
 
-                    feat_ids_i = feat_ids_i[non_dup_ids]
+                    qry_ids_i = qry_ids_i[non_dup_ids]
                     pred_labels_i = pred_labels_i[non_dup_ids]
                     pred_boxes_i = pred_boxes_i[non_dup_ids]
                     pred_scores_i = pred_scores_i[non_dup_ids]
@@ -1133,7 +1154,7 @@ class RefineMaskRoIHead(StandardRoIHead):
                 if len(pred_scores_i) > self.max_segs:
                     top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
 
-                    feat_ids_i = feat_ids_i[top_pred_ids]
+                    qry_ids_i = qry_ids_i[top_pred_ids]
                     pred_labels_i = pred_labels_i[top_pred_ids]
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
@@ -1155,7 +1176,7 @@ class RefineMaskRoIHead(StandardRoIHead):
             if self.fuse_qry is not None:
                 qry_feats = storage_dict['qry_feats']
 
-                qry_feats_i = qry_feats[feat_ids_i]
+                qry_feats_i = qry_feats[qry_ids_i]
                 qry_feats_i = self.qry(qry_feats_i) if self.qry is not None else qry_feats_i
                 qry_feats_i = qry_feats_i[:, :, None, None].expand_as(roi_feats_i)
 
@@ -1183,7 +1204,7 @@ class RefineMaskRoIHead(StandardRoIHead):
             pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
             pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
 
-            if self.pred_mask_type == 'panoptic':
+            if self.seg_type == 'panoptic':
                 mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
 
             # Add predictions to prediction dictionary
@@ -1233,7 +1254,7 @@ class RefineMaskRoIHead(StandardRoIHead):
 
         # Perform matching if matcher is available
         if self.matcher is not None:
-            self.matcher(storage_dict=storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
+            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
         batch_ids = storage_dict['batch_ids']

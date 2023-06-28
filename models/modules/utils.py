@@ -387,15 +387,17 @@ class QryInit(nn.Module):
     Attributes:
         qry_init (nn.Module): Module implementing the query initialization module.
         rename_dict (Dict): Dictionary used to rename the keys from the original query dictionary.
+        qry_ids_key (str): String containing the storage dictionary key to store the query indices (or None).
     """
 
-    def __init__(self, qry_init_cfg, rename_dict=None):
+    def __init__(self, qry_init_cfg, rename_dict=None, qry_ids_key=None):
         """
         Initializes the QryInit module.
 
         Args:
             qry_init_cfg (Dict): Configuration dictionary specifying the query initialization module.
             rename_dict (Dict): Dictionary used to rename the keys from the original query dictionary (default=None).
+            qry_ids_key (str): String containing the storage dictionary key to store the query indices (default=None).
         """
 
         # Initialization of default nn.Module
@@ -404,15 +406,15 @@ class QryInit(nn.Module):
         # Build query initialization module
         self.qry_init = build_model(qry_init_cfg)
 
-        # Set attribute with rename dictionary
+        # Set remaining attributes
         self.rename_dict = rename_dict if rename_dict is not None else {}
+        self.qry_ids_key = qry_ids_key
 
-    def forward(self, in_qry_feats, storage_dict, **kwargs):
+    def forward(self, _, storage_dict, **kwargs):
         """
         Forward method of the QryInit module.
 
         Args:
-            in_qry_feats (None): None.
             storage_dict (Dict): Dictionary storing various items of interest.
             kwargs (Dict): Dictionary of keyword arguments passed to the query initialization module.
 
@@ -423,17 +425,21 @@ class QryInit(nn.Module):
             ValueError: Error when the 'in_qry_feats' input is not None.
         """
 
-        # Check whether 'in_qry_feats' input is None
-        if in_qry_feats is not None:
-            error_msg = f"The 'in_qry_feats' input from the QryInit module should be None (got {type(in_qry_feats)})."
-            raise ValueError(error_msg)
-
         # Apply query initialization module
         qry_dict, storage_dict = self.qry_init(storage_dict=storage_dict, **kwargs)
 
         # Rename specific keys from query dictionary
         for old_key, new_key in self.rename_dict.items():
             qry_dict[new_key] = qry_dict.pop(old_key, None)
+
+        # Add query indices to storage dictionary if needed
+        if self.qry_ids_key is not None:
+            num_qrys_before = len(storage_dict.get('qry_feats', []))
+            num_qrys_after = num_qrys_before + len(qry_dict['qry_feats'])
+
+            device = qry_dict['qry_feats'].device
+            qry_ids = torch.arange(num_qrys_before, num_qrys_after, device=device)
+            storage_dict[self.qry_ids_key] = qry_ids
 
         # Add elements from query dictionary to storage dictionary
         for k, v in qry_dict.items():
@@ -487,6 +493,204 @@ class SkipConnection(nn.Module):
         out_feats = in_feats + self.res(in_feats, **kwargs)
 
         return out_feats
+
+
+@MODELS.register_module()
+class StorageCat(nn.Module):
+    """
+    Class implementing the StorageCat module.
+
+    Attributes:
+        keys_to_cat (str): List with keys of storage dictionary entries to concatenate.
+        module (nn.Module): Underlying module computing the storage dictionary entries to be concatenated.
+        cat_dim (int): Integer containing the dimension along which to concatenate.
+    """
+
+    def __init__(self, keys_to_cat, module_cfg, cat_dim=0):
+        """
+        Initializes the StorageCat module.
+
+        Args:
+            keys_to_cat (List): List with keys of storage dictionary entries to concatenate.
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+            cat_dim (int): Integer containing the dimension along which to concatenate (default=0).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg)
+
+        # Set remaining attributes
+        self.keys_to_cat = keys_to_cat
+        self.cat_dim = cat_dim
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageCat module.
+
+        Args:
+            storage_dict (Dict): Dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary with some entries updated by concatenation.
+        """
+
+        # Swap desired entries from dictionary
+        cat_dict = {}
+
+        for key in self.keys_to_cat:
+            cat_dict[key] = storage_dict.pop(key)
+
+        # Apply underlying module
+        self.module(storage_dict=storage_dict, **kwargs)
+
+        # Concatenate desired entries
+        for key in self.keys_to_cat:
+            storage_dict[key] = torch.cat([cat_dict[key], storage_dict[key]], dim=self.cat_dim)
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class StorageMasking(nn.Module):
+    """
+    Class implementing the StorageMasking module.
+
+    Attributes:
+        with_in_tensor (bool): Boolean indicating whether an input tensor is provided as positional argument.
+        mask_key (str): String with key to retrieve mask from storage dictionary.
+        mask_in_tensor (bool): Boolean indicating whether the input tensor should be masked.
+        keys_to_mask (Tuple): List with keys of storage dictionary entries to mask.
+        module (nn.Module): Underlying module applied on the (potentially) masked inputs.
+    """
+
+    def __init__(self, with_in_tensor, mask_key, module_cfg, mask_in_tensor=True, keys_to_mask=None, **kwargs):
+        """
+        Initializes the StorageMasking module.
+
+        Args:
+            with_in_tensor (bool): Boolean indicating whether an input tensor is provided as positional argument.
+            mask_key (str): String with key to retrieve mask from storage dictionary.
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+            mask_in_tensor (bool): Boolean indicating whether the input tensor should be masked (default=True).
+            keys_to_mask (List): List with keys of storage dictionary entries to mask (default=None).
+            kwargs (Dict): Dictionary of keyword arguments passed to the build function of the underlying module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg, **kwargs)
+
+        # Set remaining attributes
+        self.with_in_tensor = with_in_tensor
+        self.mask_key = mask_key
+        self.mask_in_tensor = mask_in_tensor
+        self.keys_to_mask = keys_to_mask if keys_to_mask is not None else []
+
+    def forward_with(self, in_tensor, storage_dict, **kwargs):
+        """
+        Forward method of the StorageMasking module with an input tensor provided as positional argument.
+
+        Args:
+            in_tensor (Tensor): Input tensor of arbitrary shape.
+            storage_dict (Dict): Dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            out_tensor (Tensor): Output tensor of arbitrary shape.
+        """
+
+        # Retrieve mask from storage dictionary
+        mask = storage_dict[self.mask_key]
+
+        # Get masked input tensor
+        mask_in_tensor = in_tensor[mask] if self.mask_in_tensor else in_tensor
+
+        # Mask desired entries from storage dictionary
+        unmask_dict = {}
+
+        for key in self.keys_to_mask:
+            unmask_dict[key] = storage_dict[key]
+            storage_dict[key] = storage_dict[key][mask]
+
+        # Apply underlying module to get masked output tensor
+        mask_out_tensor = self.module(mask_in_tensor, storage_dict=storage_dict, **kwargs)
+
+        # Unmask desired entries from storage dictionary
+        for key in self.keys_to_mask:
+            unmask_value = unmask_dict[key]
+            unmask_value[mask] = storage_dict[key]
+            storage_dict[key] = unmask_value
+
+        # Get output tensor
+        if self.mask_in_tensor:
+            out_tensor = in_tensor.clone()
+            out_tensor[mask] = mask_out_tensor
+
+        else:
+            out_tensor = mask_out_tensor
+
+        return out_tensor
+
+    def forward_without(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageMasking module without an input tensor provided as positional argument.
+
+        Args:
+            storage_dict (Dict): Dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary with (potentially) some new and updated entries.
+        """
+
+        # Retrieve mask from storage dictionary
+        mask = storage_dict[self.mask_key]
+
+        # Mask desired entries from storage dictionary
+        unmask_dict = {}
+
+        for key in self.keys_to_mask:
+            unmask_dict[key] = storage_dict[key]
+            storage_dict[key] = storage_dict[key][mask]
+
+        # Apply underlying module
+        self.module(storage_dict=storage_dict, **kwargs)
+
+        # Unmask desired entries from storage dictionary
+        for key in self.keys_to_mask:
+            unmask_value = unmask_dict[key]
+            unmask_value[mask] = storage_dict[key]
+            storage_dict[key] = unmask_value
+
+        return storage_dict
+
+    def forward(self, *args, **kwargs):
+        """
+        Forward method of the StorageMasking module.
+
+        Args:
+            args (Tuple): Tuple of positional arguments passed to the underlying forward method.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying forward method.
+
+        Returns:
+            * If 'self.with_in_tensor' is True:
+                out_tensor (Tensor): Output tensor of arbitrary shape.
+
+            * If 'self.with_in_tensor' is False:
+                storage_dict (Dict): Storage dictionary with (potentially) some new and updated entries.
+        """
+
+        # Get and apply underlying forward method
+        forward_method = self.forward_with if self.with_in_tensor else self.forward_without
+        output = forward_method(*args, **kwargs)
+
+        return output
 
 
 @MODELS.register_module()

@@ -55,6 +55,7 @@ model = dict(
                     type='BoxMatcher',
                     qry_key='anchors',
                     share_qry_boxes=True,
+                    match_tgt_labels=list(range(80)),
                     box_metric='iou',
                     sim_matcher_cfg=dict(
                         type='SimMatcher',
@@ -79,23 +80,43 @@ model = dict(
                 'sel_feats': 'qry_feats',
                 'sel_boxes': 'prior_boxes',
             },
+            qry_ids_key='thing_qry_ids',
+        ),
+        '0_1': dict(
+            type='QryInit',
+            qry_init_cfg=dict(
+                type='EmbeddingSelector',
+                num_embeds=53,
+                embed_size=256,
+            ),
+            rename_dict={
+                'embed_feats': 'qry_feats',
+            },
+            qry_ids_key='stuff_qry_ids',
         ),
         **{f'{i}_{i}': [
             dict(
-                type='BoxCrossAttn',
-                attn_cfg=dict(
-                    type='DeformableAttn',
-                    in_size=256,
-                    sample_size=256,
-                    out_size=256,
-                    norm='layer',
-                    act_fn='',
-                    skip=True,
-                    version=1,
-                    num_heads=8,
-                    num_levels=6,
-                    num_points=1,
-                    val_size=256,
+                type='StorageMasking',
+                with_in_tensor=True,
+                mask_key='thing_qry_ids',
+                mask_in_tensor=True,
+                keys_to_mask=['batch_ids'],
+                module_cfg=dict(
+                    type='BoxCrossAttn',
+                    attn_cfg=dict(
+                        type='DeformableAttn',
+                        in_size=256,
+                        sample_size=256,
+                        out_size=256,
+                        norm='layer',
+                        act_fn='',
+                        skip=True,
+                        version=1,
+                        num_heads=8,
+                        num_levels=6,
+                        num_points=1,
+                        val_size=256,
+                    ),
                 ),
             ),
             dict(
@@ -128,87 +149,106 @@ model = dict(
                 dict(
                     type='nn.Linear',
                     in_features=256,
-                    out_features=81,
+                    out_features=134,
                     bias=True,
                 ),
             ],
-            matcher_cfg=dict(
-                type='TopMatcher',
-                ids_key='sel_top_ids',
-                qry_key='box_logits',
-                top_pos=15,
-                top_neg=15,
-                allow_multi_tgt=False,
-            ),
-            soft_label_type='box_iou',
+            matcher_cfg=[
+                dict(
+                    type='TopMatcher',
+                    ids_key='sel_top_ids',
+                    qry_key='box_logits',
+                    top_pos=15,
+                    top_neg=15,
+                    allow_multi_tgt=False,
+                ),
+                dict(
+                    type='StorageCat',
+                    keys_to_cat=[
+                        'match_labels',
+                        'matched_qry_ids',
+                        'matched_tgt_ids',
+                    ],
+                    module_cfg=dict(
+                        type='FixedClsMatcher',
+                        qry_cls_labels=list(range(80, 133)),
+                        qry_mask_key='stuff_qry_ids',
+                    ),
+                ),
+            ],
             loss_cfg=dict(
-                type='mmdet.QualityFocalLoss',
-                use_sigmoid=True,
-                beta=2.0,
+                type='SigmoidFocalLoss',
+                alpha=0.25,
+                gamma=2.0,
                 reduction='sum',
-                loss_weight=0.5,
-                activated=False,
+                weight=1.0,
             ),
         ),
         '6_1': dict(
-            type='BaseBox2dHead',
-            logits_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
+            type='StorageMasking',
+            with_in_tensor=False,
+            mask_key='thing_qry_ids',
+            keys_to_mask=['qry_feats'],
+            module_cfg=dict(
+                type='BaseBox2dHead',
+                logits_cfg=[
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=256,
+                        bias=True,
+                    ),
+                    dict(
+                        type='nn.LayerNorm',
+                        normalized_shape=256,
+                    ),
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=256,
+                        bias=True,
+                    ),
+                    dict(
+                        type='nn.ReLU',
+                        inplace=True,
+                    ),
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=256,
+                        bias=True,
+                    ),
+                    dict(
+                        type='nn.ReLU',
+                        inplace=True,
+                    ),
+                    dict(
+                        type='nn.Linear',
+                        in_features=256,
+                        out_features=4,
+                        bias=True,
+                    ),
+                ],
+                box_coder_cfg=dict(
+                    type='RcnnBoxCoder',
                 ),
-                dict(
-                    type='nn.LayerNorm',
-                    normalized_shape=256,
+                get_dets=True,
+                dup_attrs=dict(
+                    type='nms',
+                    nms_candidates=1000,
+                    nms_thr=0.65,
                 ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=4,
-                    bias=True,
-                ),
-            ],
-            box_coder_cfg=dict(
-              type='RcnnBoxCoder',
-            ),
-            get_dets=True,
-            dup_attrs=dict(
-                type='nms',
-                nms_candidates=1000,
-                nms_thr=0.65,
-            ),
-            max_dets=100,
-            report_match_stats=True,
-            matcher_cfg=None,
-            loss_cfg=dict(
-                type='BoxLoss',
-                box_loss_type='mmdet_boxes',
-                box_loss_cfg=dict(
-                    type='mmdet.EIoULoss',
-                    reduction='sum',
-                    loss_weight=1.85,
+                max_dets=100,
+                report_match_stats=True,
+                matcher_cfg=None,
+                loss_cfg=dict(
+                    type='BoxLoss',
+                    box_loss_type='mmdet_boxes',
+                    box_loss_cfg=dict(
+                        type='mmdet.EIoULoss',
+                        reduction='sum',
+                        loss_weight=1.85,
+                    ),
                 ),
             ),
         ),
@@ -216,6 +256,15 @@ model = dict(
             type='BaseSegHead',
             qry_dicts=[
                 dict(
+                    qry_mask_key='thing_qry_ids',
+                    keys_to_qry_mask=[
+                        'qry_feats',
+                        'batch_ids',
+                        'cls_logits',
+                    ],
+                    keys_to_sel=[
+                        'seg_mask_logits',
+                    ],
                     keys_to_mask=[
                         'qry_feats',
                         'batch_ids',
@@ -226,6 +275,24 @@ model = dict(
                     dup_needs_masks=False,
                     nms_candidates=1000,
                     nms_thr=0.65,
+                    name='thing',
+                ),
+                dict(
+                    qry_mask_key='stuff_qry_ids',
+                    keys_to_qry_mask=[
+                        'qry_feats',
+                        'batch_ids',
+                        'cls_logits',
+                    ],
+                    keys_to_sel=[
+                        'seg_mask_logits',
+                    ],
+                    keys_to_mask=[
+                        'qry_feats',
+                        'batch_ids',
+                    ],
+                    seg_mask_type='image',
+                    name='stuff',
                 ),
             ],
             qry_cfg=[
@@ -272,7 +339,7 @@ model = dict(
                 featmap_strides=[4, 8, 16, 32],
             ),
             get_segs=True,
-            seg_type='instance',
+            seg_type='panoptic',
             max_segs=100,
             mask_thr=0.5,
             loss_sample_cfg=dict(
