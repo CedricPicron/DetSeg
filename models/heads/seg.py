@@ -361,21 +361,17 @@ class BaseSegHead(nn.Module):
             if qry_mask_key is not None:
                 qry_mask = storage_dict[qry_mask_key]
 
-                keys_to_qry_mask = qry_dict.get('keys_to_qry_mask', [])
-                keys_to_sel = qry_dict.get('keys_to_sel', [])
-                keys_to_pop = qry_dict.get('keys_to_pop', [])
-
-                for key in keys_to_qry_mask:
+                for key in qry_dict.get('keys_to_qry_mask', []):
                     if key in storage_dict:
                         storage_dict_i[key] = storage_dict[key][qry_mask]
 
-                for key in keys_to_sel:
-                    if key in storage_dict:
-                        storage_dict_i[key] = storage_dict[key][i]
+            for key in qry_dict.get('keys_to_sel', []):
+                if key in storage_dict:
+                    storage_dict_i[key] = storage_dict[key][i]
 
-                for key in keys_to_pop:
-                    if key in storage_dict:
-                        storage_dict_i.pop(key)
+            for key in qry_dict.get('keys_to_pop', []):
+                if key in storage_dict:
+                    storage_dict_i.pop(key)
 
             # Get number of queries and number of classes
             cls_logits = storage_dict_i['cls_logits']
@@ -461,15 +457,16 @@ class BaseSegHead(nn.Module):
 
                 # Get mask scores and prediction masks
                 qry_ids_j, non_unique_ids = qry_ids_j.unique(sorted=False, return_inverse=True)
+                storage_dict_ij = storage_dict_i.copy()
 
                 for key in qry_dict.get('keys_to_mask', []):
                     if key in storage_dict:
-                        storage_dict_i[key] = storage_dict[key][qry_ids_j]
+                        storage_dict_ij[key] = storage_dict_i[key][qry_ids_j]
 
                 if self.process_all_qrys:
-                    mask_logits = storage_dict_i['seg_mask_logits']
+                    mask_logits = storage_dict_ij['seg_mask_logits']
                 else:
-                    mask_logits = self.get_mask_logits(qry_dict, storage_dict_i)
+                    mask_logits = self.get_mask_logits(qry_dict, storage_dict_ij)
 
                 mask_scores = mask_logits.sigmoid().unsqueeze(dim=1)
                 seg_mask_type = qry_dict.get('seg_mask_type', 'image')
@@ -479,7 +476,7 @@ class BaseSegHead(nn.Module):
                     mask_scores = mask_scores.squeeze(dim=1)
 
                 elif seg_mask_type == 'roi':
-                    pred_boxes = storage_dict_i['pred_boxes'].clone()
+                    pred_boxes = storage_dict_ij['pred_boxes'].clone()
                     pred_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes
                     mask_scores = _do_paste_mask(mask_scores, pred_boxes, iH, iW, skip_empty=False)[0]
 
@@ -813,16 +810,13 @@ class BaseSegHead(nn.Module):
             if qry_mask_key is not None:
                 qry_mask = storage_dict[qry_mask_key]
 
-                keys_to_qry_mask = qry_dict.get('keys_to_qry_mask', [])
-                keys_to_sel = qry_dict.get('keys_to_sel', [])
-
-                for key in keys_to_qry_mask:
+                for key in qry_dict.get('keys_to_qry_mask', []):
                     if key in storage_dict:
                         storage_dict_i[key] = storage_dict[key][qry_mask]
 
-                for key in keys_to_sel:
-                    if key in storage_dict:
-                        storage_dict_i[key] = storage_dict[key][i]
+            for key in qry_dict.get('keys_to_sel', []):
+                if key in storage_dict:
+                    storage_dict_i[key] = storage_dict[key][i]
 
             # Get segmentation mask logits if needed
             if self.process_all_qrys:
@@ -993,19 +987,16 @@ class BaseSegHead(nn.Module):
             if qry_mask_key is not None:
                 qry_mask = storage_dict[qry_mask_key]
 
-                keys_to_qry_mask = qry_dict.get('keys_to_qry_mask', [])
-                keys_to_sel = qry_dict.get('keys_to_sel', [])
-
-                for key in keys_to_qry_mask:
+                for key in qry_dict.get('keys_to_qry_mask', []):
                     if key in storage_dict:
                         storage_dict_i[key] = storage_dict[key][qry_mask]
 
-                for key in keys_to_sel:
-                    if key in storage_dict:
-                        storage_dict_i[key] = storage_dict[key][i]
+                if qry_mask.dtype == torch.bool:
+                    qry_ids = qry_mask.nonzero(as_tuple=False)[:, 0]
+                else:
+                    qry_ids = qry_mask
 
-                qry_ids_i = qry_mask.nonzero(as_tuple=False)[:, 0]
-                matched_mask_i = matched_qry_ids[:, None] == qry_ids_i[None, :]
+                matched_mask_i = matched_qry_ids[:, None] == qry_ids[None, :]
                 matched_mask_i, matched_qry_ids_i = matched_mask_i.int().max(dim=1)
 
                 matched_mask_i = matched_mask_i.bool()
@@ -1016,9 +1007,13 @@ class BaseSegHead(nn.Module):
                 matched_qry_ids_i = matched_qry_ids
                 matched_tgt_ids_i = matched_tgt_ids
 
+            for key in qry_dict.get('keys_to_sel', []):
+                if key in storage_dict:
+                    storage_dict_i[key] = storage_dict[key][i]
+
             for key in qry_dict.get('keys_to_mask', []):
                 if key in storage_dict:
-                    storage_dict_i[key] = storage_dict[key][matched_qry_ids_i]
+                    storage_dict_i[key] = storage_dict_i[key][matched_qry_ids_i]
 
             # Get mask logits
             if self.process_all_qrys:
@@ -1057,6 +1052,7 @@ class BaseSegHead(nn.Module):
 
             elif self.mask_update and self.loss_updated_only:
                 update_mask = storage_dict_i[self.update_mask_key]
+                update_mask = update_mask.squeeze(dim=1)
 
                 mask_logits = mask_logits[update_mask]
                 mask_targets = mask_targets[update_mask]
@@ -1089,7 +1085,7 @@ class BaseSegHead(nn.Module):
                     if mask_preds.numel() > 0:
                         mask_acc = (mask_preds == mask_targets).sum() / mask_preds.numel()
                     else:
-                        mask_acc = torch.tensor(1.0, device=device)
+                        mask_acc = torch.tensor(0.0, device=device)
 
                 else:
                     mask_preds = mask_logits.flatten(1).sigmoid() > self.mask_thr
@@ -1281,7 +1277,7 @@ class SegBndHead(nn.Module):
             seg_bnd_acc = (seg_bnd_preds == seg_bnd_targets).sum() / seg_bnd_preds.numel()
 
             key_name = f'seg_bnd_acc_{id}' if id is not None else 'seg_bnd_acc'
-            analysis_dict[key_name] = seg_bnd_acc
+            analysis_dict[key_name] = 100 * seg_bnd_acc
 
         return loss_dict, analysis_dict
 

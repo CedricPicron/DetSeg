@@ -188,7 +188,19 @@ model = dict(
             type='StorageMasking',
             with_in_tensor=False,
             mask_key='thing_qry_ids',
-            keys_to_mask=['qry_feats'],
+            keys_to_mask=[
+                'qry_feats',
+                'cls_logits',
+            ],
+            ids_mask_dicts=[
+                dict(
+                    ids_key='matched_qry_ids',
+                    apply_keys=[
+                        'matched_qry_ids',
+                        'matched_tgt_ids',
+                    ],
+                ),
+            ],
             module_cfg=dict(
                 type='BaseBox2dHead',
                 logits_cfg=[

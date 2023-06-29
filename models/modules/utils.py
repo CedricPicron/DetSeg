@@ -563,11 +563,18 @@ class StorageMasking(nn.Module):
         with_in_tensor (bool): Boolean indicating whether an input tensor is provided as positional argument.
         mask_key (str): String with key to retrieve mask from storage dictionary.
         mask_in_tensor (bool): Boolean indicating whether the input tensor should be masked.
-        keys_to_mask (Tuple): List with keys of storage dictionary entries to mask.
+        keys_to_mask (List): List with keys of storage dictionary entries to mask.
+
+        ids_mask_dicts (List): List of dictionaries used to mask index tensors, each of them containing following keys:
+            - ids_key (str): string with key of storage dictionary entry to build index-based mask from;
+            - apply_keys (List): list with keys of storage dictionary entries to apply index-based mask on.
+
         module (nn.Module): Underlying module applied on the (potentially) masked inputs.
+        keys_to_update (List): List with masked keys of storage dictionary entries to update.
     """
 
-    def __init__(self, with_in_tensor, mask_key, module_cfg, mask_in_tensor=True, keys_to_mask=None, **kwargs):
+    def __init__(self, with_in_tensor, mask_key, module_cfg, mask_in_tensor=True, keys_to_mask=None,
+                 ids_mask_dicts=None, keys_to_update=None, **kwargs):
         """
         Initializes the StorageMasking module.
 
@@ -577,6 +584,8 @@ class StorageMasking(nn.Module):
             module_cfg (Dict): Configuration dictionary specifying the underlying module.
             mask_in_tensor (bool): Boolean indicating whether the input tensor should be masked (default=True).
             keys_to_mask (List): List with keys of storage dictionary entries to mask (default=None).
+            ids_mask_dicts (List): List of dictionaries used to mask storage dictionary index tensors (default=None).
+            keys_to_update (List): List with masked keys of storage dictionary entries to update (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to the build function of the underlying module.
         """
 
@@ -591,6 +600,8 @@ class StorageMasking(nn.Module):
         self.mask_key = mask_key
         self.mask_in_tensor = mask_in_tensor
         self.keys_to_mask = keys_to_mask if keys_to_mask is not None else []
+        self.ids_mask_dicts = ids_mask_dicts if ids_mask_dicts is not None else []
+        self.keys_to_update = keys_to_update if keys_to_update is not None else []
 
     def forward_with(self, in_tensor, storage_dict, **kwargs):
         """
@@ -613,19 +624,60 @@ class StorageMasking(nn.Module):
 
         # Mask desired entries from storage dictionary
         unmask_dict = {}
+        ids_mask_list = [None for _ in range(len(self.ids_mask_dicts))]
 
         for key in self.keys_to_mask:
-            unmask_dict[key] = storage_dict[key]
-            storage_dict[key] = storage_dict[key][mask]
+            if key in storage_dict:
+                unmask_dict[key] = storage_dict[key]
+                storage_dict[key] = storage_dict[key][mask]
+
+        if len(self.ids_mask_dicts) > 0:
+            if mask.dtype == torch.bool:
+                mask_ids = mask.nonzero(as_tuple=False)[:, 0]
+            else:
+                mask_ids = mask
+
+        for i, ids_mask_dict in enumerate(self.ids_mask_dicts):
+            ids_key = ids_mask_dict['ids_key']
+
+            if ids_key in storage_dict:
+                ids_tensor = storage_dict[ids_key]
+
+                ids_mask = (ids_tensor[:, None] == mask_ids[None, :]).any(dim=1)
+                ids_mask_list[i] = ids_mask
+
+                for key in ids_mask_dict['apply_keys']:
+                    if key in storage_dict:
+                        unmask_dict[key] = storage_dict[key]
+                        storage_dict[key] = storage_dict[key][ids_mask]
 
         # Apply underlying module to get masked output tensor
         mask_out_tensor = self.module(mask_in_tensor, storage_dict=storage_dict, **kwargs)
 
         # Unmask desired entries from storage dictionary
         for key in self.keys_to_mask:
-            unmask_value = unmask_dict[key]
-            unmask_value[mask] = storage_dict[key]
-            storage_dict[key] = unmask_value
+            if key in unmask_dict:
+                unmask_value = unmask_dict[key]
+
+                if key in self.keys_to_update:
+                    unmask_value = unmask_value.clone()
+                    unmask_value[mask] = storage_dict[key]
+
+                storage_dict[key] = unmask_value
+
+        for i, ids_mask_dict in enumerate(self.ids_mask_dicts):
+            ids_mask = ids_mask_list[i]
+
+            if ids_mask is not None:
+                for key in ids_mask_dict['apply_keys']:
+                    if key in unmask_dict:
+                        unmask_value = unmask_dict[key]
+
+                        if key in self.keys_to_update:
+                            unmask_value = unmask_value.clone()
+                            unmask_value[ids_mask] = storage_dict[key]
+
+                        storage_dict[key] = unmask_value
 
         # Get output tensor
         if self.mask_in_tensor:
@@ -654,19 +706,60 @@ class StorageMasking(nn.Module):
 
         # Mask desired entries from storage dictionary
         unmask_dict = {}
+        ids_mask_list = [None for _ in range(len(self.ids_mask_dicts))]
 
         for key in self.keys_to_mask:
-            unmask_dict[key] = storage_dict[key]
-            storage_dict[key] = storage_dict[key][mask]
+            if key in storage_dict:
+                unmask_dict[key] = storage_dict[key]
+                storage_dict[key] = storage_dict[key][mask]
+
+        if len(self.ids_mask_dicts) > 0:
+            if mask.dtype == torch.bool:
+                mask_ids = mask.nonzero(as_tuple=False)[:, 0]
+            else:
+                mask_ids = mask
+
+        for i, ids_mask_dict in enumerate(self.ids_mask_dicts):
+            ids_key = ids_mask_dict['ids_key']
+
+            if ids_key in storage_dict:
+                ids_tensor = storage_dict[ids_key]
+
+                ids_mask = (ids_tensor[:, None] == mask_ids[None, :]).any(dim=1)
+                ids_mask_list[i] = ids_mask
+
+                for key in ids_mask_dict['apply_keys']:
+                    if key in storage_dict:
+                        unmask_dict[key] = storage_dict[key]
+                        storage_dict[key] = storage_dict[key][ids_mask]
 
         # Apply underlying module
         self.module(storage_dict=storage_dict, **kwargs)
 
         # Unmask desired entries from storage dictionary
         for key in self.keys_to_mask:
-            unmask_value = unmask_dict[key]
-            unmask_value[mask] = storage_dict[key]
-            storage_dict[key] = unmask_value
+            if key in unmask_dict:
+                unmask_value = unmask_dict[key]
+
+                if key in self.keys_to_update:
+                    unmask_value = unmask_value.clone()
+                    unmask_value[mask] = storage_dict[key]
+
+                storage_dict[key] = unmask_value
+
+        for i, ids_mask_dict in enumerate(self.ids_mask_dicts):
+            ids_mask = ids_mask_list[i]
+
+            if ids_mask is not None:
+                for key in ids_mask_dict['apply_keys']:
+                    if key in unmask_dict:
+                        unmask_value = unmask_dict[key]
+
+                        if key in self.keys_to_update:
+                            unmask_value = unmask_value.clone()
+                            unmask_value[ids_mask] = storage_dict[key]
+
+                        storage_dict[key] = unmask_value
 
         return storage_dict
 

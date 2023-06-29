@@ -186,7 +186,9 @@ class AnchorSelector(nn.Module):
             self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
             # Get selection loss
-            match_labels = storage_dict['match_labels']
+            match_labels = storage_dict.pop('match_labels')
+            matched_qry_ids = storage_dict.pop('matched_qry_ids')
+            matched_tgt_ids = storage_dict.pop('matched_tgt_ids')
 
             loss_mask = match_labels != -1
             pred_logits = sel_logits.flatten()[loss_mask]
@@ -197,9 +199,6 @@ class AnchorSelector(nn.Module):
 
             # Get percentage of targets found
             if analysis_dict is not None:
-                matched_qry_ids = storage_dict['matched_qry_ids']
-                matched_tgt_ids = storage_dict['matched_tgt_ids']
-
                 cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
                 inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
 

@@ -119,6 +119,20 @@ model = dict(
         dict(
             type='BaseClsHead',
             apply_ids=[6],
+            qry_dicts=[
+                dict(
+                    keys_to_mask=[
+                        'qry_feats',
+                        'batch_ids',
+                        'pred_boxes',
+                    ],
+                    seg_mask_type='roi',
+                    dup_type='box_nms',
+                    dup_needs_masks=False,
+                    nms_candidates=1000,
+                    nms_thr=0.65,
+                ),
+            ],
             logits_cfg=[
                 dict(
                     type='nn.Linear',
@@ -211,6 +225,20 @@ model = dict(
         dict(
             type='BaseSegHead',
             apply_ids=[6],
+            qry_dicts=[
+                dict(
+                    keys_to_mask=[
+                        'qry_feats',
+                        'batch_ids',
+                        'pred_boxes',
+                    ],
+                    seg_mask_type='image',
+                    dup_type='box_nms',
+                    dup_needs_masks=False,
+                    nms_candidates=1000,
+                    nms_thr=0.65,
+                ),
+            ],
             qry_cfg=[
                 dict(
                     type='nn.Linear',
@@ -239,14 +267,7 @@ model = dict(
                     kernel_size=1,
                 ),
             ),
-            mask_type='image',
             get_segs=True,
-            dup_attrs=dict(
-                type='box_nms',
-                needs_masks=False,
-                nms_candidates=1000,
-                nms_thr=0.65,
-            ),
             max_segs=100,
             mask_thr=0.5,
             loss_cfg=dict(
