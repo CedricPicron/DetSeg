@@ -11,6 +11,7 @@ from torch.nn.parameter import Parameter
 from models.build import build_model, MODELS
 from models.modules.container import Sequential
 from models.modules.convolution import ProjConv
+from structures.boxes import Boxes
 
 
 @MODELS.register_module()
@@ -124,6 +125,9 @@ class AnchorSelector(nn.Module):
             sel_ids (LongTensor): Indices of selected feature-anchor combinations of shape [num_sels].
 
             storage_dict (Dict): Storage dictionary possibly containing following additional keys:
+                - sel_match_labels (LongTensor): selection match labels of shape [batch_size * num_anchors];
+                - sel_matched_qry_ids (LongTensor): query indices of selection matches of shape [num_sel_matches];
+                - sel_matched_tgt_ids (LongTensor): target indices of selection matches of shape [num_sel_matches];
                 - attn_mask_list (List): list [batch_size] with attention masks of shape [num_sels_i, num_sels_i];
                 - sel_top_ids (LongTensor): top indices of selections per target of shape [top_limit, num_targets].
 
@@ -190,6 +194,10 @@ class AnchorSelector(nn.Module):
             matched_qry_ids = storage_dict.pop('matched_qry_ids')
             matched_tgt_ids = storage_dict.pop('matched_tgt_ids')
 
+            storage_dict['sel_match_labels'] = match_labels
+            storage_dict['sel_matched_qry_ids'] = matched_qry_ids
+            storage_dict['sel_matched_tgt_ids'] = matched_tgt_ids
+
             loss_mask = match_labels != -1
             pred_logits = sel_logits.flatten()[loss_mask]
             tgt_labels = match_labels[loss_mask]
@@ -199,17 +207,11 @@ class AnchorSelector(nn.Module):
 
             # Get percentage of targets found
             if analysis_dict is not None:
-                cat_ids = torch.cat([matched_qry_ids, sel_ids], dim=0)
-                inv_ids, counts = cat_ids.unique(return_inverse=True, return_counts=True)[1:]
-
-                num_matches = len(matched_qry_ids)
-                inv_ids = inv_ids[:num_matches]
-
-                tgt_found_mask = counts[inv_ids] == 2
+                tgt_found_mask = (matched_qry_ids[:, None] == sel_ids[None, :]).any(dim=1)
                 tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
 
                 num_tgts_found = len(tgt_found_ids)
-                num_tgts = len(tgt_dict['boxes'])
+                num_tgts = len(matched_tgt_ids.unique())
 
                 tgt_found = num_tgts_found / num_tgts if num_tgts > 0 else 1.0
                 tgt_found = torch.tensor(tgt_found, device=device)
@@ -386,15 +388,17 @@ class EmbeddingSelector(nn.Module):
 
     Attributes:
         embeds (Parameter): Learnable parameter containing the embeddings of shape [num_embeds, embed_size].
+        with_boxes (bool): Boolean indicating whether to also return image-sized boxes.
     """
 
-    def __init__(self, num_embeds, embed_size):
+    def __init__(self, num_embeds, embed_size, with_boxes=False):
         """
         Initializes the EmbeddingSelector module.
 
         Args:
             num_embeds (int): Integer containing the number of embeddings.
             embed_size (int): Integer containing the feature size of the embeddings.
+            with_boxes (bool): Boolean indicating whether to also return image-sized boxes (default=False).
         """
 
         # Initialization of default nn.Module
@@ -403,6 +407,9 @@ class EmbeddingSelector(nn.Module):
         # Get intial embeddings
         self.embeds = Parameter(torch.empty(num_embeds, embed_size), requires_grad=True)
         nn.init.normal_(self.embeds)
+
+        # Set remaining attributes
+        self.with_boxes = with_boxes
 
     def forward(self, storage_dict, embed_mask=None, **kwargs):
         """
@@ -416,9 +423,10 @@ class EmbeddingSelector(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            embed_dict (Dict): Embedding dictionary containing following keys:
+            embed_dict (Dict): Embedding dictionary (possibly) containing following keys:
                 - embed_feats (FloatTensor): selected embeddings of shape [num_sel_embeds, embed_size];
-                - batch_ids (LongTensor): batch indices of selected embeddings of shape [num_sel_embeds].
+                - batch_ids (LongTensor): batch indices of selected embeddings of shape [num_sel_embeds];
+                - embed_boxes (Boxes): Boxes structure containing image-sized bounding boxes of size [num_sel_embeds].
 
             storage_dict (Dict): Storage dictionary containing the same items as before.
         """
@@ -435,5 +443,13 @@ class EmbeddingSelector(nn.Module):
         embed_feats = embed_feats[None, :, :].expand(batch_size, -1, -1).flatten(0, 1)
         batch_ids = torch.arange(batch_size, device=device)[:, None].expand(-1, num_feats_i).flatten()
         embed_dict = {'embed_feats': embed_feats, 'batch_ids': batch_ids}
+
+        # Get image-sized embedding boxes if needed
+        if self.with_boxes:
+            boxes_tensor = torch.tensor([0.0, 0.0, 1.0, 1.0], device=device)
+            boxes_tensor = boxes_tensor[None, :].expand(len(embed_feats), -1)
+
+            embed_boxes = Boxes(boxes_tensor, format='xyxy', normalized='img_without_padding', batch_ids=batch_ids)
+            embed_dict['embed_boxes'] = embed_boxes.to_format('cxcywh').to_img_scale(images)
 
         return embed_dict, storage_dict

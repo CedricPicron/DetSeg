@@ -584,6 +584,7 @@ class BaseBox2dHead(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
                 - images (Images): Images structure containing the batched images of size [batch_size];
+                - sel_matched_tgt_ids (LongTensor): target indices of selection matches of shape [num_sel_matches];
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_qrys, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
                 - prior_boxes (Boxes): prior 2D bounding boxes of size [num_qrys];
@@ -646,7 +647,7 @@ class BaseBox2dHead(nn.Module):
             analysis_dict[key_name] = 100 * box_matched_qry
 
             # Get percentage of matched targets
-            num_tgts = len(tgt_dict['boxes'])
+            num_tgts = len(storage_dict['sel_matched_tgt_ids'].unique())
 
             box_matched_tgt = len(matched_tgt_ids.unique()) / num_tgts if num_tgts > 0 else 1.0
             box_matched_tgt = torch.tensor(box_matched_tgt, device=device)

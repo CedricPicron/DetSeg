@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from models.build import build_model, MODELS
+from structures.boxes import Boxes
 
 
 @MODELS.register_module()
@@ -422,7 +423,7 @@ class QryInit(nn.Module):
             out_qry_feats (FloatTensor): Output query features of shape [num_out_qrys, qry_feat_size].
 
         Raises:
-            ValueError: Error when the 'in_qry_feats' input is not None.
+            ValueError: Error when two objects of an unknown type need to be concatenated.
         """
 
         # Apply query initialization module
@@ -444,7 +445,15 @@ class QryInit(nn.Module):
         # Add elements from query dictionary to storage dictionary
         for k, v in qry_dict.items():
             if k in storage_dict.keys():
-                storage_dict[k] = torch.cat([storage_dict[k], v], dim=0)
+
+                if torch.is_tensor(v):
+                    storage_dict[k] = torch.cat([storage_dict[k], v], dim=0)
+                elif isinstance(v, Boxes):
+                    storage_dict[k] = Boxes.cat([storage_dict[k], v])
+                else:
+                    error_msg = f"Cannot concatenate objects of unknown type '{type(v)}' for key '{k}'."
+                    raise ValueError(error_msg)
+
             else:
                 storage_dict[k] = v
 
