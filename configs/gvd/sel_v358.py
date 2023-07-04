@@ -209,12 +209,13 @@ model = dict(
             ),
         ),
         dict(
-            type='StandardRoIHead',
+            type='PointRendRoIHead',
             mask_roi_extractor=dict(
-                type='mmdet.SingleRoIExtractor',
-                roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
+                type='mmdet.GenericRoIExtractor',
+                aggregation='concat',
+                roi_layer=dict(type='SimpleRoIAlign', output_size=14),
                 out_channels=256,
-                featmap_strides=[4, 8, 16, 32],
+                featmap_strides=[4],
             ),
             qry_cfg=[
                 dict(
@@ -260,6 +261,30 @@ model = dict(
                     reduction='sum',
                     loss_weight=1.0,
                 ),
+            ),
+            point_head_cfg=dict(
+                type='mmdet.MaskPointHead',
+                num_fcs=3,
+                in_channels=256,
+                fc_channels=256,
+                num_classes=133,
+                coarse_pred_each_layer=True,
+                loss_point=dict(
+                    type='mmdet.CrossEntropyLoss',
+                    use_sigmoid=True,
+                    reduction='sum',
+                    loss_weight=1.0,
+                ),
+            ),
+            train_attrs=dict(
+                num_points=196,
+                oversample_ratio=3.0,
+                importance_sample_ratio=0.75,
+            ),
+            test_attrs=dict(
+                subdivision_steps=3,
+                subdivision_num_points=784,
+                scale_factor=2.0,
             ),
             seg_type='panoptic',
             dup_attrs=dict(
