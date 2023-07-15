@@ -40,7 +40,7 @@ class BoxLoss(nn.Module):
         # Build underlying bounding box loss module
         self.box_loss = build_model(box_loss_cfg)
 
-    def forward(self, box_preds, box_targets, pred_boxes, tgt_boxes, **kwargs):
+    def forward(self, box_preds, box_targets, pred_boxes, tgt_boxes, weight=None, **kwargs):
         """
         Forward method of the BoxLoss module.
 
@@ -49,6 +49,7 @@ class BoxLoss(nn.Module):
             box_targets (FloatTensor): 2D bounding box regression targets of shape [num_preds, 4].
             pred_boxes (Boxes): Boxes structure containing the predicted 2D bounding boxes of size [num_preds].
             tgt_boxes (Boxes): Boxes structure containing the target 2D bounding boxes of size [num_preds].
+            weight (FloatTensor): Box-wise loss weights of shape [num_preds] (default=None).
             kwargs (Dict): Dictionary containing keyword arguments passed to the underlying loss module.
 
         Returns:
@@ -60,15 +61,16 @@ class BoxLoss(nn.Module):
 
         # Get box loss
         if self.box_loss_type == 'boxes':
-            box_loss = self.box_loss(pred_boxes, tgt_boxes, **kwargs)
+            box_loss = self.box_loss(pred_boxes, tgt_boxes, weight=weight, **kwargs)
 
         elif self.box_loss_type == 'mmdet_boxes':
             pred_boxes = pred_boxes.to_format('xyxy').boxes
             tgt_boxes = tgt_boxes.to_format('xyxy').boxes
-            box_loss = self.box_loss(pred_boxes, tgt_boxes, **kwargs)
+            box_loss = self.box_loss(pred_boxes, tgt_boxes, weight=weight, **kwargs)
 
         elif self.box_loss_type == 'regression':
-            box_loss = self.box_loss(box_preds, box_targets, **kwargs)
+            weight = weight[:, None].expand(-1, 4) if weight is not None else None
+            box_loss = self.box_loss(box_preds, box_targets, weight=weight, **kwargs)
 
         else:
             error_msg = f"Invalid bounding box loss type (got '{self.box_loss_type}') in BoxLoss module."
@@ -602,29 +604,32 @@ class SmoothL1Loss(nn.Module):
         self.reduction = reduction
         self.weight = weight
 
-    def forward(self, predictions, targets):
+    def forward(self, predictions, targets, weight=None):
         """
         Forward method of the SmoothL1Loss module.
 
         Args:
             predictions (FloatTensor): Tensor containing the predictions of shape [*].
             targets (FloatTensor): Tensor containing the targets of shape [*].
+            weight (FloatTensor): Element-wise loss weights of shape [*] (default=None).
 
         Returns:
             * If self.reduction is 'none':
-                loss (FloatTensor): Tensor with element-wise smooth L1 losses of shape [*]
+                loss (FloatTensor): Tensor with weighted element-wise smooth L1 losses of shape [*].
 
             * If self.reduction is 'mean':
-                loss (FloatTensor): Mean of tensor with element-wise smooth L1 losses of shape [].
+                loss (FloatTensor): Mean of tensor with weighted element-wise smooth L1 losses of shape [].
 
             * If self.reduction is 'sum':
-                loss (FloatTensor): Sum of tensor with element-wise smooth L1 losses of shape [].
+                loss (FloatTensor): Sum of tensor with weighted element-wise smooth L1 losses of shape [].
         """
 
         # Get weighted smooth L1 loss
         if self.beta == 0:
-            loss = self.weight * F.l1_loss(predictions, targets, reduction=self.reduction)
+            losses = F.l1_loss(predictions, targets, reduction='none')
         else:
-            loss = self.weight * F.smooth_l1_loss(predictions, targets, beta=self.beta, reduction=self.reduction)
+            losses = F.smooth_l1_loss(predictions, targets, beta=self.beta, reduction='none')
+
+        loss = self.weight * weight_reduce_loss(losses, weight=weight, reduction=self.reduction)
 
         return loss

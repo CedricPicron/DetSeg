@@ -202,30 +202,29 @@ model = dict(
             max_dets=100,
             report_match_stats=True,
             matcher_cfg=None,
+            loss_weighting='tgt_normalized',
             loss_cfg=dict(
                 type='BoxLoss',
                 box_loss_type='mmdet_boxes',
                 box_loss_cfg=dict(
                     type='mmdet.EIoULoss',
                     reduction='sum',
-                    loss_weight=1.85,
+                    loss_weight=10.0,
                 ),
             ),
         ),
         '6_2': dict(
             type='BaseSegHead',
-            qry_dicts=[
+            seg_qst_dicts=[
                 dict(
-                    keys_to_mask=[
-                        'qry_feats',
-                        'batch_ids',
-                        'pred_boxes',
-                    ],
-                    seg_mask_type='roi',
-                    dup_type='box_nms',
-                    dup_needs_masks=False,
-                    nms_candidates=1000,
-                    nms_thr=0.65,
+                    name='mask',
+                    loss_weighting='tgt_normalized',
+                    loss_cfg=dict(
+                        type='mmdet.CrossEntropyLoss',
+                        use_sigmoid=True,
+                        reduction='sum',
+                        loss_weight=5.0,
+                    ),
                 ),
             ],
             qry_cfg=[
@@ -245,51 +244,38 @@ model = dict(
                     out_features=256,
                     bias=True,
                 ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
             ],
-            key_cfg=dict(
-                type='ApplyAll',
-                module_cfg=[
-                    dict(
-                        type='mmdet.ConvModule',
-                        num_layers=4,
-                        in_channels=256,
-                        out_channels=256,
-                        kernel_size=3,
-                        padding=1,
-                    ),
-                    dict(
-                        type='nn.Conv2d',
-                        in_channels=256,
-                        out_channels=256,
-                        kernel_size=1,
-                    ),
-                ],
-            ),
-            roi_ext_cfg=dict(
-                type='mmdet.SingleRoIExtractor',
-                roi_layer=dict(type='RoIAlign', output_size=28, sampling_ratio=0),
-                out_channels=256,
-                featmap_strides=[4, 8, 16, 32],
-            ),
+            key_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
+            key_map_ids=[1, 2, 3, 4, 5],
             get_segs=True,
             seg_type='instance',
+            dup_type='box_nms',
+            dup_needs_masks=False,
+            nms_candidates=1000,
+            nms_thr=0.65,
             max_segs=100,
             mask_thr=0.5,
-            loss_sample_cfg=dict(
-                type='PointRendSampling',
-                num_points=12544,
-                oversample_ratio=3.0,
-                importance_ratio=0.75,
-            ),
-            loss_cfg=dict(
-                type='MaskLoss',
-                mask_loss_cfg=dict(
-                    type='mmdet.CrossEntropyLoss',
-                    use_sigmoid=True,
-                    reduction='sum',
-                    loss_weight=1.0,
-                ),
-            ),
         ),
     },
 )
