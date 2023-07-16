@@ -9,7 +9,6 @@ from mmdet.models.roi_heads.mask_heads.fcn_mask_head import _do_paste_mask
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_scatter import scatter_sum
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -961,12 +960,12 @@ class BaseSegHead(nn.Module):
                 loss_weights = None
 
             elif loss_weighting == 'qry_normalized':
-                ones = torch.ones_like(qry_ids)
-                loss_weights = ones / scatter_sum(ones, qry_ids)[qry_ids]
+                inv_ids, qry_counts = qry_ids.unique(return_inverse=True, return_counts=True)[1:]
+                loss_weights = torch.ones_like(qry_ids, dtype=torch.float) / qry_counts[inv_ids]
 
             elif loss_weighting == 'tgt_normalized':
-                ones = torch.ones_like(tgt_ids)
-                loss_weights = ones / scatter_sum(ones, tgt_ids)[tgt_ids]
+                inv_ids, tgt_counts = tgt_ids.unique(return_inverse=True, return_counts=True)[1:]
+                loss_weights = torch.ones_like(tgt_ids, dtype=torch.float) / tgt_counts[inv_ids]
 
             else:
                 error_msg = f"Invalid loss weighting mechanism in BaseSegHead (got '{loss_weighting}')."

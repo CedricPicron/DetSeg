@@ -9,7 +9,6 @@ from mmcv.ops import soft_nms
 from mmdet.models.layers.transformer.utils import inverse_sigmoid
 import torch
 from torch import nn
-from torch_scatter import scatter_sum
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
@@ -711,8 +710,8 @@ class BaseBox2dHead(nn.Module):
             loss_weights = None
 
         elif self.loss_weighting == 'tgt_normalized':
-            ones = torch.ones_like(matched_tgt_ids)
-            loss_weights = ones / scatter_sum(ones, matched_tgt_ids)[matched_tgt_ids]
+            inv_ids, tgt_counts = matched_tgt_ids.unique(return_inverse=True, return_counts=True)[1:]
+            loss_weights = torch.ones_like(matched_tgt_ids, dtype=torch.float) / tgt_counts[inv_ids]
 
         else:
             error_msg = f"Invalid loss weighting mechanism in BaseBox2dHead (got '{self.loss_weighting}')."
