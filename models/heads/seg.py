@@ -410,10 +410,13 @@ class BaseSegHead(nn.Module):
             mask_logits_maps = seq_to_maps(mask_logits_i, storage_dict['map_shapes'])
             mask_logits_i = mask_logits_maps[-1]
 
-            for mask_logit_map in reversed(mask_logits_maps[:-1]):
-                fH, fW = mask_logit_map.shape[-2:]
+            for mask_logits_map in reversed(mask_logits_maps[:-1]):
+                fH, fW = mask_logits_map.shape[-2:]
                 mask_logits_i = F.interpolate(mask_logits_i, size=(fH, fW), mode='bilinear', align_corners=False)
-                mask_logits_i = torch.stack([mask_logits_i.abs(), mask_logit_map.abs()], dim=0).max(dim=0)[0]
+
+                mask_logits_i = torch.stack([mask_logits_i, mask_logits_map], dim=0)
+                mask_logits_i = mask_logits_i.gather(dim=0, index=mask_logits_i.abs().argmax(dim=0, keepdim=True))
+                mask_logits_i = mask_logits_i.squeeze(dim=0)
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = F.interpolate(mask_scores_i, size=(iH, iW), mode='bilinear', align_corners=False)
