@@ -24,16 +24,17 @@ class BaseSegHead(nn.Module):
     Attributes:
         seg_qst_dicts (List): List [num_qsts] of segmentation question dictionaries, each possibly containing:
             - name (str): string containing the name of the segmentation question;
-            - loss_weighting (str): string containing the loss weighting mechanism.
+            - loss_weighting (str): string containing the loss weighting mechanism;
+            - reward_jump (float): value containing the reward jump at the mask threshold.
 
         qry (nn.Module): Optional module updating the query features.
         key (nn.Module): Optional module updating the key features.
         key_map_ids (List): List with feature map indices from which to compute initial mask logits.
         update_mask_key (str): String with key to retrieve update mask from the storage dictionary.
         get_bnd_masks (bool): Boolean indicating whether to get the segmentation boundary masks.
-        get_rew_masks (bool): Boolean indicating whether to get the segmentation reward masks.
+        get_gain_masks (bool): Boolean indicating whether to get the segmentation gain masks.
         get_unc_masks (bool): Boolean indicating whether to get the segmentation uncertainty masks.
-        rew_thr (int): Integer containing the relative reward threshold per query.
+        gain_thr (int): Integer containing the relative gain threshold per query.
         unc_thr (int): Integer containing the relative uncertainty threshold per query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
         seg_type (str): String containing the type of predicted segmentations.
@@ -59,7 +60,7 @@ class BaseSegHead(nn.Module):
     """
 
     def __init__(self, seg_qst_dicts, metadata, qry_cfg=None, key_cfg=None, key_map_ids=None, update_mask_key=None,
-                 get_bnd_masks=False, get_rew_masks=False, get_unc_masks=False, rew_thr=100, unc_thr=100,
+                 get_bnd_masks=False, get_gain_masks=False, get_unc_masks=False, gain_thr=100, unc_thr=100,
                  get_segs=True, seg_type='instance', box_mask_key=None, score_attrs=None, dup_attrs=None,
                  max_segs=None, mask_thr=0.5, matcher_cfg=None, apply_ids=None, **kwargs):
         """
@@ -77,9 +78,9 @@ class BaseSegHead(nn.Module):
             key_map_ids (List): List with feature map indices from which to compute initial mask logits (default=None).
             update_mask_key (str): String with key to retrieve update mask from the storage dictionary (default=None).
             get_bnd_masks (bool): Boolean indicating whether to get the segmentation boundary masks (default=False).
-            get_rew_masks (bool): Boolean indicating whether to get the segmentation reward masks (default=False).
+            get_gain_masks (bool): Boolean indicating whether to get the segmentation gain masks (default=False).
             get_unc_masks (bool): Boolean indicating whether to get the segmentation uncertainty masks (default=False).
-            rew_thr (int): Integer containing the relative reward threshold per query (default=100).
+            gain_thr (int): Integer containing the relative gain threshold per query (default=100).
             unc_thr (int): Integer containing the relative uncertainty threshold per query (default=100).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
             seg_type (str): String containing the type of predicted segmentations (default='instance').
@@ -115,9 +116,9 @@ class BaseSegHead(nn.Module):
         self.key_map_ids = key_map_ids if key_map_ids is not None else [0]
         self.update_mask_key = update_mask_key
         self.get_bnd_masks = get_bnd_masks
-        self.get_rew_masks = get_rew_masks
+        self.get_gain_masks = get_gain_masks
         self.get_unc_masks = get_unc_masks
-        self.rew_thr = rew_thr
+        self.gain_thr = gain_thr
         self.unc_thr = unc_thr
         self.get_segs = get_segs
         self.seg_type = seg_type
@@ -555,7 +556,7 @@ class BaseSegHead(nn.Module):
             sufficient_score = pred_scores >= vis_score_thr
 
             draw_dict['labels'] = pred_dict['labels'][sufficient_score]
-            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > self.mask_thr
             draw_dict['scores'] = pred_scores[sufficient_score]
 
             pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
@@ -724,10 +725,10 @@ class BaseSegHead(nn.Module):
                 - seg_qry_ids (LongTensor): query indices with new segmentation answers of shape [num_new_answers];
                 - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [num_new_answers];
                 - seg_qry_bnd_mask (BoolTensor): query-based boundary mask of shape [num_qrys, num_keys];
-                - seg_qry_rew_mask (BoolTensor): query-based reward mask of shape [num_qrys, num_keys];
+                - seg_qry_gain_mask (BoolTensor): query-based gain mask of shape [num_qrys, num_keys];
                 - seg_qry_unc_mask (BoolTensor): query-based uncertainty mask of shape [num_qrys, num_keys];
                 - seg_img_bnd_mask (BoolTensor): image-based boundary mask of shape [batch_size, num_keys];
-                - seg_img_rew_mask (BoolTensor): image-based reward mask of shape [batch_size, num_keys];
+                - seg_img_gain_mask (BoolTensor): image-based gain mask of shape [batch_size, num_keys];
                 - seg_img_unc_mask (BoolTensor): image-based uncertainty mask of shape [batch_size, num_keys].
 
             images_dict (Dict): Dictionary containing additional images annotated with segmentations (if given).
@@ -767,14 +768,14 @@ class BaseSegHead(nn.Module):
         if self.get_bnd_masks:
             qst_names = [seg_qst_dict['name'] for seg_qst_dict in self.seg_qst_dicts]
             qst_id = qst_names.index('mask')
-            seg_mask_logits = answers[qst_id]
+            mask_logits = answers[qst_id]
 
-            seg_mask = seg_mask_logits.sigmoid().unsqueeze(dim=2) > self.mask_thr
+            seg_mask = mask_logits.sigmoid().unsqueeze(dim=2) > self.mask_thr
             seg_masks = seq_to_maps(seg_mask, storage_dict['map_shapes'])
             qry_bnd_masks = []
 
             for seg_mask in seg_masks:
-                kernel = seg_mask_logits.new_ones([1, 1, 3, 3])
+                kernel = mask_logits.new_ones([1, 1, 3, 3])
                 qry_bnd_mask = F.conv2d(seg_mask.float(), kernel, padding=1)
 
                 qry_bnd_mask = (qry_bnd_mask > 0.5) & (qry_bnd_mask < 8.5)
@@ -793,43 +794,43 @@ class BaseSegHead(nn.Module):
             img_bnd_mask = torch.stack(img_bnd_masks, dim=0)
             storage_dict['seg_img_bnd_mask'] = img_bnd_mask
 
-        # Get reward masks if needed
-        if self.get_rew_masks:
+        # Get gain masks if needed
+        if self.get_gain_masks:
             qst_names = [seg_qst_dict['name'] for seg_qst_dict in self.seg_qst_dicts]
-            qst_id = qst_names.index('reward')
-            seg_rew_logits = answers[qst_id]
+            qst_id = qst_names.index('gain')
+            gain_scores = answers[qst_id]
 
-            num_qrys = len(seg_rew_logits)
-            qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.rew_thr)
-            key_ids = seg_rew_logits.topk(self.rew_thr, dim=1, sorted=False)[1]
+            num_qrys = len(gain_scores)
+            qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.gain_thr)
+            key_ids = gain_scores.topk(self.gain_thr, dim=1, sorted=False)[1]
 
-            qry_rew_mask = torch.zeros_like(seg_rew_logits, dtype=torch.bool)
-            qry_rew_mask[qry_ids, key_ids] = True
-            storage_dict['seg_qry_rew_mask'] = qry_rew_mask
+            qry_gain_mask = torch.zeros_like(gain_scores, dtype=torch.bool)
+            qry_gain_mask[qry_ids, key_ids] = True
+            storage_dict['seg_qry_gain_mask'] = qry_gain_mask
 
             batch_ids = storage_dict['batch_ids']
-            img_rew_masks = []
+            img_gain_masks = []
 
             for i in range(batch_size):
-                img_rew_mask = qry_rew_mask[batch_ids == i].any(dim=0)
-                img_rew_masks.append(img_rew_mask)
+                img_gain_mask = qry_gain_mask[batch_ids == i].any(dim=0)
+                img_gain_masks.append(img_gain_mask)
 
-            img_rew_mask = torch.stack(img_rew_masks, dim=0)
-            storage_dict['seg_img_rew_mask'] = img_rew_mask
+            img_gain_mask = torch.stack(img_gain_masks, dim=0)
+            storage_dict['seg_img_gain_mask'] = img_gain_mask
 
         # Get uncertainty masks if needed
         if self.get_unc_masks:
             qst_names = [seg_qst_dict['name'] for seg_qst_dict in self.seg_qst_dicts]
             qst_id = qst_names.index('mask')
-            seg_mask_logits = answers[qst_id]
+            mask_logits = answers[qst_id]
 
-            num_qrys = len(seg_mask_logits)
+            num_qrys = len(mask_logits)
             qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.unc_thr)
 
-            unc_vals = -seg_mask_logits.abs().flatten(1)
+            unc_vals = -mask_logits.abs().flatten(1)
             key_ids = unc_vals.topk(self.unc_thr, dim=1, sorted=False)[1]
 
-            qry_unc_mask = torch.zeros_like(seg_mask_logits, dtype=torch.bool)
+            qry_unc_mask = torch.zeros_like(mask_logits, dtype=torch.bool)
             qry_unc_mask[qry_ids, key_ids] = True
             storage_dict['seg_qry_unc_mask'] = qry_unc_mask
 
@@ -866,7 +867,9 @@ class BaseSegHead(nn.Module):
                 - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [num_new_answers];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
-                - mask_targets (FloatTensor): segmentation mask targets of shape [num_qrys, num_keys].
+                - mask_targets (FloatTensor): segmentation mask targets of shape [num_qrys, num_keys];
+                - seg_gain_scores (FloatTensor): segmentation gain scores of shape [num_qrys, num_keys];
+                - seg_rewards (FloatTensor): segmentation rewards of shape [num_qrys, num_keys].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
@@ -878,10 +881,12 @@ class BaseSegHead(nn.Module):
 
         Returns:
             loss_dict (Dict): Loss dictionary (possibly) containing following additional keys:
-                - mask_loss_{id} (FloatTensor): segmentation mask loss of shape [].
+                - mask_loss_{id} (FloatTensor): segmentation mask loss of shape [];
+                - gain_loss_{id} (FloatTensor): segmentation gain loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary (possibly) containing following additional keys (if not None):
-                - mask_acc_{id} (FloatTensor): segmentation mask accuracy of shape [].
+                - mask_acc_{id} (FloatTensor): segmentation mask accuracy of shape [];
+                - gain_err_{id} (FloatTensor): mean absolute gain error of shape [].
 
         Raises:
             ValueError: Error when a single query is matched with multiple targets.
@@ -905,23 +910,6 @@ class BaseSegHead(nn.Module):
         # Get zero loss tensor
         zero_loss = 0.0 * qry_feats.flatten()[0] + 0.0 * key_feats.flatten()[0]
         zero_loss += sum(0.0 * p.flatten()[0] for p in self.parameters())
-
-        # Handle case where there are no positive matches
-        if len(matched_qry_ids) == 0:
-
-            # Get mask loss
-            loss_name = f'mask_loss_{id}' if id is not None else 'mask_loss'
-            loss_dict[loss_name] = zero_loss
-
-            # Get mask accuracy if needed
-            if analysis_dict is not None:
-                mask_acc = 1.0 if len(tgt_dict['masks']) == 0 else 0.0
-                mask_acc = torch.tensor(mask_acc, dtype=zero_loss.dtype, device=device)
-
-                acc_name = loss_name.replace('loss', 'acc')
-                analysis_dict[acc_name] = 100 * mask_acc
-
-            return loss_dict, analysis_dict
 
         # Retrieve desired items from storage dictionary
         answers = storage_dict['seg_answers']
@@ -949,6 +937,31 @@ class BaseSegHead(nn.Module):
         # Get target indices
         match_ids = qry_to_match_ids[qry_ids]
         tgt_ids = matched_tgt_ids[match_ids]
+
+        # Get mask logits
+        qst_names = [seg_qst_dict['name'] for seg_qst_dict in self.seg_qst_dicts]
+        qst_id = qst_names.index('mask')
+        mask_logits = answers[qst_id, qry_ids, key_ids]
+
+        # Get mask targets
+        if 'mask_targets' not in storage_dict:
+            tgt_masks = tgt_dict['masks'].float().unsqueeze(dim=1)
+            itp_kwargs = {'mode': 'bilinear', 'align_corners': False}
+
+            map_shapes = storage_dict['map_shapes'].tolist()
+            mask_targets_maps = []
+
+            for map_shape in map_shapes:
+                mask_targets_map = F.interpolate(tgt_masks, size=map_shape, **itp_kwargs)
+                mask_targets_maps.append(mask_targets_map)
+
+            mask_targets = maps_to_seq(mask_targets_maps).squeeze(dim=2)
+            storage_dict['mask_targets'] = mask_targets
+
+        else:
+            mask_targets = storage_dict['mask_targets']
+
+        mask_targets = mask_targets[tgt_ids, key_ids]
 
         # Iterate over segmentation questions
         for i, seg_qst_dict in enumerate(self.seg_qst_dicts):
@@ -980,29 +993,6 @@ class BaseSegHead(nn.Module):
             # Handle mask question
             if qst_name == 'mask':
 
-                # Get mask logits
-                mask_logits = answers[i, qry_ids, key_ids]
-
-                # Get mask targets
-                if 'mask_targets' not in storage_dict:
-                    tgt_masks = tgt_dict['masks'].float().unsqueeze(dim=1)
-                    itp_kwargs = {'mode': 'bilinear', 'align_corners': False}
-
-                    map_shapes = storage_dict['map_shapes'].tolist()
-                    mask_targets_maps = []
-
-                    for map_shape in map_shapes:
-                        mask_targets_map = F.interpolate(tgt_masks, size=map_shape, **itp_kwargs)
-                        mask_targets_maps.append(mask_targets_map)
-
-                    mask_targets = maps_to_seq(mask_targets_maps).squeeze(dim=2)
-                    storage_dict['mask_targets'] = mask_targets
-
-                else:
-                    mask_targets = storage_dict['mask_targets']
-
-                mask_targets = mask_targets[tgt_ids, key_ids]
-
                 # Get mask loss
                 if mask_logits.numel() > 0:
                     mask_loss = loss_module(mask_logits, mask_targets, weight=loss_weights)
@@ -1017,17 +1007,70 @@ class BaseSegHead(nn.Module):
                 if analysis_dict is not None:
 
                     # Get mask accuracy
-                    mask_preds = mask_logits.sigmoid() > self.mask_thr
-                    mask_targets = mask_targets > 0.5
+                    acc_mask = (mask_targets == 0) | (mask_targets == 1)
+
+                    mask_preds = mask_logits[acc_mask].sigmoid() > self.mask_thr
+                    mask_targets_acc = mask_targets[acc_mask].bool()
 
                     if mask_preds.numel() > 0:
-                        mask_acc = (mask_preds == mask_targets).sum() / mask_preds.numel()
+                        mask_acc = (mask_preds == mask_targets_acc).sum() / mask_preds.numel()
                     else:
                         mask_acc = torch.tensor(0.0, device=device)
 
                     # Add mask accuracy to analysis dictionary
                     acc_name = loss_name.replace('loss', 'acc')
                     analysis_dict[acc_name] = 100 * mask_acc
+
+            # Handle gain question
+            elif 'gain':
+
+                # Get current rewards
+                mask_scores = mask_logits.sigmoid()
+                curr_rewards = 1 - (mask_scores - mask_targets).abs()
+
+                reward_jump = seg_qst_dict.get('reward_jump', 0.5)
+                curr_rewards = (1-reward_jump) * curr_rewards
+
+                jump_mask = (mask_targets == 0) & (mask_scores <= self.mask_thr)
+                jump_mask |= (mask_targets == 1) & (mask_scores > self.mask_thr)
+                curr_rewards[jump_mask] += reward_jump
+
+                # Get gain loss and analyses if needed
+                if 'seg_gain_scores' in storage_dict:
+
+                    # Get gain scores
+                    gain_scores = storage_dict['seg_gain_scores'][qry_ids, key_ids]
+
+                    # Get gain targets
+                    prev_rewards = storage_dict['seg_rewards'][qry_ids, key_ids]
+                    gain_targets = curr_rewards - prev_rewards
+
+                    # Get gain loss
+                    if gain_scores.numel() > 0:
+                        gain_loss = loss_module(gain_scores, gain_targets, weight=loss_weights)
+                    else:
+                        gain_loss = zero_loss
+
+                    # Add gain loss to loss dictionary
+                    loss_name = f'gain_loss_{id}' if id is not None else 'gain_loss'
+                    loss_dict[loss_name] = gain_loss
+
+                    # Perform gain analyses if needed
+                    if analysis_dict is not None:
+
+                        # Get gain error
+                        if gain_scores.numel() > 0:
+                            gain_err = (gain_scores - gain_targets).abs().mean()
+                        else:
+                            gain_err = torch.tensor(0.0, device=device)
+
+                        # Add gain error to analysis dictionary
+                        err_name = loss_name.replace('loss', 'err')
+                        analysis_dict[err_name] = gain_err
+
+                # Add gain scores and current rewards to storage dictionary
+                storage_dict['seg_gain_scores'] = answers[i]
+                storage_dict['seg_rewards'] = curr_rewards
 
             else:
                 error_msg = f"Invalid segmentation question name in BaseSegHead (got '{qst_name}')."
@@ -1604,7 +1647,7 @@ class TopDownSegHead(nn.Module):
             sufficient_score = pred_scores >= vis_score_thr
 
             draw_dict['labels'] = pred_dict['labels'][sufficient_score]
-            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > self.mask_thr
             draw_dict['scores'] = pred_scores[sufficient_score]
 
             pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
