@@ -218,6 +218,7 @@ model = dict(
             seg_qst_dicts=[
                 dict(
                     name='mask',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -239,6 +240,7 @@ model = dict(
                 ),
                 dict(
                     name='high_res',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -249,6 +251,7 @@ model = dict(
                 ),
                 dict(
                     name='low_res',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -302,11 +305,12 @@ model = dict(
             get_gain_masks=True,
             get_segs=False,
         ),
-        '7_0': dict(
+        **{f'{i}_0': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -329,6 +333,7 @@ model = dict(
                 dict(
                     name='high_res',
                     max_new_preds=10000,
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -340,6 +345,7 @@ model = dict(
                 dict(
                     name='low_res',
                     max_new_preds=10000,
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -392,12 +398,13 @@ model = dict(
             update_mask_key='seg_qry_gain_mask',
             get_gain_masks=True,
             get_segs=False,
-        ),
+        ) for i in range(7, 8)},
         '8_0': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -420,6 +427,7 @@ model = dict(
                 dict(
                     name='high_res',
                     max_new_preds=10000,
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
@@ -431,6 +439,7 @@ model = dict(
                 dict(
                     name='low_res',
                     max_new_preds=10000,
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',

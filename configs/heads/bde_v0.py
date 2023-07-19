@@ -218,43 +218,13 @@ model = dict(
             seg_qst_dicts=[
                 dict(
                     name='mask',
+                    balance_tgts=True,
                     loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
                         reduction='sum',
                         loss_weight=10.0,
-                    ),
-                ),
-                dict(
-                    name='gain',
-                    loss_weighting='tgt_normalized',
-                    reward_jump=0.5,
-                    loss_cfg=dict(
-                        type='mmdet.SmoothL1Loss',
-                        beta=0.1,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                ),
-                dict(
-                    name='high_res',
-                    loss_weighting='tgt_normalized',
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                ),
-                dict(
-                    name='low_res',
-                    loss_weighting='tgt_normalized',
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
                     ),
                 ),
             ],
