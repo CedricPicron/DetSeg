@@ -220,10 +220,10 @@ class Sparse3d(nn.Module):
         # Get index maps
         if self.get_id_maps:
             num_act_feats = len(act_feats)
-            num_pas_feats = len(pas_feats)
+            num_feats = num_act_feats + len(pas_feats)
 
             act_ids = torch.arange(num_act_feats, device=device)
-            pas_ids = torch.arange(num_pas_feats, device=device)
+            pas_ids = torch.arange(num_act_feats, num_feats, device=device)
 
             ids = torch.empty_like(act_mask, dtype=torch.int64)
             ids[act_mask] = act_ids
