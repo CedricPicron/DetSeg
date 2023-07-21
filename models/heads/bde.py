@@ -13,13 +13,14 @@ class BDE(nn.Module):
     Class implementing the Bidirectional Decoder-Encoder (BDE) head.
 
     Attributes:
+        pos (nn.Module): Shared module computing position features.
         decoders (nn.ModuleDict): Dictionary with decoder modules for specified decoder-encoder-head iterations.
         encoders (nn.ModuleDict): Dictionary with encoder modules for specified decoder-encoder-head iterations.
         heads (nn.ModuleDict): Dictionary with head modules for specified decoder-encoder-head iterations.
         num_iters (int): Integer containing the number of decoder-encoder-head iterations.
     """
 
-    def __init__(self, decoder_cfgs, encoder_cfgs, head_cfgs, metadata):
+    def __init__(self, decoder_cfgs, encoder_cfgs, head_cfgs, metadata, pos_cfg=None):
         """
         Initializes the BDE head.
 
@@ -28,10 +29,14 @@ class BDE(nn.Module):
             encoder_cfgs (Dict): Dictionary of configuration dictionaries specifying the encoder modules.
             head_cfgs (Dict): Dictionary of configuration dictionaries specifying the head modules.
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
+            pos_cfg (Dict): Configuration dictionary specifying the shared position module (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Build shared position module if needed
+        self.pos = build_model(pos_cfg) if pos_cfg is not None else None
 
         # Build decoder, encoder and head modules
         self.decoders = nn.ModuleDict({key: build_model(cfg) for key, cfg in decoder_cfgs.items()})
@@ -62,7 +67,7 @@ class BDE(nn.Module):
         """
 
         # Intialize storage, loss, analysis, prediction and images dictionaries
-        storage_dict = {'feat_maps': feat_maps, 'images': images}
+        storage_dict = {'feat_maps': feat_maps, 'images': images, 'pos_module': self.pos}
         loss_dict = {} if tgt_dict is not None else None
         analysis_dict = {}
         pred_dicts = [] if not self.training else None

@@ -80,7 +80,7 @@ model = dict(
                 'sel_boxes': 'prior_boxes',
             },
         ),
-        **{f'{i}_{i}': [
+        **{f'{i}_0': [
             dict(
                 type='BoxCrossAttn',
                 attn_cfg=dict(

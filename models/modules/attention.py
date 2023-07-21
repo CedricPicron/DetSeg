@@ -298,20 +298,175 @@ class BoxCrossAttn(nn.Module):
         attn_kwargs = {'sample_map_shapes': sample_map_shapes, 'sample_map_start_ids': sample_map_start_ids}
         batch_size = len(images)
 
-        num_feats, in_size = in_feats.size()
-        out_size = self.out_size if self.out_size is not None else in_size
-        out_feats = in_feats.new_empty([num_feats, out_size])
+        if batch_size == 1:
+            attn_kwargs['sample_priors'] = sample_priors
+            attn_kwargs['sample_feats'] = sample_feats[0]
 
-        for i in range(batch_size):
-            mask_i = batch_ids == i
+            attn_kwargs['add_encs'] = add_encs
+            out_feats = self.attn(in_feats, **attn_kwargs)
 
-            attn_kwargs['sample_priors'] = sample_priors[mask_i]
-            attn_kwargs['sample_feats'] = sample_feats[i]
+        else:
+            num_feats, in_size = in_feats.size()
+            out_size = self.out_size if self.out_size is not None else in_size
+            out_feats = in_feats.new_empty([num_feats, out_size])
 
-            if add_encs is not None:
-                attn_kwargs['add_encs'] = add_encs[mask_i]
+            for i in range(batch_size):
+                mask_i = batch_ids == i
 
-            out_feats[mask_i] = self.attn(in_feats[mask_i], **attn_kwargs)
+                attn_kwargs['sample_priors'] = sample_priors[mask_i]
+                attn_kwargs['sample_feats'] = sample_feats[i]
+
+                if add_encs is not None:
+                    attn_kwargs['add_encs'] = add_encs[mask_i]
+
+                out_feats[mask_i] = self.attn(in_feats[mask_i], **attn_kwargs)
+
+        return out_feats
+
+
+@MODELS.register_module()
+class CrossAttn1d(nn.Module):
+    """
+    Class implementing the CrossAttn1d module.
+
+    Attributes:
+        norm (nn.Module): Module containing the normalization layer (or None).
+        act (nn.Module): Module containing the activation function (or None).
+        qry_pos_key (str): Key to retrieve query position features from storage dictionary (or None).
+        kv_feats_key (str): Key to retrieve key-value features from storage dictionary.
+        key_pos_key (str): Key to retrieve key position features from storage dictionary (or None).
+        qry_batch_ids_key (str): Key to retrieve query batch indices from storage dictionary (or None).
+        key_batch_ids_key (str): Key to retrieve key batch indices from storage dictionary (or None).
+        mha (nn.MultiheadAttention): Underlying multi-head attention module.
+        skip (bool): Boolean indicating whether skip connection is used or not.
+    """
+
+    def __init__(self, in_size, kv_feats_key, norm_cfg=None, act_cfg=None, qry_pos_key=None, key_pos_key=None,
+                 qry_batch_ids_key=None, key_batch_ids_key=None, num_heads=8, kv_size=None, out_size=None, skip=True):
+        """
+        Initializes the CrossAttn1d module.
+
+        Args:
+            in_size (int): Integer containing the size of the input features.
+            kv_feats_key (str): Key to retrieve key-value features from storage dictionary.
+            norm_cfg (Dict): Configuration dictionary specifying the normalization module (default=None).
+            act_cfg (Dict): Configuration dictionary specifying the activation module (default=None).
+            qry_pos_key (str): Key to retrieve query position features from storage dictionary (default=None).
+            key_pos_key (str): Key to retrieve key position features from storage dictionary (default=None).
+            qry_batch_ids_key (str): Key to retrieve query batch indices from storage dictionary (default=None).
+            key_batch_ids_key (str): Key to retrieve key batch indices from storage dictionary (default=None).
+            num_heads (int): Integer containing the number of attention heads (default=8).
+            kv_size (int): Integer containing the size of the key and value features (default=None).
+            out_size (int): Integer containing the size of the output features (default=None).
+            skip (bool): Boolean indicating whether skip connection is used or not (default=True).
+
+        Raises:
+            ValueError: Error when input and output feature sizes do not match when skip connection is used.
+        """
+
+        # Get output feature size if needed
+        if out_size is None:
+            out_size = in_size
+
+        # Check output feature size
+        if skip and (in_size != out_size):
+            error_msg = f"Input ({in_size}) and output ({out_size}) sizes must match when skip connection is used."
+            raise ValueError(error_msg)
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build normalization and activation modules if needed
+        self.norm = build_model(norm_cfg) if norm_cfg is not None else None
+        self.act = build_model(act_cfg) if act_cfg is not None else None
+
+        # Initialization of multi-head attention module
+        self.mha = nn.MultiheadAttention(in_size, num_heads, kdim=kv_size, vdim=kv_size)
+        self.mha.out_proj = nn.Linear(in_size, out_size)
+        nn.init.zeros_(self.mha.out_proj.bias)
+
+        # Set remaining attributes
+        self.qry_pos_key = qry_pos_key
+        self.kv_feats_key = kv_feats_key
+        self.key_pos_key = key_pos_key
+        self.qry_batch_ids_key = qry_batch_ids_key
+        self.key_batch_ids_key = key_batch_ids_key
+        self.skip = skip
+
+    def forward(self, in_feats, storage_dict, **kwargs):
+        """
+        Forward method of the CrossAttn1d module.
+
+        Args:
+            in_feats (FloatTensor): Input features of shape [num_feats, in_size].
+
+            storage_dict (Dict): Storage dictionary (possibly) containing following keys:
+                - {qry_pos_key} (FloatTensor): query position features of shape [num_feats, in_size];
+                - {kv_feats_key} (FloatTensor): key-value features of shape [num_kv_feats, kv_size];
+                - {key_pos_key} (FloatTensor): key position features of shape [num_kv_feats, kv_size];
+                - images (Images): Images structure of size [batch_size] containing the batched images;
+                - {qry_batch_ids_key} (LongTensor): batch indices of query features of shape [num_feats];
+                - {kv_batch_ids_key} (LongTensor): batch indices of key-value features of shape [num_kv_feats].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_feats (FloatTensor): Output features of shape [num_feats, out_size].
+        """
+
+        # Get query features
+        qry_feats = in_feats
+
+        if self.norm is not None:
+            qry_feats = self.norm(qry_feats)
+
+        if self.act is not None:
+            qry_feats = self.act(qry_feats)
+
+        if self.qry_pos_key is not None:
+            qry_pos_feats = storage_dict[self.qry_pos_key]
+            qry_feats = qry_feats + qry_pos_feats
+
+        qry_feats = qry_feats.unsqueeze(dim=1)
+
+        # Get key and value features
+        key_feats = val_feats = storage_dict[self.kv_feats_key]
+
+        if self.key_pos_key is not None:
+            key_pos_feats = storage_dict[self.key_pos_key]
+            key_feats = key_feats + key_pos_feats
+
+        key_feats = key_feats.unsqueeze(dim=1)
+        val_feats = val_feats.unsqueeze(dim=1)
+
+        # Apply multi-head attention module
+        batch_size = len(storage_dict['images'])
+
+        if batch_size == 1:
+            mha_feats = self.mha(qry_feats, key_feats, val_feats, need_weights=False)[0]
+            mha_feats = mha_feats.squeeze(dim=1)
+
+        else:
+            qry_batch_ids = storage_dict[self.qry_batch_ids_key]
+            kv_batch_ids = storage_dict[self.kv_batch_ids_key]
+
+            num_feats = len(in_feats)
+            out_size = self.mha.out_proj.weight.size(dim=0)
+            mha_feats = in_feats.new_empty([num_feats, out_size])
+
+            for i in range(batch_size):
+                qry_mask_i = qry_batch_ids == i
+                kv_mask_i = kv_batch_ids == i
+
+                qry_feats_i = qry_feats[qry_mask_i].unsqueeze(dim=1)
+                key_feats_i = key_feats[kv_mask_i].unsqueeze(dim=1)
+                val_feats_i = val_feats[kv_mask_i].unsqueeze(dim=1)
+
+                mha_feats_i = self.mha(qry_feats_i, key_feats_i, val_feats_i, need_weights=False)[0]
+                mha_feats[qry_mask_i] = mha_feats_i.squeeze(dim=1)
+
+        # Get output features
+        out_feats = in_feats + mha_feats if self.skip else mha_feats
 
         return out_feats
 
@@ -2189,15 +2344,20 @@ class SelfAttn1d(nn.Module):
         batch_size = len(images)
         mha_kwargs = {'need_weights': False}
 
-        num_feats = len(in_feats)
-        out_size = self.mha.out_proj.weight.size(dim=0)
-        mha_feats = in_feats.new_empty([num_feats, 1, out_size])
+        if batch_size == 1:
+            mha_kwargs['attn_mask'] = attn_mask_list[0] if attn_mask_list is not None else None
+            mha_feats = self.mha(qk_feats, qk_feats, val_feats, **mha_kwargs)[0]
 
-        for i in range(batch_size):
-            mask_i = batch_ids == i
+        else:
+            num_feats = len(in_feats)
+            out_size = self.mha.out_proj.weight.size(dim=0)
+            mha_feats = in_feats.new_empty([num_feats, 1, out_size])
 
-            mha_kwargs['attn_mask'] = attn_mask_list[i] if attn_mask_list is not None else None
-            mha_feats[mask_i] = self.mha(qk_feats[mask_i], qk_feats[mask_i], val_feats[mask_i], **mha_kwargs)[0]
+            for i in range(batch_size):
+                mask_i = batch_ids == i
+
+                mha_kwargs['attn_mask'] = attn_mask_list[i] if attn_mask_list is not None else None
+                mha_feats[mask_i] = self.mha(qk_feats[mask_i], qk_feats[mask_i], val_feats[mask_i], **mha_kwargs)[0]
 
         # Get output features
         mha_feats = mha_feats[:, 0, :]

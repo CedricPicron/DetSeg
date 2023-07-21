@@ -10,6 +10,58 @@ from models.build import build_model, MODELS
 
 
 @MODELS.register_module()
+class LearnedPos2d(nn.Module):
+    """
+    Class implementing the LearnedPos2d module.
+
+    Attributes:
+        pos_x (nn.Module): Module computing position features for the x-dimension.
+        pos_y (nn.Module): Module computing position features for the y-dimension.
+    """
+
+    def __init__(self, pos_cfg):
+        """
+        Initializes the LearnedPos2d module.
+
+        Args:
+            pos_cfg (Dict): Configuration dictionary specifying the position module for both dimensions.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build position module for both dimensions
+        self.pos_x = build_model(pos_cfg)
+        self.pos_y = build_model(pos_cfg)
+
+    def forward(self, pos_xy, pos_wh=None):
+        """
+        Forward method of the LearnedPos2d module.
+
+        Args:
+            pos_xy (FloatTensor): Position location coordinates in (X, Y) format of shape [num_pos, 2].
+            pos_wh (FloatTensor): Position size coordinates in (W, H) format of shape [num_pos, 2] (default=None).
+
+        Returns:
+            pos_feats (FloatTensor): Position features of shape [num_pos, feat_size].
+        """
+
+        # Get position features
+        pos_x = pos_xy[:, 0:1]
+        pos_y = pos_xy[:, 1:2]
+
+        if pos_wh is not None:
+            pos_x = torch.cat([pos_x, pos_wh[:, 0:1]], dim=1)
+            pos_y = torch.cat([pos_y, pos_wh[:, 1:2]], dim=1)
+
+        pos_feats_x = self.pos_x(pos_x)
+        pos_feats_y = self.pos_y(pos_y)
+        pos_feats = pos_feats_x + pos_feats_y
+
+        return pos_feats
+
+
+@MODELS.register_module()
 class PosEncoder(nn.Module):
     """
     Class implementing the PosEncoder module.

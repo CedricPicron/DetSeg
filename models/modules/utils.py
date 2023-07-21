@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from models.build import build_model, MODELS
+from models.functional.utils import maps_to_seq, seq_to_maps
 from structures.boxes import Boxes
 
 
@@ -335,6 +336,165 @@ class GetBoxesTensor(nn.Module):
         boxes_tensor = boxes.boxes
 
         return boxes_tensor
+
+
+@MODELS.register_module()
+class GetPosFromBoxes(nn.Module):
+    """
+    Class implementing the GetPosFromBoxes module.
+
+    Attributes:
+        boxes_key (str): String with key to retrieve boxes from storage dictionary.
+        pos_module_key (str): String with key to retrieve position module from storage dictionary.
+        pos_feats_key (str): String with key to save position features in storage dictionary.
+    """
+
+    def __init__(self, boxes_key, pos_module_key, pos_feats_key):
+        """
+        Initializes the GetPosFromBoxes module.
+
+        Args:
+            boxes_key (str): String with key to retrieve boxes from storage dictionary.
+            pos_module_key (str): String with key to retrieve position module from storage dictionary.
+            pos_feats_key (str): String with key to save position features in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set remaining attributes
+        self.boxes_key = boxes_key
+        self.pos_module_key = pos_module_key
+        self.pos_feats_key = pos_feats_key
+
+    def forward(self, feats, storage_dict, **kwargs):
+        """
+        Forward method of the GetPosFromBoxes module.
+
+        Args:
+            feats (FloatTensor): Input features of shape [num_feats, feat_size].
+
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - images (Images): Images structure containing the batched images of size [batch_size];
+                - {self.boxes_key} (Boxes): boxes from which to infer position coordinates of size [num_feats];
+                - {self.pos_module} (nn.Module): module computing position features from position coordinates.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            feats (FloatTensor): Unchanged input features of shape [num_feats, feat_size].
+        """
+
+        # Get position coordinates
+        boxes = storage_dict[self.boxes_key]
+        boxes = boxes.clone().normalize(storage_dict['images']).to_format('cxcywh')
+
+        pos_xy = boxes.boxes[:, :2]
+        pos_wh = boxes.boxes[:, 2:]
+
+        # Get position features
+        pos_module = storage_dict[self.pos_module_key]
+        pos_feats = pos_module(pos_xy, pos_wh)
+
+        # Save position features
+        storage_dict[self.pos_feats_key] = pos_feats
+
+        return feats
+
+
+@MODELS.register_module()
+class GetPosFromMaps(nn.Module):
+    """
+    Class implementing the GetPosFromMaps module.
+
+    Attributes:
+        pos_module_key (str): String with key to retrieve position module from storage dictionary.
+        pos_feats_key (str): String with key to save position features in storage dictionary.
+        pos_maps_key (str): String with key to save position feature maps in storage dictionary.
+    """
+
+    def __init__(self, pos_module_key, pos_feats_key=None, pos_maps_key=None):
+        """
+        Initializes the GetPosFromMaps module.
+
+        Args:
+            pos_module_key (str): String with key to retrieve position module from storage dictionary.
+            pos_feats_key (str): String with key to save position features in storage dictionary (default=None).
+            pos_maps_key (str): String with key to save position feature maps in storage dictionary (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set remaining attributes
+        self.pos_module_key = pos_module_key
+        self.pos_feats_key = pos_feats_key
+        self.pos_maps_key = pos_maps_key
+
+    def forward(self, feat_maps, storage_dict, **kwargs):
+        """
+        Forward method of the GetPosFromMaps module.
+
+        Args:
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+
+            storage_dict (Dict): Storage_dictionary (possibly) containing following keys:
+                - map_shapes (LongTensor): feature map shapes in (H, W) format of shape [num_maps, 2];
+                - {self.pos_module} (nn.Module): module computing position features from position coordinates.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            feat_maps (List): List of size [num_maps] with feature maps of shape [batch_size, feat_size, fH, fW].
+        """
+
+        # Get batch size and device
+        batch_size = len(feat_maps[0])
+        device = feat_maps[0].device
+
+        # Add map shapes to storage dictionary if needed
+        if 'map_shapes' not in storage_dict:
+            map_shapes = [feat_map.shape[-2:] for feat_map in feat_maps]
+            storage_dict['map_shapes'] = torch.tensor(map_shapes, device=device)
+
+        # Get position coordinates
+        pos_xy_maps = []
+        pos_wh_maps = []
+
+        for feat_map in feat_maps:
+            fH, fW = feat_map.size()[-2:]
+
+            pos_x = 0.5 + torch.arange(fW, device=device)[None, :].expand(fH, -1)
+            pos_y = 0.5 + torch.arange(fH, device=device)[:, None].expand(-1, fW)
+
+            pos_xy_map = torch.stack([pos_x, pos_y], dim=0)
+            pos_xy_map = pos_xy_map[None, :, :, :].expand(batch_size, -1, -1, -1)
+            pos_xy_maps.append(pos_xy_map)
+
+            pos_wh_map = torch.tensor([1/fW, 1/fH], device=device)
+            pos_wh_map = pos_wh_map[None, :, None, None].expand(batch_size, -1, fH, fW)
+            pos_wh_maps.append(pos_wh_map)
+
+        pos_xy = maps_to_seq(pos_xy_maps).view(-1, 2)
+        pos_wh = maps_to_seq(pos_wh_maps).view(-1, 2)
+
+        # Get position features
+        pos_module = storage_dict[self.pos_module_key]
+        pos_feats = pos_module(pos_xy, pos_wh)
+
+        feat_size = pos_feats.size(dim=1)
+        pos_feats = pos_feats.view(batch_size, -1, feat_size)
+
+        # Save position features if needed
+        if self.pos_feats_key is not None:
+            storage_dict[self.pos_feats_key] = pos_feats
+
+        # Get and save position feature maps if needed
+        if self.pos_maps_key is not None:
+            pos_feat_maps = seq_to_maps(pos_feats, storage_dict['map_shapes'])
+            storage_dict[self.pos_module_key] = pos_feat_maps
+
+        return feat_maps
 
 
 @MODELS.register_module()
