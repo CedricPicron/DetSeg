@@ -213,6 +213,9 @@ model = dict(
             type='Sparse3d',
             seq_feats_key='key_feats',
             act_mask_key='seg_img_gain_mask',
+            get_act_batch_ids=True,
+            get_act_map_ids=True,
+            get_act_xy_ids=True,
             get_pas_feats=True,
             get_id_maps=True,
             sparse_cfg=[
@@ -229,6 +232,12 @@ model = dict(
                     num_heads=8,
                     out_size=256,
                     skip=True,
+                ),
+                dict(
+                    type='IdScaleAttn',
+                    feat_size=256,
+                    num_maps=6,
+                    num_heads=8,
                 ),
                 dict(
                     type='TwoStepMLP',
