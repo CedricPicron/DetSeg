@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
 from models.build import build_model, MODELS
-from models.functional.sparse import id_scale_attn
+from models.functional.sparse import id_attn
 from models.functional.utils import maps_to_seq, seq_to_maps
 
 
@@ -85,6 +85,121 @@ class IdBase2d(nn.Module):
         out_feat_map[batch_ids, :, y_ids, x_ids] = act_feats
 
         return out_feat_map
+
+
+@MODELS.register_module()
+class IdAttn2d(nn.Module):
+    """
+    Class implementing the IdAttn2d module.
+
+    Attributes:
+        attn_weights (nn.Linear): Module computing the unnormalized attention weights.
+        val_proj (nn.Linear): Module computing the value features.
+        out_proj (nn.Linear): Module computing the output features.
+        num_pts (int): Integer containing the number of attention points.
+    """
+
+    def __init__(self, feat_size, num_pts=4):
+        """
+        Initializes the IdAttn2d module.
+
+        Args:
+            feat_size (int): Integer containing the feature size.
+            num_pts (int): Integer containing the number of attention points (default=4).
+
+        Raises:
+            ValueError: Error when the feature size is not divisible by 8.
+        """
+
+        # Check divisibility feature size by 8
+        if feat_size % 8 != 0:
+            error_msg = f"The feature size ({feat_size}) must be divisible by 8."
+            raise ValueError(error_msg)
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(feat_size, 8 * num_pts)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Initialize module computing the value features
+        self.val_proj = nn.Linear(feat_size, feat_size)
+        nn.init.xavier_uniform_(self.val_proj.weight)
+        nn.init.zeros_(self.val_proj.bias)
+
+        # Initialize module computing the output features
+        self.out_proj = nn.Linear(feat_size, feat_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+        # Set remaining attributes
+        self.num_pts = num_pts
+
+    def forward(self, in_act_feats, storage_dict, **kwargs):
+        """
+        Forward method of the IdAttn2d module.
+
+        Args:
+            in_act_feats (FloatTensor): Input active features of shape [num_act_feats, feat_size].
+
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - act_batch_ids (LongTensor): batch indices of active features of shape [num_act_feats];
+                - act_map_ids (LongTensor): map indices of active features of shape [num_act_feats];
+                - act_xy_ids (LongTensor): (X, Y) location indices of active features of shape [num_act_feats, 2];
+                - pas_feats (FloatTensor): passive features of shape [num_pas_feats, feat_size];
+                - id_maps (List): list [num_maps] with feature indices of shape [batch_size, 1, fH, fW].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_act_feats (FloatTensor): Output active features of shape [num_act_feats, feat_size].
+        """
+
+        # Retrieve desired items from storage dictionary
+        act_batch_ids = storage_dict['act_batch_ids']
+        act_map_ids = storage_dict['act_map_ids']
+        act_xy_ids = storage_dict['act_xy_ids']
+        pas_feats = storage_dict['pas_feats']
+        id_maps = storage_dict['id_maps']
+
+        # Get device and number of active features
+        device = in_act_feats.device
+        num_act_feats = len(in_act_feats)
+
+        # Get attention location indices
+        attn_offs = torch.tensor([[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]], device=device)
+        attn_offs = torch.arange(1, self.num_pts+1, device=device)[:, None, None] * attn_offs[None, :, :]
+        attn_xy_ids = act_xy_ids[:, None, None, :] + attn_offs[None, :, :, :]
+
+        # Get feature indices
+        act_batch_ids = act_batch_ids[:, None, None].expand(-1, self.num_pts, 8)
+        feat_ids = attn_xy_ids.new_empty([num_act_feats, self.num_pts, 8])
+
+        for map_id, id_map in enumerate(id_maps):
+            fH, fW = id_map.size()[-2:]
+            map_mask = act_map_ids == map_id
+
+            x_ids = attn_xy_ids[map_mask, :, :, 0].clamp_(min=0, max=fW-1)
+            y_ids = attn_xy_ids[map_mask, :, :, 1].clamp_(min=0, max=fH-1)
+
+            batch_ids = act_batch_ids[map_mask]
+            feat_ids[map_mask] = id_map[batch_ids, 0, y_ids, x_ids]
+
+        # Get feature weights
+        attn_weights = self.attn_weights(in_act_feats).view(num_act_feats, 8, self.num_pts)
+        feat_weights = F.softmax(attn_weights, dim=2).transpose(1, 2)
+
+        # Get weighted value features
+        weight = self.val_proj.weight
+        bias = self.val_proj.bias
+        val_feats = id_attn(in_act_feats, pas_feats, feat_ids, feat_weights, weight, bias)
+
+        # Get output active features
+        out_act_feats = self.out_proj(val_feats)
+
+        return out_act_feats
 
 
 @MODELS.register_module()
@@ -178,13 +293,6 @@ class IdScaleAttn(nn.Module):
         device = in_act_feats.device
         num_act_feats = len(in_act_feats)
 
-        # Add scale embedding to input active features
-        act_feats = in_act_feats + self.scale_embed[act_map_ids]
-
-        # Get normalized attention weights
-        attn_weights = self.attn_weights(act_feats).view(num_act_feats, self.num_heads, self.num_maps)
-        attn_weights = F.softmax(attn_weights, dim=2)
-
         # Get sample locations
         map_shapes = map_shapes.fliplr()
         sample_xy = (act_xy_ids + 0.5) / map_shapes[act_map_ids]
@@ -212,13 +320,21 @@ class IdScaleAttn(nn.Module):
 
             feat_ids[:, map_id, :] = id_map[act_batch_ids, 0, sample_ids_y, sample_ids_x]
 
+        feat_ids = feat_ids.flatten(1)
+
         # Get feature weights
-        feat_weights = attn_weights[:, :, :, None] * sample_weights[:, None, :, :]
+        act_feats = in_act_feats + self.scale_embed[act_map_ids]
+
+        attn_weights = self.attn_weights(act_feats).view(num_act_feats, self.num_heads, self.num_maps)
+        attn_weights = F.softmax(attn_weights, dim=2).transpose(1, 2)
+
+        feat_weights = attn_weights[:, :, None, :] * sample_weights[:, :, :, None]
+        feat_weights = feat_weights.flatten(1, 2)
 
         # Get weighted value features
         weight = self.val_proj.weight
         bias = self.val_proj.bias
-        val_feats = id_scale_attn(in_act_feats, pas_feats, feat_ids, feat_weights, weight, bias)
+        val_feats = id_attn(in_act_feats, pas_feats, feat_ids, feat_weights, weight, bias)
 
         # Get output active features
         out_act_feats = self.out_proj(val_feats)

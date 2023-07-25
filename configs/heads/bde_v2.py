@@ -234,10 +234,33 @@ model = dict(
                     skip=True,
                 ),
                 dict(
-                    type='IdScaleAttn',
-                    feat_size=256,
-                    num_maps=6,
-                    num_heads=8,
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='nn.LayerNorm',
+                            normalized_shape=256,
+                        ),
+                        dict(
+                            type='IdScaleAttn',
+                            feat_size=256,
+                            num_maps=6,
+                            num_heads=8,
+                        ),
+                    ],
+                ),
+                dict(
+                    type='SkipConnection',
+                    res_cfg=[
+                        dict(
+                            type='nn.LayerNorm',
+                            normalized_shape=256,
+                        ),
+                        dict(
+                            type='IdAttn2d',
+                            feat_size=256,
+                            num_pts=4,
+                        ),
+                    ],
                 ),
                 dict(
                     type='TwoStepMLP',
