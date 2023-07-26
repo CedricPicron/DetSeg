@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
+from models.functional.loss import reduce_losses, update_loss_cfg
 from models.functional.utils import maps_to_seq, seq_to_maps
 from structures.boxes import mask_to_box
 
@@ -25,9 +26,9 @@ class BaseSegHead(nn.Module):
         seg_qst_dicts (List): List [num_qsts] of segmentation question dictionaries, each possibly containing:
             - name (str): string containing the name of the segmentation question;
             - max_new_preds (int): integer containing the maximum number of new prediction locations;
-            - balance_tgts (bool): boolean indicating whether to balance number of positive and negative targets;
-            - loss_weighting (str): string containing the loss weighting mechanism;
-            - reward_jump (float): value containing the reward jump at the mask threshold.
+            - reward_jump (float): value containing the reward jump at the mask threshold;
+            - loss_balance (str): string containing the loss balancing mechanism;
+            - loss_reduction (str): string containing the loss reduction mechanism.
 
         qry (nn.Module): Optional module updating the query features.
         key (nn.Module): Optional module updating the key features.
@@ -71,8 +72,11 @@ class BaseSegHead(nn.Module):
         Args:
             seg_qst_dicts (List): List [num_qsts] of segmentation question dictionaries, each possibly containing:
                 - name (str): string containing the name of the segmentation question;
-                - loss_weighting (str): string containing the loss weighting mechanism;
-                - loss_cfg (Dict): configuration dictionary specifying the loss module.
+                - max_new_preds (int): integer containing the maximum number of new prediction locations;
+                - reward_jump (float): value containing the reward jump at the mask threshold;
+                - loss_cfg (Dict): configuration dictionary specifying the loss module;
+                - loss_balance (str): string containing the loss balancing mechanism;
+                - loss_reduction (str): string containing the loss reduction mechanism.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
@@ -111,7 +115,10 @@ class BaseSegHead(nn.Module):
 
         for seg_qst_dict in seg_qst_dicts:
             qst_name = seg_qst_dict['name']
-            self.loss_modules[qst_name] = build_model(seg_qst_dict.pop('loss_cfg'))
+            loss_cfg, loss_reduction_from_cfg = update_loss_cfg(seg_qst_dict.pop('loss_cfg'))
+
+            self.loss_modules[qst_name] = build_model(loss_cfg)
+            seg_qst_dict.setdefault('loss_reduction', loss_reduction_from_cfg)
 
         # Set remaining attributes
         self.seg_qst_dicts = seg_qst_dicts
@@ -942,78 +949,6 @@ class BaseSegHead(nn.Module):
 
         return storage_dict, images_dict
 
-    @staticmethod
-    def get_balance_mask(pos_tgt_mask):
-        """
-        Method computing the mask balancing the number of positive and negative targets.
-
-        Args:
-            pos_tgt_mask (BoolTensor): Mask indicating elements with positive targets of shape [num_loss_elems].
-
-        Returns:
-            balance_mask (BoolTensor): Mask balancing positive and negative targets of shape [num_loss_elems].
-        """
-
-        # Get balance mask
-        device = pos_tgt_mask.device
-        neg_tgt_mask = ~pos_tgt_mask
-
-        num_pos_tgts = pos_tgt_mask.sum().item()
-        num_neg_tgts = pos_tgt_mask.numel() - num_pos_tgts
-
-        if num_pos_tgts > num_neg_tgts:
-            pos_tgt_ids = pos_tgt_mask.nonzero()[:, 0]
-            rand_ids = torch.randperm(num_pos_tgts, device=device)
-
-            remove_ids = pos_tgt_ids[rand_ids[num_neg_tgts:]]
-            pos_tgt_mask[remove_ids] = False
-
-        elif num_pos_tgts < num_neg_tgts:
-            neg_tgt_ids = neg_tgt_mask.nonzero()[:, 0]
-            rand_ids = torch.randperm(num_neg_tgts, device=device)
-
-            remove_ids = neg_tgt_ids[rand_ids[num_pos_tgts:]]
-            neg_tgt_mask[remove_ids] = False
-
-        balance_mask = pos_tgt_mask | neg_tgt_mask
-
-        return balance_mask
-
-    @staticmethod
-    def get_loss_weights(loss_weighting=None, qry_ids=None, tgt_ids=None):
-        """
-        Method computing the loss weights.
-
-        Args:
-            loss_weighting (str): String containing the loss weighting mechanism (default=None).
-            qry_ids (LongTensor): Query indices of shape [num_loss_elems] (default=None).
-            tgt_ids (LongTensor): Target indices of shape [num_loss_elems] (default=None).
-
-        Returns:
-            loss_weights (FloatTensor): Loss weights of shape [num_loss_elems] (or None).
-
-        Raises:
-            ValueError: Error when an invalid loss weighting mechanism is provided.
-        """
-
-        # Get loss weights
-        if loss_weighting is None:
-            loss_weights = None
-
-        elif loss_weighting == 'qry_normalized':
-            inv_ids, qry_counts = qry_ids.unique(return_inverse=True, return_counts=True)[1:]
-            loss_weights = torch.ones_like(qry_ids, dtype=torch.float) / qry_counts[inv_ids]
-
-        elif loss_weighting == 'tgt_normalized':
-            inv_ids, tgt_counts = tgt_ids.unique(return_inverse=True, return_counts=True)[1:]
-            loss_weights = torch.ones_like(tgt_ids, dtype=torch.float) / tgt_counts[inv_ids]
-
-        else:
-            error_msg = f"Invalid loss weighting mechanism in BaseSegHead (got '{loss_weighting}')."
-            raise ValueError(error_msg)
-
-        return loss_weights
-
     def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
         """
         Forward loss method of the BaseSegHead module.
@@ -1142,37 +1077,29 @@ class BaseSegHead(nn.Module):
             # Get question name
             qst_name = seg_qst_dict['name']
 
-            # Get loss weighting and loss module
-            loss_weighting = seg_qst_dict.get('loss_weighting', None)
+            # Get loss module
             loss_module = self.loss_modules[qst_name]
+
+            # Get loss reduction keyword arguments
+            reduction_kwargs = {}
+            reduction_kwargs['loss_balance'] = seg_qst_dict.get('loss_balance', None)
+            reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
 
             # Handle mask question
             if qst_name == 'mask':
 
-                # Balance targets if needed
-                if seg_qst_dict.get('balance_tgts', False):
-                    pos_tgt_mask = mask_targets > 0.5
-                    balance_mask = self.get_balance_mask(pos_tgt_mask)
+                # Update loss reduction keyword arguments
+                reduction_kwargs['preds'] = mask_logits.sigmoid()
+                reduction_kwargs['targets'] = mask_targets
 
-                    mask_logits_i = mask_logits[balance_mask]
-                    mask_targets_i = mask_targets[balance_mask]
-
-                    qry_ids_i = qry_ids[balance_mask]
-                    tgt_ids_i = tgt_ids[balance_mask]
-
-                else:
-                    mask_logits_i = mask_logits
-                    mask_targets_i = mask_targets
-
-                    qry_ids_i = qry_ids
-                    tgt_ids_i = tgt_ids
-
-                # Get loss weights
-                loss_weights = self.get_loss_weights(loss_weighting, qry_ids_i, tgt_ids_i)
+                reduction_kwargs['qry_ids'] = qry_ids
+                reduction_kwargs['tgt_ids'] = tgt_ids
 
                 # Get mask loss
                 if mask_logits.numel() > 0:
-                    mask_loss = loss_module(mask_logits_i, mask_targets_i, weight=loss_weights)
+                    mask_losses = loss_module(mask_logits, mask_targets)
+                    mask_loss = reduce_losses(mask_losses, **reduction_kwargs)
+
                 else:
                     mask_loss = zero_loss
 
@@ -1219,22 +1146,23 @@ class BaseSegHead(nn.Module):
                     prev_rewards = storage_dict['seg_rewards'][qry_ids, key_ids]
                     valid_mask = prev_rewards != 0
 
-                    # Get gain scores
+                    # Get valid gain scores
                     gain_scores = storage_dict['seg_gain_scores'][qry_ids, key_ids]
                     gain_scores = gain_scores[valid_mask]
 
-                    # Get gain targets
+                    # Get valid gain targets
                     gain_targets = curr_rewards - prev_rewards
                     gain_targets = gain_targets[valid_mask]
 
-                    # Get loss weights
-                    qry_ids_i = qry_ids[valid_mask]
-                    tgt_ids_i = tgt_ids[valid_mask]
-                    loss_weights = self.get_loss_weights(loss_weighting, qry_ids_i, tgt_ids_i)
+                    # Update loss reduction keyword arguments
+                    reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
+                    reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                     # Get gain loss
                     if gain_scores.numel() > 0:
-                        gain_loss = loss_module(gain_scores, gain_targets, weight=loss_weights)
+                        gain_losses = loss_module(gain_scores, gain_targets)
+                        gain_loss = reduce_losses(gain_losses, **reduction_kwargs)
+
                     else:
                         gain_loss = zero_loss
 
@@ -1286,34 +1214,25 @@ class BaseSegHead(nn.Module):
                 non_uniform_mask = maps_to_seq(non_uniform_masks)[qry_ids, key_ids, 0]
                 valid_mask = maps_to_seq(valid_masks)[qry_ids, key_ids, 0]
 
-                # Get high-resolution logits
+                # Get valid high-resolution logits
                 high_res_logits = answers[i, qry_ids, key_ids]
                 high_res_logits = high_res_logits[valid_mask]
 
-                # Get high-resolution targets
+                # Get valid high-resolution targets
                 high_res_targets = non_uniform_mask[valid_mask].float()
 
-                # Balance targets if needed
-                if seg_qst_dict.get('balance_tgts', False):
-                    pos_tgt_mask = high_res_targets > 0.5
-                    balance_mask = self.get_balance_mask(pos_tgt_mask)
+                # Update loss reduction keyword arguments
+                reduction_kwargs['preds'] = high_res_logits.sigmoid()
+                reduction_kwargs['targets'] = high_res_targets
 
-                    high_res_logits = high_res_logits[balance_mask]
-                    high_res_targets = high_res_targets[balance_mask]
-
-                    qry_ids_i = qry_ids[valid_mask][balance_mask]
-                    tgt_ids_i = tgt_ids[valid_mask][balance_mask]
-
-                else:
-                    qry_ids_i = qry_ids[valid_mask]
-                    tgt_ids_i = tgt_ids[valid_mask]
-
-                # Get loss weights
-                loss_weights = self.get_loss_weights(loss_weighting, qry_ids_i, tgt_ids_i)
+                reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
+                reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                 # Get high-resolution loss
                 if mask_logits.numel() > 0:
-                    high_res_loss = loss_module(high_res_logits, high_res_targets, weight=loss_weights)
+                    high_res_losses = loss_module(high_res_logits, high_res_targets)
+                    high_res_loss = reduce_losses(high_res_losses, **reduction_kwargs)
+
                 else:
                     high_res_loss = zero_loss
 
@@ -1356,34 +1275,25 @@ class BaseSegHead(nn.Module):
                 uniform_mask = maps_to_seq(uniform_masks)[qry_ids, key_ids, 0]
                 valid_mask = maps_to_seq(valid_masks)[qry_ids, key_ids, 0]
 
-                # Get low-resolution logits
+                # Get valid low-resolution logits
                 low_res_logits = answers[i, qry_ids, key_ids]
                 low_res_logits = low_res_logits[valid_mask]
 
-                # Get low-resolution targets
+                # Get valid low-resolution targets
                 low_res_targets = uniform_mask[valid_mask].float()
 
-                # Balance targets if needed
-                if seg_qst_dict.get('balance_tgts', False):
-                    pos_tgt_mask = low_res_targets > 0.5
-                    balance_mask = self.get_balance_mask(pos_tgt_mask)
+                # Update loss reduction keyword arguments
+                reduction_kwargs['preds'] = low_res_logits.sigmoid()
+                reduction_kwargs['targets'] = low_res_targets
 
-                    low_res_logits = low_res_logits[balance_mask]
-                    low_res_targets = low_res_targets[balance_mask]
-
-                    qry_ids_i = qry_ids[valid_mask][balance_mask]
-                    tgt_ids_i = tgt_ids[valid_mask][balance_mask]
-
-                else:
-                    qry_ids_i = qry_ids[valid_mask]
-                    tgt_ids_i = tgt_ids[valid_mask]
-
-                # Get loss weights
-                loss_weights = self.get_loss_weights(loss_weighting, qry_ids_i, tgt_ids_i)
+                reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
+                reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                 # Get low-resolution loss
                 if mask_logits.numel() > 0:
-                    low_res_loss = loss_module(low_res_logits, low_res_targets, weight=loss_weights)
+                    low_res_losses = loss_module(low_res_logits, low_res_targets)
+                    low_res_loss = reduce_losses(low_res_losses, **reduction_kwargs)
+
                 else:
                     low_res_loss = zero_loss
 

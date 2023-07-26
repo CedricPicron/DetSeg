@@ -12,6 +12,7 @@ from torch import nn
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
+from models.functional.loss import reduce_losses, update_loss_cfg
 from structures.boxes import Boxes, box_iou
 
 
@@ -50,15 +51,15 @@ class BaseBox2dHead(nn.Module):
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional module determining the 2D target boxes.
         report_match_stats (bool): Boolean indicating whether to report matching statistics.
-        loss_weighting (str): String containing the loss weighting mechanism (or None).
-        loss (nn.Module): Module computing the 2D bounding box loss.
-        box_score_loss (nn.Module): Optional module computing the 2D bounding box score loss.
+        loss (nn.Module): Module computing the 2D bounding box losses.
+        loss_reduction (str): String containing the loss reduction mechanism (or None).
+        box_score_loss (nn.Module): Optional module computing the 2D bounding box score losses.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, logits_cfg, box_coder_cfg, metadata, loss_cfg, detach_qry_feats=False, update_prior_boxes=False,
                  box_encoder_cfg=None, box_score_cfg=None, get_dets=True, score_attrs=None, dup_attrs=None,
-                 max_dets=None, matcher_cfg=None, report_match_stats=True, loss_weighting=None,
+                 max_dets=None, matcher_cfg=None, report_match_stats=True, loss_reduction=None,
                  box_score_loss_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the BaseBox2dHead module.
@@ -78,7 +79,7 @@ class BaseBox2dHead(nn.Module):
             max_dets (int): Integer with the maximum number of returned 2D object detection predictions (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             report_match_stats (bool): Boolean indicating whether to report matching statistics (default=True).
-            loss_weighting (str): String containing the loss weighting mechanism (default=None).
+            loss_reduction (str): String containing the loss reduction mechanism (default=None).
             box_score_loss_cfg (Dict): Configuration dictionary specifying the box score loss module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
@@ -103,10 +104,17 @@ class BaseBox2dHead(nn.Module):
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
         # Build loss module
+        loss_cfg, loss_reduction_from_cfg = update_loss_cfg(loss_cfg)
         self.loss = build_model(loss_cfg)
 
+        # Update string with loss reduction mechanism if needed
+        if loss_reduction is None:
+            loss_reduction = loss_reduction_from_cfg
+
         # Build box score loss module if needed
-        self.box_score_loss = build_model(box_score_loss_cfg) if box_score_loss_cfg is not None else None
+        if box_score_loss_cfg is not None:
+            box_score_loss_cfg = update_loss_cfg(box_score_loss_cfg)[0]
+            self.box_score_loss = build_model(box_score_loss_cfg)
 
         # Set remaining attributes
         self.detach_qry_feats = detach_qry_feats
@@ -117,7 +125,7 @@ class BaseBox2dHead(nn.Module):
         self.max_dets = max_dets
         self.metadata = metadata
         self.report_match_stats = report_match_stats
-        self.loss_weighting = loss_weighting
+        self.loss_reduction = loss_reduction
         self.apply_ids = apply_ids
 
     @torch.no_grad()
@@ -614,9 +622,6 @@ class BaseBox2dHead(nn.Module):
                 - box_matched_tgt (FloatTensor): percentage of matched targets of shape [];
                 - box_acc (FloatTensor): 2D bounding box accuracy of shape [];
                 - box_score_acc (FloatTensor): 2D bounding box score accuracy of shape [].
-
-        Raises:
-            ValueError: Error when an invalid loss weighting mechanism is provided.
         """
 
         # Perform matching if matcher is available
@@ -705,20 +710,12 @@ class BaseBox2dHead(nn.Module):
         images = storage_dict['images']
         box_targets = self.box_coder('get', prior_boxes, tgt_boxes, images=images)
 
-        # Get loss weights
-        if self.loss_weighting is None:
-            loss_weights = None
-
-        elif self.loss_weighting == 'tgt_normalized':
-            inv_ids, tgt_counts = matched_tgt_ids.unique(return_inverse=True, return_counts=True)[1:]
-            loss_weights = torch.ones_like(matched_tgt_ids, dtype=torch.float) / tgt_counts[inv_ids]
-
-        else:
-            error_msg = f"Invalid loss weighting mechanism in BaseBox2dHead (got '{self.loss_weighting}')."
-            raise ValueError(error_msg)
-
         # Get 2D bounding box loss
-        box_loss = self.loss(box_logits, box_targets, pred_boxes, tgt_boxes, weight=loss_weights)
+        box_losses = self.loss(box_logits, box_targets, pred_boxes, tgt_boxes)
+
+        reduction_kwargs = {'loss_reduction': self.loss_reduction, 'tgt_ids': matched_tgt_ids}
+        box_loss = reduce_losses(box_losses, **reduction_kwargs)
+
         key_name = f'box_loss_{id}' if id is not None else 'box_loss'
         loss_dict[key_name] = box_loss
 
@@ -730,7 +727,9 @@ class BaseBox2dHead(nn.Module):
 
             pred_scores = box_scores[matched_qry_ids]
             tgt_scores = inverse_sigmoid(box_ious, eps=1e-3)
-            box_score_loss = self.box_score_loss(pred_scores, tgt_scores, weight=loss_weights)
+
+            box_score_losses = self.box_score_loss(pred_scores, tgt_scores)
+            box_score_loss = reduce_losses(box_score_losses, **reduction_kwargs)
 
             key_name = f'box_score_loss_{id}' if id is not None else 'box_score_loss'
             loss_dict[key_name] = box_score_loss

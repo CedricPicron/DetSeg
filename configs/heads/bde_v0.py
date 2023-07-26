@@ -202,7 +202,6 @@ model = dict(
             max_dets=100,
             report_match_stats=True,
             matcher_cfg=None,
-            loss_weighting='tgt_normalized',
             loss_cfg=dict(
                 type='BoxLoss',
                 box_loss_type='mmdet_boxes',
@@ -212,20 +211,21 @@ model = dict(
                     loss_weight=10.0,
                 ),
             ),
+            loss_reduction='tgt_sum',
         ),
         '6_2': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',
-                    balance_tgts=True,
-                    loss_weighting='tgt_normalized',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
                         reduction='sum',
                         loss_weight=10.0,
                     ),
+                    loss_balance='hard',
+                    loss_reduction='tgt_sum',
                 ),
             ],
             qry_cfg=[
