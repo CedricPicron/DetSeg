@@ -221,7 +221,7 @@ model = dict(
                     loss_cfg=dict(
                         type='mmdet.DiceLoss',
                         use_sigmoid=True,
-                        loss_weight=5.0,
+                        loss_weight=10.0,
                     ),
                     loss_reduction='tgt_sum',
                 ),
