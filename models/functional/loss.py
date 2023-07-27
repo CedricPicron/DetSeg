@@ -5,83 +5,32 @@ Collection of loss-related functions.
 import torch
 
 
-def reduce_losses(losses, loss_balance=None, loss_reduction='mean', preds=None, targets=None, qry_ids=None,
-                  tgt_ids=None):
+def reduce_losses(losses, loss_reduction='mean', qry_ids=None, tgt_ids=None):
     """
     Method reducing the element-wise losses.
 
     Args:
         losses (FloatTensor): Element-wise losses of shape [num_loss_elems].
-        loss_balance (str): String containing the loss balancing mechanism (default=None).
         loss_reduction (str): String containing the loss reduction mechanism (default='mean').
-        preds (FloatTensor): Tensor containing the predictions of shape [num_loss_elems] (default=None).
-        targets (FloatTensor): Tensor containing the targets of shape [num_loss_elemes] (default=None).
-        qry_ids (LongTensor): Query indices corresponding to losses of shape [num_loss_elems] (default=None).
-        tgt_ids (LongTensor): Target indices corresponding to losses of shape [num_loss_elems] (default=None).
+        qry_ids (LongTensor): Query indices corresponding to losses of shape [num_loss_elems, *] (default=None).
+        tgt_ids (LongTensor): Target indices corresponding to losses of shape [num_loss_elems, *] (default=None).
 
     Returns:
         loss (FloatTensor): Reduced loss tensor of shape [].
 
     Raises:
-        ValueError: Error when an invalid loss balancing mechanism is provided.
         ValueError: Error when an invalid loss reduction mechanism is provided.
     """
-
-    # Balance loss
-    if loss_balance is None:
-        pass
-
-    elif loss_balance in ('hard', 'random'):
-        pos_tgt_mask = targets > 0.5
-        neg_tgt_mask = ~pos_tgt_mask
-        balance_mask = torch.ones_like(pos_tgt_mask)
-
-        num_pos_tgts = pos_tgt_mask.sum().item()
-        num_neg_tgts = pos_tgt_mask.numel() - num_pos_tgts
-
-        if num_pos_tgts > num_neg_tgts:
-            num_removals = num_pos_tgts - num_neg_tgts
-            pos_tgt_ids = pos_tgt_mask.nonzero()[:, 0]
-
-            if loss_balance == 'hard':
-                pos_tgt_losses = losses[pos_tgt_mask]
-                remove_ids = pos_tgt_losses.topk(num_removals, largest=False)[1]
-
-            elif loss_balance == 'random':
-                remove_ids = torch.randperm(num_pos_tgts, device=targets.device)
-                remove_ids = remove_ids[:num_removals]
-
-            remove_ids = pos_tgt_ids[remove_ids]
-            balance_mask[remove_ids] = False
-
-        elif num_neg_tgts > num_pos_tgts:
-            num_removals = num_neg_tgts - num_pos_tgts
-            neg_tgt_ids = neg_tgt_mask.nonzero()[:, 0]
-
-            if loss_balance == 'hard':
-                neg_tgt_losses = losses[neg_tgt_mask]
-                remove_ids = neg_tgt_losses.topk(num_removals, largest=False)[1]
-
-            elif loss_balance == 'random':
-                remove_ids = torch.randperm(num_neg_tgts, device=targets.device)
-                remove_ids = remove_ids[:num_removals]
-
-            remove_ids = neg_tgt_ids[remove_ids]
-            balance_mask[remove_ids] = False
-
-        losses = losses[balance_mask]
-
-    else:
-        error_msg = f"Invalid loss balancing mechanism (got '{loss_balance}')."
-        raise ValueError(error_msg)
 
     # Reduce loss
     if loss_reduction == 'mean':
         loss = losses.mean()
 
     elif loss_reduction == 'qry_sum':
-        if loss_balance is not None:
-            qry_ids = qry_ids[balance_mask]
+        if (qry_ids.dim() > 1) and (losses.dim() == 1):
+            qry_ids = qry_ids.flatten(1)
+            assert (qry_ids.diff(dim=1) == 0).all().item()
+            qry_ids = qry_ids[:, 0]
 
         inv_ids, qry_counts = qry_ids.unique(return_inverse=True, return_counts=True)[1:]
         loss_weights = torch.ones_like(qry_ids, dtype=torch.float) / qry_counts[inv_ids]
@@ -91,8 +40,10 @@ def reduce_losses(losses, loss_balance=None, loss_reduction='mean', preds=None, 
         loss = losses.sum()
 
     elif loss_reduction == 'tgt_sum':
-        if loss_balance is not None:
-            tgt_ids = tgt_ids[balance_mask]
+        if (tgt_ids.dim() > 1) and (losses.dim() == 1):
+            tgt_ids = tgt_ids.flatten(1)
+            assert (tgt_ids.diff(dim=1) == 0).all().item()
+            tgt_ids = tgt_ids[:, 0]
 
         inv_ids, tgt_counts = tgt_ids.unique(return_inverse=True, return_counts=True)[1:]
         loss_weights = torch.ones_like(tgt_ids, dtype=torch.float) / tgt_counts[inv_ids]

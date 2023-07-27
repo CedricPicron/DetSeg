@@ -219,11 +219,9 @@ model = dict(
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.FocalLoss',
+                        type='mmdet.DiceLoss',
                         use_sigmoid=True,
-                        gamma=2.0,
-                        alpha=0.25,
-                        loss_weight=50.0,
+                        loss_weight=5.0,
                     ),
                     loss_reduction='tgt_sum',
                 ),

@@ -379,7 +379,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=10.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -401,7 +400,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -412,7 +410,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
             ],
@@ -471,7 +468,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=10.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -494,7 +490,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -506,7 +501,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
             ],
@@ -565,7 +559,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=10.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -588,7 +581,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
                 dict(
@@ -600,7 +592,6 @@ model = dict(
                         reduction='sum',
                         loss_weight=1.0,
                     ),
-                    loss_balance='hard',
                     loss_reduction='tgt_sum',
                 ),
             ],

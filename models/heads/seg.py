@@ -27,7 +27,6 @@ class BaseSegHead(nn.Module):
             - name (str): string containing the name of the segmentation question;
             - max_new_preds (int): integer containing the maximum number of new prediction locations;
             - reward_jump (float): value containing the reward jump at the mask threshold;
-            - loss_balance (str): string containing the loss balancing mechanism;
             - loss_reduction (str): string containing the loss reduction mechanism.
 
         qry (nn.Module): Optional module updating the query features.
@@ -75,7 +74,6 @@ class BaseSegHead(nn.Module):
                 - max_new_preds (int): integer containing the maximum number of new prediction locations;
                 - reward_jump (float): value containing the reward jump at the mask threshold;
                 - loss_cfg (Dict): configuration dictionary specifying the loss module;
-                - loss_balance (str): string containing the loss balancing mechanism;
                 - loss_reduction (str): string containing the loss reduction mechanism.
 
             metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
@@ -210,8 +208,8 @@ class BaseSegHead(nn.Module):
                 answers_i = qry_feats_i @ key_feats_i
                 answers[:, exp_qry_ids, exp_key_ids] = answers_i
 
-                qry_ids_list.append(exp_qry_ids.flatten())
-                key_ids_list.append(exp_key_ids.flatten())
+                qry_ids_list.append(exp_qry_ids)
+                key_ids_list.append(exp_key_ids)
 
         else:
             update_mask = storage_dict[self.update_mask_key]
@@ -811,8 +809,8 @@ class BaseSegHead(nn.Module):
                 - map_shapes (LongTensor): feature map shapes in (H, W) format of shape [num_maps, 2];
                 - map_offs (LongTensor): cumulative number of features per feature map of shape [num_maps+1];
                 - seg_answers (FloatTensor): answers to segmentation questions of shape [num_qsts, num_qrys, num_keys];
-                - seg_qry_ids (LongTensor): query indices with new segmentation answers of shape [num_new_answers];
-                - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [num_new_answers];
+                - seg_qry_ids (LongTensor): query indices with new segmentation answers of shape [*];
+                - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [*];
                 - seg_qry_bnd_mask (BoolTensor): query-based boundary mask of shape [num_qrys, num_keys];
                 - seg_qry_gain_mask (BoolTensor): query-based gain mask of shape [num_qrys, num_keys];
                 - seg_qry_unc_mask (BoolTensor): query-based uncertainty mask of shape [num_qrys, num_keys];
@@ -959,8 +957,8 @@ class BaseSegHead(nn.Module):
                 - key_feats (FloatTensor): key features of shape [batch_size, num_keys, key_feat_size];
                 - map_shapes (LongTensor): feature map shapes in (H, W) format of shape [num_maps, 2];
                 - seg_answers (FloatTensor): answers to segmentation questions of shape [num_qsts, num_qrys, num_keys];
-                - seg_qry_ids (LongTensor): query indices with new segmentation answers of shape [num_new_answers];
-                - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [num_new_answers];
+                - seg_qry_ids (LongTensor): query indices with new segmentation answers of shape [*];
+                - seg_key_ids (LongTensor): key indices with new segmentation answers of shape [*];
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
                 - mask_targets (FloatTensor): segmentation mask targets of shape [num_qrys, num_keys];
@@ -1028,10 +1026,16 @@ class BaseSegHead(nn.Module):
 
         qry_to_match_ids = torch.full([num_qrys], fill_value=-1, dtype=torch.int64, device=device)
         qry_to_match_ids[matched_qry_ids] = torch.arange(num_matches, device=device)
-
         match_mask = qry_to_match_ids[qry_ids] >= 0
-        qry_ids = qry_ids[match_mask]
-        key_ids = key_ids[match_mask]
+
+        if qry_ids.dim() == 1:
+            qry_ids = qry_ids[match_mask]
+            key_ids = key_ids[match_mask]
+
+        else:
+            num_keys = qry_ids.size(dim=1)
+            qry_ids = qry_ids[match_mask].view(-1, num_keys)
+            key_ids = key_ids[match_mask].view(-1, num_keys)
 
         # Get target indices
         match_ids = qry_to_match_ids[qry_ids]
@@ -1081,17 +1085,12 @@ class BaseSegHead(nn.Module):
             loss_module = self.loss_modules[qst_name]
 
             # Get loss reduction keyword arguments
-            reduction_kwargs = {}
-            reduction_kwargs['loss_balance'] = seg_qst_dict.get('loss_balance', None)
-            reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
+            reduction_kwargs = {'loss_reduction': seg_qst_dict['loss_reduction']}
 
             # Handle mask question
             if qst_name == 'mask':
 
-                # Update loss reduction keyword arguments
-                reduction_kwargs['preds'] = mask_logits.sigmoid()
-                reduction_kwargs['targets'] = mask_targets
-
+                # Add loss reduction keyword arguments
                 reduction_kwargs['qry_ids'] = qry_ids
                 reduction_kwargs['tgt_ids'] = tgt_ids
 
@@ -1154,7 +1153,7 @@ class BaseSegHead(nn.Module):
                     gain_targets = curr_rewards - prev_rewards
                     gain_targets = gain_targets[valid_mask]
 
-                    # Update loss reduction keyword arguments
+                    # Add loss reduction keyword arguments
                     reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                     reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
@@ -1221,10 +1220,7 @@ class BaseSegHead(nn.Module):
                 # Get valid high-resolution targets
                 high_res_targets = non_uniform_mask[valid_mask].float()
 
-                # Update loss reduction keyword arguments
-                reduction_kwargs['preds'] = high_res_logits.sigmoid()
-                reduction_kwargs['targets'] = high_res_targets
-
+                # Add loss reduction keyword arguments
                 reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                 reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
@@ -1282,10 +1278,7 @@ class BaseSegHead(nn.Module):
                 # Get valid low-resolution targets
                 low_res_targets = uniform_mask[valid_mask].float()
 
-                # Update loss reduction keyword arguments
-                reduction_kwargs['preds'] = low_res_logits.sigmoid()
-                reduction_kwargs['targets'] = low_res_targets
-
+                # Add loss reduction keyword arguments
                 reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                 reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
