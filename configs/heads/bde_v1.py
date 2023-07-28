@@ -207,7 +207,6 @@ model = dict(
                 box_loss_type='mmdet_boxes',
                 box_loss_cfg=dict(
                     type='mmdet.EIoULoss',
-                    reduction='sum',
                     loss_weight=10.0,
                 ),
             ),

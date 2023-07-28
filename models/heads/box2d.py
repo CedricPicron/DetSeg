@@ -12,7 +12,7 @@ from torch import nn
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
-from models.functional.loss import reduce_losses, update_loss_cfg
+from models.functional.loss import reduce_losses, update_loss_module
 from structures.boxes import Boxes, box_iou
 
 
@@ -103,18 +103,17 @@ class BaseBox2dHead(nn.Module):
         # Build matcher module if needed
         self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
-        # Build loss module
-        loss_cfg, loss_reduction_from_cfg = update_loss_cfg(loss_cfg)
-        self.loss = build_model(loss_cfg)
+        # Build loss module and update loss reduction mechanism if needed
+        loss_module = build_model(loss_cfg)
+        self.loss, loss_reduction_from_module = update_loss_module(loss_module)
 
-        # Update string with loss reduction mechanism if needed
         if loss_reduction is None:
-            loss_reduction = loss_reduction_from_cfg
+            loss_reduction = loss_reduction_from_module
 
         # Build box score loss module if needed
         if box_score_loss_cfg is not None:
-            box_score_loss_cfg = update_loss_cfg(box_score_loss_cfg)[0]
-            self.box_score_loss = build_model(box_score_loss_cfg)
+            loss_module = build_model(box_score_loss_cfg)
+            self.box_score_loss = update_loss_module(loss_module)[0]
 
         # Set remaining attributes
         self.detach_qry_feats = detach_qry_feats

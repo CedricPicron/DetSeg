@@ -12,7 +12,7 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as T
 
 from models.build import build_model, MODELS
-from models.functional.loss import reduce_losses, update_loss_cfg
+from models.functional.loss import reduce_losses, update_loss_module
 from models.functional.utils import maps_to_seq, seq_to_maps
 from structures.boxes import mask_to_box
 
@@ -112,11 +112,12 @@ class BaseSegHead(nn.Module):
         self.loss_modules = nn.ModuleDict()
 
         for seg_qst_dict in seg_qst_dicts:
-            qst_name = seg_qst_dict['name']
-            loss_cfg, loss_reduction_from_cfg = update_loss_cfg(seg_qst_dict.pop('loss_cfg'))
+            loss_module = build_model(seg_qst_dict.pop('loss_cfg'))
+            loss_module, loss_reduction_from_module = update_loss_module(loss_module)
 
-            self.loss_modules[qst_name] = build_model(loss_cfg)
-            seg_qst_dict.setdefault('loss_reduction', loss_reduction_from_cfg)
+            qst_name = seg_qst_dict['name']
+            self.loss_modules[qst_name] = loss_module
+            seg_qst_dict.setdefault('loss_reduction', loss_reduction_from_module)
 
         # Set remaining attributes
         self.seg_qst_dicts = seg_qst_dicts

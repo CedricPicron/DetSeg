@@ -53,7 +53,7 @@ class BoxLoss(nn.Module):
             kwargs (Dict): Dictionary containing keyword arguments passed to the underlying loss module.
 
         Returns:
-            box_loss (FloatTensor): Tensor containing the box loss or losses of shape [] or [*] respectively.
+            box_loss (FloatTensor): Tensor containing the box loss or losses of shape [] or [num_preds] respectively.
 
         Raises:
             ValueError: Error when an invalid bounding box loss type is provided.
@@ -71,6 +71,9 @@ class BoxLoss(nn.Module):
         elif self.box_loss_type == 'regression':
             weight = weight[:, None].expand(-1, 4) if weight is not None else None
             box_loss = self.box_loss(box_preds, box_targets, weight=weight, **kwargs)
+
+            if box_loss.dim() == 2:
+                box_loss = box_loss.sum(dim=1)
 
         else:
             error_msg = f"Invalid bounding box loss type (got '{self.box_loss_type}') in BoxLoss module."

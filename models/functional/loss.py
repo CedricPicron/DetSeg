@@ -103,41 +103,35 @@ def sigmoid_dice_loss(pred_logits, tgt_labels, reduction='mean'):
         raise ValueError(error_msg)
 
 
-def update_loss_cfg(loss_cfg, loss_reduction=None):
+def update_loss_module(loss_module, loss_reduction=None):
     """
-    Function updating the loss configuration dictionary by replacing the loss reduction mechanism with 'none'.
+    Function updating the loss module by replacing the reduction attributes with 'none'.
 
     Args:
-        loss_cfg (Dict): Configuration dictionary specifying a loss module with arbitrary loss reduction.
-        loss_reduction (str): Loss reduction mechanism of the original loss configuration dictionary (default=None).
+        loss_module (nn.Module): Loss module with one or multiple reduction attributes to be replaced with 'none'.
+        loss_reduction (str): Loss reduction mechanism of the original loss module (default=None).
 
     Returns:
-        loss_cfg (Dict): Configuration dictionary specifying the updated loss module with loss reduction 'none'.
-        loss_reduction (str): Loss reduction mechanism of the original loss configuration dictionary (or None).
+        loss_module (nn.Module): Updated loss module with the reduction attributes replaced by 'none'.
+        loss_reduction (str): Loss reduction mechanism of the original loss module (or None).
 
     Raises:
-        ValueError: Error when the loss configuration dictionary contains inconsistent loss reduction mechanisms.
+        ValueError: Error when the loss module contains inconsistent loss reduction mechanisms.
     """
 
     # Update loss configuration dictionary
-    for key, value in loss_cfg.items():
-        found_loss_reduction = False
+    if 'reduction' in vars(loss_module):
+        found_loss_reduction = loss_module.reduction
+        loss_module.reduction = 'none'
 
-        if key == 'reduction':
-            loss_cfg[key] = 'none'
-            new_loss_reduction = value
-            found_loss_reduction = True
+        if loss_reduction is None:
+            loss_reduction = found_loss_reduction
 
-        elif isinstance(value, dict):
-            new_loss_reduction = update_loss_cfg(value)[1]
-            found_loss_reduction = True
+        elif loss_reduction != found_loss_reduction:
+            error_msg = f"Inconsistent loss reductions (got '{loss_reduction}' and '{found_loss_reduction}')."
+            raise ValueError(error_msg)
 
-        if found_loss_reduction:
-            if loss_reduction is None:
-                loss_reduction = new_loss_reduction
+    for module in loss_module.children():
+        module, loss_reduction = update_loss_module(module, loss_reduction)
 
-            elif loss_reduction != new_loss_reduction:
-                error_msg = f"Inconsistent loss reductions (got '{loss_reduction}' and '{new_loss_reduction}')."
-                raise ValueError(error_msg)
-
-    return loss_cfg, loss_reduction
+    return loss_module, loss_reduction
