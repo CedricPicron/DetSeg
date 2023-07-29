@@ -218,9 +218,22 @@ model = dict(
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        loss_weight=100.0,
+                        type='ModuleSum',
+                        sub_module_cfgs=[
+                            dict(
+                                type='MaskLoss',
+                                mask_loss_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    loss_weight=25.0,
+                                ),
+                            ),
+                            dict(
+                                type='mmdet.DiceLoss',
+                                use_sigmoid=True,
+                                loss_weight=10.0,
+                            ),
+                        ],
                     ),
                     loss_reduction='tgt_sum',
                 ),

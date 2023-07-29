@@ -218,9 +218,9 @@ model = dict(
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
+                        type='mmdet.DiceLoss',
                         use_sigmoid=True,
-                        loss_weight=100.0,
+                        loss_weight=20.0,
                     ),
                     loss_reduction='tgt_sum',
                 ),
@@ -263,6 +263,12 @@ model = dict(
                 dict(
                     type='nn.ReLU',
                     inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
                 ),
             ],
             key_map_ids=[1, 2, 3, 4, 5],

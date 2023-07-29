@@ -114,9 +114,6 @@ def update_loss_module(loss_module, loss_reduction=None):
     Returns:
         loss_module (nn.Module): Updated loss module with the reduction attributes replaced by 'none'.
         loss_reduction (str): Loss reduction mechanism of the original loss module (or None).
-
-    Raises:
-        ValueError: Error when the loss module contains inconsistent loss reduction mechanisms.
     """
 
     # Update loss configuration dictionary
@@ -126,10 +123,6 @@ def update_loss_module(loss_module, loss_reduction=None):
 
         if loss_reduction is None:
             loss_reduction = found_loss_reduction
-
-        elif loss_reduction != found_loss_reduction:
-            error_msg = f"Inconsistent loss reductions (got '{loss_reduction}' and '{found_loss_reduction}')."
-            raise ValueError(error_msg)
 
     for module in loss_module.children():
         module, loss_reduction = update_loss_module(module, loss_reduction)

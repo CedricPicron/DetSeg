@@ -218,9 +218,9 @@ model = dict(
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
+                        type='mmdet.DiceLoss',
                         use_sigmoid=True,
-                        loss_weight=100.0,
+                        loss_weight=20.0,
                     ),
                     loss_reduction='tgt_sum',
                 ),
@@ -265,7 +265,7 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            key_map_ids=[1, 2, 3, 4, 5],
+            key_map_ids=[1],
             get_segs=True,
             seg_type='instance',
             dup_attrs=dict(
