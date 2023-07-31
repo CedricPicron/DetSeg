@@ -54,6 +54,7 @@ class BaseSegHead(nn.Module):
             - nms_thr (float): IoU threshold used during NMS or Soft-NMS to remove or rescore duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+        mask_decay (float): Value containing the mask certainty decay factor.
         mask_thr (float): Value containing the normalized segmentation mask threshold.
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
@@ -64,7 +65,7 @@ class BaseSegHead(nn.Module):
     def __init__(self, seg_qst_dicts, metadata, qry_cfg=None, key_cfg=None, key_map_ids=None, update_mask_key=None,
                  get_bnd_masks=False, get_gain_masks=False, get_unc_masks=False, gain_thr=100, unc_thr=100,
                  get_segs=True, seg_type='instance', box_mask_key=None, score_attrs=None, dup_attrs=None,
-                 max_segs=None, mask_thr=0.5, matcher_cfg=None, apply_ids=None, **kwargs):
+                 max_segs=None, mask_decay=1e-6, mask_thr=0.5, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the BaseSegHead module.
 
@@ -92,11 +93,20 @@ class BaseSegHead(nn.Module):
             score_attrs (Dict): Attribute dictionary specifying the scoring mechanism (default=None).
             dup_attrs (Dict): Dictionary specifying the duplicate removal or rescoring mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            mask_decay (float): Value containing the mask certainty decay factor (default=1e-6).
             mask_thr (float): Value containing the normalized segmentation mask threshold (default=0.5).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Raises:
+            ValueError: Error when the mask certainty decay factor is not between 0 and 1.
         """
+
+        # Check mask certainty decay factor
+        if (mask_decay < 0) or (mask_decay > 1):
+            error_msg = f"The mask certainty decay factor should be between 0 and 1 (got '{mask_decay}')."
+            raise ValueError(error_msg)
 
         # Initialization of default nn.Module
         super().__init__()
@@ -134,6 +144,7 @@ class BaseSegHead(nn.Module):
         self.score_attrs = score_attrs if score_attrs is not None else dict()
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
         self.max_segs = max_segs
+        self.mask_decay = mask_decay
         self.mask_thr = mask_thr
         self.metadata = metadata
         self.apply_ids = apply_ids
@@ -497,14 +508,21 @@ class BaseSegHead(nn.Module):
 
             mask_logits_maps = seq_to_maps(mask_logits_i, storage_dict['map_shapes'])
             mask_logits_i = mask_logits_maps[-1]
+            decay_logits = mask_logits_i.clone()
 
             for mask_logits_map in reversed(mask_logits_maps[:-1]):
+                decay_logits = self.mask_decay * decay_logits
+
                 fH, fW = mask_logits_map.shape[-2:]
+                decay_logits = F.interpolate(decay_logits, size=(fH, fW), mode='bilinear', align_corners=False)
                 mask_logits_i = F.interpolate(mask_logits_i, size=(fH, fW), mode='bilinear', align_corners=False)
 
+                decay_logits = torch.stack([decay_logits, mask_logits_map], dim=0)
                 mask_logits_i = torch.stack([mask_logits_i, mask_logits_map], dim=0)
-                mask_logits_i = mask_logits_i.gather(dim=0, index=mask_logits_i.abs().argmax(dim=0, keepdim=True))
-                mask_logits_i = mask_logits_i.squeeze(dim=0)
+
+                max_ids = decay_logits.abs().argmax(dim=0, keepdim=True)
+                decay_logits = decay_logits.gather(dim=0, index=max_ids).squeeze(dim=0)
+                mask_logits_i = mask_logits_i.gather(dim=0, index=max_ids).squeeze(dim=0)
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = F.interpolate(mask_scores_i, size=(iH, iW), mode='bilinear', align_corners=False)

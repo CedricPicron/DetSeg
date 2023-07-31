@@ -264,14 +264,8 @@ model = dict(
                     type='nn.ReLU',
                     inplace=True,
                 ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
             ],
-            key_map_ids=[1, 2, 3, 4, 5],
+            key_map_ids=[1],
             get_segs=True,
             seg_type='instance',
             dup_attrs=dict(
