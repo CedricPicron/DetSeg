@@ -35,7 +35,7 @@ model = dict(
             ],
             sel_attrs=dict(
                 mode='rel',
-                rel_thr=1500,
+                rel_thr=300,
             ),
             post_cfg=dict(
                 type='ModuleSelector',
@@ -216,10 +216,11 @@ model = dict(
             matcher_cfg=None,
             loss_cfg=dict(
                 type='BoxLoss',
-                box_loss_type='mmdet_boxes',
+                box_loss_type='regression',
                 box_loss_cfg=dict(
-                    type='mmdet.EIoULoss',
-                    loss_weight=15.0,
+                    type='SmoothL1Loss',
+                    beta=0.0,
+                    weight=7.0,
                 ),
             ),
             loss_reduction='tgt_sum',
