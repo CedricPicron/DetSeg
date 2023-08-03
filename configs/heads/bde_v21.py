@@ -8,7 +8,7 @@ model = dict(
             dict(
                 type='nn.Linear',
                 in_features=2,
-                out_features=4,
+                out_features=256,
                 bias=True,
             ),
             dict(
@@ -17,8 +17,8 @@ model = dict(
             ),
             dict(
                 type='nn.Linear',
-                in_features=4,
-                out_features=16,
+                in_features=256,
+                out_features=256,
                 bias=True,
             ),
             dict(
@@ -27,17 +27,7 @@ model = dict(
             ),
             dict(
                 type='nn.Linear',
-                in_features=16,
-                out_features=64,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=64,
+                in_features=256,
                 out_features=256,
                 bias=True,
             ),

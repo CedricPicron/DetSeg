@@ -2,47 +2,6 @@ model = dict(
     type='BDE',
     name='bde',
     requires_masks=True,
-    pos_cfg=dict(
-        type='LearnedPos2d',
-        pos_cfg=[
-            dict(
-                type='nn.Linear',
-                in_features=2,
-                out_features=4,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=4,
-                out_features=16,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=16,
-                out_features=64,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=64,
-                out_features=256,
-                bias=True,
-            ),
-        ],
-    ),
     decoder_cfgs={
         '0_0': dict(
             type='QryInit',
@@ -160,56 +119,8 @@ model = dict(
                 skip=True,
             ),
         ] for i in range(1, 7)},
-        '7_0': dict(
-            type='GetPosFromBoxes',
-            boxes_key='pred_boxes',
-            pos_module_key='pos_module',
-            pos_feats_key='qry_pos_feats',
-        ),
     },
-    encoder_cfgs={
-        '7_0': dict(
-            type='GetPosFromMaps',
-            pos_module_key='pos_module',
-            pos_feats_key='key_pos_feats',
-        ),
-        '7_1': dict(
-            type='Sparse3d',
-            seq_feats_key='key_feats',
-            act_map_ids=[1, 2, 3, 4, 5],
-            pos_feats_key='key_pos_feats',
-            get_pas_feats=False,
-            get_id_maps=False,
-            sparse_cfg=[
-                dict(
-                    type='CrossAttn1d',
-                    in_size=256,
-                    norm_cfg=dict(
-                        type='nn.LayerNorm',
-                        normalized_shape=256,
-                    ),
-                    qry_pos_key='act_pos_feats',
-                    kv_feats_key='qry_feats',
-                    key_pos_key='qry_pos_feats',
-                    kv_size=256,
-                    num_heads=8,
-                    out_size=256,
-                    skip=True,
-                ),
-                dict(
-                    type='TwoStepMLP',
-                    in_size=256,
-                    hidden_size=1024,
-                    out_size=256,
-                    norm1='layer',
-                    norm2='',
-                    act_fn1='',
-                    act_fn2='relu',
-                    skip=True,
-                ),
-            ],
-        ),
-    },
+    encoder_cfgs={},
     head_cfgs={
         '6_0': dict(
             type='BaseClsHead',
@@ -301,16 +212,28 @@ model = dict(
             ),
             loss_reduction='tgt_sum',
         ),
-        '7_0': dict(
+        '6_2': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=10.0,
+                        type='ModuleSum',
+                        sub_module_cfgs=[
+                            dict(
+                                type='MaskLoss',
+                                mask_loss_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    loss_weight=20.0,
+                                ),
+                            ),
+                            dict(
+                                type='mmdet.DiceLoss',
+                                use_sigmoid=True,
+                                loss_weight=18.0,
+                            ),
+                        ],
                     ),
                     loss_reduction='tgt_sum',
                 ),

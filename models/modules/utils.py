@@ -467,6 +467,9 @@ class GetPosFromMaps(nn.Module):
             pos_x = 0.5 + torch.arange(fW, device=device)[None, :].expand(fH, -1)
             pos_y = 0.5 + torch.arange(fH, device=device)[:, None].expand(-1, fW)
 
+            pos_x = pos_x / fW
+            pos_y = pos_y / fH
+
             pos_xy_map = torch.stack([pos_x, pos_y], dim=0)
             pos_xy_map = pos_xy_map[None, :, :, :].expand(batch_size, -1, -1, -1)
             pos_xy_maps.append(pos_xy_map)
