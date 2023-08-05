@@ -167,31 +167,7 @@ model = dict(
             sparse_cfg=[
                 dict(
                     type='CrossAttn1d',
-                    in_size=256,
-                    norm_cfg=dict(
-                        type='nn.LayerNorm',
-                        normalized_shape=256,
-                    ),
-                    qry_pos_key='act_pos_feats',
-                    kv_feats_key='qry_feats',
-                    key_pos_key='qry_pos_feats',
-                    kv_size=256,
-                    num_heads=8,
-                    out_size=256,
-                    skip=True,
-                ),
-            ],
-        ),
-        '8_0': dict(
-            type='Sparse3d',
-            seq_feats_key='key_feats',
-            act_mask_key='seg_img_unc_mask',
-            pos_feats_key='key_pos_feats',
-            get_pas_feats=False,
-            get_id_maps=False,
-            sparse_cfg=[
-                dict(
-                    type='CrossAttn1d',
+                    num_layers=2,
                     in_size=256,
                     norm_cfg=dict(
                         type='nn.LayerNorm',
@@ -366,64 +342,6 @@ model = dict(
                 ),
             ],
             key_map_ids=[1, 2, 3, 4, 5],
-            get_unc_masks=True,
-            unc_thr=100,
-            get_segs=False,
-        ),
-        '8_0': dict(
-            type='BaseSegHead',
-            seg_qst_dicts=[
-                dict(
-                    name='mask',
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        loss_weight=25.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-            ],
-            qry_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.LayerNorm',
-                    normalized_shape=256,
-                ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-            ],
-            key_cfg=[
-                dict(
-                    type='nn.Linear',
-                    in_features=256,
-                    out_features=256,
-                    bias=True,
-                ),
-                dict(
-                    type='nn.ReLU',
-                    inplace=True,
-                ),
-            ],
-            update_mask_key='seg_qry_unc_mask',
             get_segs=True,
             seg_type='instance',
             dup_attrs=dict(
