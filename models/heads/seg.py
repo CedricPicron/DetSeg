@@ -939,7 +939,8 @@ class BaseSegHead(nn.Module):
             num_qrys = len(mask_logits)
             qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.unc_thr)
 
-            unc_vals = -mask_logits.abs().flatten(1)
+            unc_vals = -mask_logits.abs()
+            unc_vals[unc_vals == 0] = -1e6
             key_ids = unc_vals.topk(self.unc_thr, dim=1, sorted=False)[1]
 
             qry_unc_mask = torch.zeros_like(mask_logits, dtype=torch.bool)

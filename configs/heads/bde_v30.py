@@ -312,13 +312,13 @@ model = dict(
                                 mask_loss_cfg=dict(
                                     type='mmdet.CrossEntropyLoss',
                                     use_sigmoid=True,
-                                    loss_weight=25.0,
+                                    loss_weight=20.0,
                                 ),
                             ),
                             dict(
                                 type='mmdet.DiceLoss',
                                 use_sigmoid=True,
-                                loss_weight=15.0,
+                                loss_weight=18.0,
                             ),
                         ],
                     ),
@@ -365,7 +365,7 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            key_map_ids=[1, 2, 3, 4, 5],
+            key_map_ids=[1],
             get_unc_masks=True,
             unc_thr=200,
             get_segs=False,
@@ -378,7 +378,7 @@ model = dict(
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
-                        loss_weight=50.0,
+                        loss_weight=20.0,
                     ),
                     loss_reduction='tgt_sum',
                 ),
