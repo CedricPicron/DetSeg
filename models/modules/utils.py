@@ -4,6 +4,7 @@ Collection of utility modules.
 
 import torch
 from torch import nn
+from torch.nn.parameter import Parameter
 
 from models.build import build_model, MODELS
 from models.functional.utils import maps_to_seq, seq_to_maps
@@ -346,10 +347,12 @@ class GetPosFromBoxes(nn.Module):
     Attributes:
         boxes_key (str): String with key to retrieve boxes from storage dictionary.
         pos_module_key (str): String with key to retrieve position module from storage dictionary.
+        box_mask_key (str): String with key to retrieve box mask from storage dictionary (or None).
+        non_box_pos_feats (Parameter): Optional parameter with non-box position features of shape [pos_feat_size].
         pos_feats_key (str): String with key to save position features in storage dictionary.
     """
 
-    def __init__(self, boxes_key, pos_module_key, pos_feats_key):
+    def __init__(self, boxes_key, pos_module_key, pos_feats_key, box_mask_key=None, pos_feat_size=None):
         """
         Initializes the GetPosFromBoxes module.
 
@@ -357,14 +360,22 @@ class GetPosFromBoxes(nn.Module):
             boxes_key (str): String with key to retrieve boxes from storage dictionary.
             pos_module_key (str): String with key to retrieve position module from storage dictionary.
             pos_feats_key (str): String with key to save position features in storage dictionary.
+            box_mask_key (str): String with key to retrieve box mask from storage dictionary (default=None).
+            pos_feat_size (int): Integer containing the position feature size (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
+        # Initialize non-box postion features if needed
+        if box_mask_key is not None:
+            self.non_box_pos_feats = Parameter(torch.empty(pos_feat_size), requires_grad=True)
+            nn.init.normal_(self.non_box_pos_feats)
+
         # Set remaining attributes
         self.boxes_key = boxes_key
         self.pos_module_key = pos_module_key
+        self.box_mask_key = box_mask_key
         self.pos_feats_key = pos_feats_key
 
     def forward(self, feats, storage_dict, **kwargs):
@@ -392,9 +403,17 @@ class GetPosFromBoxes(nn.Module):
         pos_xy = boxes.boxes[:, :2]
         pos_wh = boxes.boxes[:, 2:]
 
-        # Get position features
+        # Get box position features
         pos_module = storage_dict[self.pos_module_key]
         pos_feats = pos_module(pos_xy, pos_wh)
+
+        # Add non-box position features if needed
+        if self.box_mask_key is not None:
+            box_pos_feats = pos_feats
+            pos_feats = self.non_box_pos_feats.repeat(len(feats), 1)
+
+            box_mask = storage_dict[self.box_mask_key]
+            pos_feats[box_mask] = box_pos_feats
 
         # Save position features
         storage_dict[self.pos_feats_key] = pos_feats

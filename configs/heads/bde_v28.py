@@ -2,6 +2,31 @@ model = dict(
     type='BDE',
     name='bde',
     requires_masks=True,
+    pos_cfg=dict(
+        type='LearnedPos2d',
+        pos_cfg=[
+            dict(
+                type='SinePosEncoder2d',
+                feat_size=256,
+            ),
+            dict(
+                type='nn.Linear',
+                in_features=256,
+                out_features=256,
+                bias=True,
+            ),
+            dict(
+                type='nn.ReLU',
+                inplace=True,
+            ),
+            dict(
+                type='nn.Linear',
+                in_features=256,
+                out_features=256,
+                bias=True,
+            ),
+        ],
+    ),
     decoder_cfgs={
         '0_0': dict(
             type='QryInit',
@@ -139,8 +164,47 @@ model = dict(
                 skip=True,
             ),
         ] for i in range(1, 7)},
+        '7_0': dict(
+            type='GetPosFromBoxes',
+            boxes_key='pred_boxes',
+            pos_module_key='pos_module',
+            box_mask_key='thing_qry_ids',
+            pos_feat_size=256,
+            pos_feats_key='qry_pos_feats',
+        ),
     },
-    encoder_cfgs={},
+    encoder_cfgs={
+        '7_0': dict(
+            type='GetPosFromMaps',
+            pos_module_key='pos_module',
+            pos_feats_key='key_pos_feats',
+        ),
+        '7_1': dict(
+            type='Sparse3d',
+            seq_feats_key='key_feats',
+            act_map_ids=[1, 2, 3, 4, 5],
+            pos_feats_key='key_pos_feats',
+            get_pas_feats=False,
+            get_id_maps=False,
+            sparse_cfg=[
+                dict(
+                    type='CrossAttn1d',
+                    in_size=256,
+                    norm_cfg=dict(
+                        type='nn.LayerNorm',
+                        normalized_shape=256,
+                    ),
+                    qry_pos_key='act_pos_feats',
+                    kv_feats_key='qry_feats',
+                    key_pos_key='qry_pos_feats',
+                    kv_size=256,
+                    num_heads=8,
+                    out_size=256,
+                    skip=True,
+                ),
+            ],
+        ),
+    },
     head_cfgs={
         '6_0': dict(
             type='BaseClsHead',
