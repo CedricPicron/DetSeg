@@ -396,10 +396,16 @@ model = dict(
                 type='box_nms',
                 needs_masks=False,
                 nms_candidates=1000,
-                nms_thr=0.25,
+                nms_thr=0.65,
             ),
-            max_segs=100,
             mask_thr=0.5,
+            pan_post_attrs=dict(
+                score_thr=0.25,
+                nms_thr=0.9,
+                pan_mask_thr=0.35,
+                ins_pan_thr=0.65,
+                area_thr=200,
+            ),
         ),
     },
 )

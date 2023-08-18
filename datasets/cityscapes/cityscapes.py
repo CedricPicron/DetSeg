@@ -17,6 +17,7 @@ from PIL import Image
 from pycocotools.mask import decode as rle_to_mask
 import torch
 from torch.utils.data import Dataset
+from torchvision.transforms.functional import InterpolationMode
 
 from datasets.coco.coco import CocoDataset
 from datasets.transforms import get_train_transforms, get_eval_transforms
@@ -234,10 +235,9 @@ class CityscapesEvaluator(object):
             pred_dict (Dict): Prediction dictionary potentially containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
-                - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                - masks (FloatTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
-                - mask_thr (float): value containing the normalized segmentation mask threshold.
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when CityscapesEvaluator evaluator has unknown result format.
@@ -250,44 +250,53 @@ class CityscapesEvaluator(object):
         # Extract predictions from prediction dictionary
         labels = pred_dict['labels']
         boxes = pred_dict.get('boxes', None)
-        mask_scores = pred_dict.get('mask_scores', None)
+        masks = pred_dict.get('masks', None)
         scores = pred_dict['scores']
         batch_ids = pred_dict['batch_ids']
 
         # Transform boxes to original image space and convert them to desired format
         if boxes is not None:
             boxes, well_defined = boxes.transform(images, inverse=True)
-            boxes = boxes[well_defined].to_format('xyxy')
+            boxes = boxes[well_defined].to_format('xywh')
 
             labels = labels[well_defined]
-            mask_scores = mask_scores[well_defined] if mask_scores is not None else None
+            masks = masks[well_defined] if masks is not None else None
             scores = scores[well_defined]
             batch_ids = batch_ids[well_defined]
 
         # Get segmentation masks in original image space
-        if mask_scores is not None:
-            sorted = (batch_ids.diff() >= 0).all().item()
-
-            if not sorted:
-                batch_ids, sort_ids = batch_ids.sort()
-
-                labels = labels[sort_ids]
-                boxes = boxes[sort_ids] if boxes is not None else None
-                mask_scores = mask_scores[sort_ids]
-                scores = scores[sort_ids]
-
+        if masks is not None:
             batch_size = len(images)
+            device = batch_ids.device
+
             pred_sizes = [0] + [(batch_ids == i).sum() for i in range(batch_size)]
-            pred_sizes = torch.tensor(pred_sizes, device=batch_ids.device).cumsum(dim=0)
+            pred_sizes = torch.tensor(pred_sizes, device=device).cumsum(dim=0)
 
             if self.result_format == 'default':
-                masks = mask_scores > pred_dict.get('mask_thr', 0.5)
-                masks = mask_inv_transform(masks, images, pred_sizes)
-                masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
+                interpolation = InterpolationMode.BILINEAR
+
+            elif self.result_format == 'panoptic':
+                interpolation = InterpolationMode.NEAREST
 
             else:
-                error_msg = f"Unknown result format '{self.result_format}' for CityscapesEvaluator evaluator."
+                error_msg = f"Unknown result format for CityscapesEvaluator evaluator (got '{self.result_format}')."
                 raise ValueError(error_msg)
+
+            masks = mask_inv_transform(masks, images, pred_sizes, interpolation=interpolation)
+            masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
+
+            if len(masks) > 0:
+                masks = torch.stack(masks, dim=0)
+                non_empty = masks.flatten(1).sum(dim=1) > 0
+
+                labels = labels[non_empty]
+                boxes = boxes[non_empty] if boxes is not None else None
+                masks = masks[non_empty]
+                scores = scores[non_empty]
+                batch_ids = batch_ids[non_empty]
+
+            masks = [mask for mask in masks]
+            masks = mask_to_rle(masks)
 
         # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
@@ -310,15 +319,15 @@ class CityscapesEvaluator(object):
         result_dict['category_id'] = labels
         result_dict['score'] = scores
 
-        if self.eval_nms:
-            if boxes is not None:
-                result_dict['bbox'] = boxes
-            else:
-                error_msg = "Box predictions must be provided when using evaluation NMS."
-                raise ValueError(error_msg)
+        if boxes is not None:
+            result_dict['bbox'] = boxes
 
-        if mask_scores is not None:
-            result_dict['segmentation'] = mask_to_rle(masks)
+        elif self.eval_nms:
+            error_msg = "Box predictions must be provided when using evaluation NMS."
+            raise ValueError(error_msg)
+
+        if masks is not None:
+            result_dict['segmentation'] = masks
 
         # Get list of result dictionaries
         result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')

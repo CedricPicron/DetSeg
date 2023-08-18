@@ -277,9 +277,15 @@ model = dict(
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
-                nms_thr=0.25,
+                nms_thr=0.60,
             ),
-            max_segs=100,
+            pan_post_attrs=dict(
+                score_thr=0.3,
+                nms_thr=0.9,
+                pan_mask_thr=0.3,
+                ins_pan_thr=0.6,
+                area_thr=200,
+            ),
         ),
     ],
     head_apply_ids=[6],

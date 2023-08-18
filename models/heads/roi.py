@@ -34,7 +34,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         fuse_qry (nn.Module): Optional module fusing the query features with the RoI features.
 
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
-        seg_type (str): String containing the type of predicted segmentations.
+        seg_type (str): String containing the type of segmentation task.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
@@ -42,13 +42,21 @@ class StandardRoIHead(MMDetStandardRoIHead):
             - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
 
         max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
+
+        pan_post_attrs (Dict): Dictionary specifying the panoptic post-processing mechanism possibly containing:
+            - score_thr (float): value containing the instance score threshold (or None);
+            - nms_thr (float): value containing the IoU threshold used during mask IoU (or None);
+            - pan_mask_thr (float): value containing the normalized panoptic segmentation mask threshold;
+            - ins_pan_thr (float): value containing the IoU threshold between instance and panoptic masks;
+            - area_thr (int): integer containing the mask area threshold (or None).
+
         metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module matching predictions with targets.
         apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, metadata, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None, get_segs=True, seg_type='instance',
-                 dup_attrs=None, max_segs=None, matcher_cfg=None, apply_ids=None, **kwargs):
+                 dup_attrs=None, max_segs=None, pan_post_attrs=None, matcher_cfg=None, apply_ids=None, **kwargs):
         """
         Initializes the StandardRoIHead module.
 
@@ -58,9 +66,10 @@ class StandardRoIHead(MMDetStandardRoIHead):
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
-            seg_type (str): String containing the type of predicted segmentations (default='instance').
+            seg_type (str): String containing the type of segmentation task (default='instance').
             dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
             max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
+            pan_post_attrs (Dict): Attribute dictionary specifying the panoptic post-processing (default=None).
             matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             apply_ids (List): List with integers determining when the head should be applied (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to the parent __init__ method.
@@ -82,6 +91,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
         self.seg_type = seg_type
+        self.pan_post_attrs = pan_post_attrs if pan_post_attrs is not None else dict()
         self.metadata = metadata
         self.apply_ids = apply_ids
 
@@ -106,12 +116,13 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid type of segmentation task if provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -150,8 +161,13 @@ class StandardRoIHead(MMDetStandardRoIHead):
         else:
             pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
 
+        # Get thing indices if needed
+        if self.seg_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
+            thing_ids = torch.as_tensor(thing_ids, device=device)
+
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -202,7 +218,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
-            # Get prediction masks
+            # Get mask scores and instance segmentation masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
@@ -232,19 +248,141 @@ class StandardRoIHead(MMDetStandardRoIHead):
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            ins_seg_masks = mask_scores_i > 0.5
 
-            pred_masks_i = mask_scores_i > 0.5
-            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
-            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+            # Update prediction scores based on mask scores if needed
+            if self.seg_type == 'instance':
+                pred_scores_i = pred_scores_i * (ins_seg_masks * mask_scores_i).flatten(1).sum(dim=1)
+                pred_scores_i = pred_scores_i / (ins_seg_masks.flatten(1).sum(dim=1) + 1e-6)
 
+            # Perform panoptic post-processing if needed
             if self.seg_type == 'panoptic':
-                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
+                # Filter based on score if needed
+                score_thr = self.pan_post_attrs.get('score_thr', None)
+
+                if score_thr is not None:
+                    keep_mask = pred_scores_i > score_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Filter based on mask NMS if needed
+                nms_thr = self.pan_post_attrs.get('nms_thr', None)
+
+                if nms_thr is not None:
+                    pred_scores_i, sort_ids = pred_scores_i.sort(descending=True)
+
+                    pred_labels_i = pred_labels_i[sort_ids]
+                    mask_scores_i = mask_scores_i[sort_ids]
+                    ins_seg_masks = ins_seg_masks[sort_ids]
+
+                    num_preds = len(ins_seg_masks)
+                    flat_masks = ins_seg_masks.flatten(1)
+                    inter = torch.zeros(num_preds, num_preds, dtype=torch.float, device=device)
+
+                    for j in range(1, num_preds):
+                        inter[j, :j] = (flat_masks[j, None, :] * flat_masks[None, :j, :]).sum(dim=2)
+
+                    areas = flat_masks.sum(dim=1)
+                    union = areas[:, None] + areas[None, :] - inter
+
+                    ious = inter / union
+                    keep_mask = ious.amax(dim=1) < nms_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Get panoptic segmentation masks
+                rel_mask_scores = pred_scores_i[:, None, None] * mask_scores_i
+                num_preds = len(rel_mask_scores)
+
+                if num_preds > 0:
+                    pan_seg_mask = rel_mask_scores.argmax(dim=0)
+                else:
+                    pan_seg_mask = ins_seg_masks.new_zeros([*rel_mask_scores.size()[1:]])
+
+                pred_ids = torch.arange(num_preds, device=device)
+                pan_seg_masks = pan_seg_mask[None, :, :] == pred_ids[:, None, None]
+
+                # Apply panoptic mask threshold if needed
+                pan_mask_thr = self.pan_post_attrs.get('pan_mask_thr', None)
+
+                if pan_mask_thr is not None:
+                    pan_seg_masks &= mask_scores_i > pan_mask_thr
+
+                # Filter based on instance-panoptic IoU if needed
+                ins_pan_thr = self.pan_post_attrs.get('ins_pan_thr', None)
+
+                if ins_pan_thr is not None:
+                    ins_flat_masks = ins_seg_masks.flatten(1)
+                    pan_flat_masks = pan_seg_masks.flatten(1)
+
+                    ins_areas = ins_flat_masks.sum(dim=1)
+                    pan_areas = pan_flat_masks.sum(dim=1)
+
+                    inter = (ins_flat_masks * pan_flat_masks).sum(dim=1)
+                    union = ins_areas + pan_areas - inter
+
+                    ious = inter / union
+                    keep_mask = ious > ins_pan_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Filter based on mask area if needed
+                area_thr = self.pan_post_attrs.get('area_thr', None)
+
+                if area_thr is not None:
+                    areas = pan_seg_masks.flatten(1).sum(dim=1)
+                    keep_mask = areas > area_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Merge stuff predictions
+                thing_mask = (pred_labels_i[:, None] == thing_ids[None, :]).any(dim=1)
+                stuff_mask = ~thing_mask
+
+                stuff_labels = pred_labels_i[stuff_mask]
+                stuff_labels, stuff_ids, stuff_counts = stuff_labels.unique(return_inverse=True, return_counts=True)
+                pred_labels_i = torch.cat([pred_labels_i[thing_mask], stuff_labels], dim=0)
+
+                stuff_scores = torch.zeros_like(stuff_labels, dtype=torch.float)
+                stuff_scores.scatter_add_(dim=0, index=stuff_ids, src=pred_scores_i[stuff_mask])
+                stuff_scores = stuff_scores / stuff_counts
+                pred_scores_i = torch.cat([pred_scores_i[thing_mask], stuff_scores], dim=0)
+
+                stuff_ids = stuff_ids[:, None, None].expand(-1, iH, iW)
+                unmerged_stuff_masks = pan_seg_masks[stuff_mask]
+
+                num_stuff_preds = len(stuff_labels)
+                stuff_seg_masks = pan_seg_masks.new_zeros([num_stuff_preds, iH, iW])
+                stuff_seg_masks.scatter_add_(dim=0, index=stuff_ids, src=unmerged_stuff_masks)
+
+                thing_seg_masks = pan_seg_masks[thing_mask]
+                pan_seg_masks = torch.cat([thing_seg_masks, stuff_seg_masks], dim=0)
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
+
+            if self.seg_type == 'instance':
+                pred_dict['masks'].append(ins_seg_masks)
+
+            elif self.seg_type == 'panoptic':
+                pred_dict['masks'].append(pan_seg_masks)
+
+            else:
+                error_msg = f"Invalid type of segmentation task (got '{self.seg_type}')."
+                raise ValueError(error_msg)
 
         # Concatenate predictions of different batch entries
         pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
@@ -271,7 +409,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing as last entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
@@ -308,7 +446,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             sufficient_score = pred_scores >= vis_score_thr
 
             draw_dict['labels'] = pred_dict['labels'][sufficient_score]
-            draw_dict['masks'] = pred_dict['mask_scores'][sufficient_score] > 0.5
+            draw_dict['masks'] = pred_dict['masks'][sufficient_score]
             draw_dict['scores'] = pred_scores[sufficient_score]
 
             pred_batch_ids = pred_dict['batch_ids'][sufficient_score]
@@ -320,7 +458,7 @@ class StandardRoIHead(MMDetStandardRoIHead):
             thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
 
             pred_labels = pred_dict['labels']
-            mask_scores = pred_dict['mask_scores']
+            pred_masks = pred_dict['masks']
             pred_batch_ids = pred_dict['batch_ids']
 
             pred_sizes = [0] + [(pred_batch_ids == i).sum() for i in range(batch_size)]
@@ -331,7 +469,8 @@ class StandardRoIHead(MMDetStandardRoIHead):
             segments = []
 
             for i0, i1 in zip(pred_sizes[:-1], pred_sizes[1:]):
-                mask_i = mask_scores[i0:i1].argmax(dim=0)
+                max_vals, mask_i = pred_masks[i0:i1].int().max(dim=0)
+                mask_i[max_vals == 0] = -1
                 mask_list.append(mask_i)
 
                 for j in range(i1-i0):
@@ -703,12 +842,13 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid type of segmentation task if provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -747,8 +887,13 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
         else:
             pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
 
+        # Get thing indices if needed
+        if self.seg_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
+            thing_ids = torch.as_tensor(thing_ids, device=device)
+
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -799,7 +944,7 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
-            # Get prediction masks
+            # Get mask scores and instance segmentation masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
@@ -831,19 +976,141 @@ class PointRendRoIHead(StandardRoIHead, MMDetPointRendRoIHead):
 
             mask_scores_i = mask_logits_i.sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            ins_seg_masks = mask_scores_i > 0.5
 
-            pred_masks_i = mask_scores_i > 0.5
-            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
-            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+            # Update prediction scores based on mask scores if needed
+            if self.seg_type == 'instance':
+                pred_scores_i = pred_scores_i * (ins_seg_masks * mask_scores_i).flatten(1).sum(dim=1)
+                pred_scores_i = pred_scores_i / (ins_seg_masks.flatten(1).sum(dim=1) + 1e-6)
 
+            # Perform panoptic post-processing if needed
             if self.seg_type == 'panoptic':
-                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
+                # Filter based on score if needed
+                score_thr = self.pan_post_attrs.get('score_thr', None)
+
+                if score_thr is not None:
+                    keep_mask = pred_scores_i > score_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Filter based on mask NMS if needed
+                nms_thr = self.pan_post_attrs.get('nms_thr', None)
+
+                if nms_thr is not None:
+                    pred_scores_i, sort_ids = pred_scores_i.sort(descending=True)
+
+                    pred_labels_i = pred_labels_i[sort_ids]
+                    mask_scores_i = mask_scores_i[sort_ids]
+                    ins_seg_masks = ins_seg_masks[sort_ids]
+
+                    num_preds = len(ins_seg_masks)
+                    flat_masks = ins_seg_masks.flatten(1)
+                    inter = torch.zeros(num_preds, num_preds, dtype=torch.float, device=device)
+
+                    for j in range(1, num_preds):
+                        inter[j, :j] = (flat_masks[j, None, :] * flat_masks[None, :j, :]).sum(dim=2)
+
+                    areas = flat_masks.sum(dim=1)
+                    union = areas[:, None] + areas[None, :] - inter
+
+                    ious = inter / union
+                    keep_mask = ious.amax(dim=1) < nms_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Get panoptic segmentation masks
+                rel_mask_scores = pred_scores_i[:, None, None] * mask_scores_i
+                num_preds = len(rel_mask_scores)
+
+                if num_preds > 0:
+                    pan_seg_mask = rel_mask_scores.argmax(dim=0)
+                else:
+                    pan_seg_mask = ins_seg_masks.new_zeros([*rel_mask_scores.size()[1:]])
+
+                pred_ids = torch.arange(num_preds, device=device)
+                pan_seg_masks = pan_seg_mask[None, :, :] == pred_ids[:, None, None]
+
+                # Apply panoptic mask threshold if needed
+                pan_mask_thr = self.pan_post_attrs.get('pan_mask_thr', None)
+
+                if pan_mask_thr is not None:
+                    pan_seg_masks &= mask_scores_i > pan_mask_thr
+
+                # Filter based on instance-panoptic IoU if needed
+                ins_pan_thr = self.pan_post_attrs.get('ins_pan_thr', None)
+
+                if ins_pan_thr is not None:
+                    ins_flat_masks = ins_seg_masks.flatten(1)
+                    pan_flat_masks = pan_seg_masks.flatten(1)
+
+                    ins_areas = ins_flat_masks.sum(dim=1)
+                    pan_areas = pan_flat_masks.sum(dim=1)
+
+                    inter = (ins_flat_masks * pan_flat_masks).sum(dim=1)
+                    union = ins_areas + pan_areas - inter
+
+                    ious = inter / union
+                    keep_mask = ious > ins_pan_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Filter based on mask area if needed
+                area_thr = self.pan_post_attrs.get('area_thr', None)
+
+                if area_thr is not None:
+                    areas = pan_seg_masks.flatten(1).sum(dim=1)
+                    keep_mask = areas > area_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Merge stuff predictions
+                thing_mask = (pred_labels_i[:, None] == thing_ids[None, :]).any(dim=1)
+                stuff_mask = ~thing_mask
+
+                stuff_labels = pred_labels_i[stuff_mask]
+                stuff_labels, stuff_ids, stuff_counts = stuff_labels.unique(return_inverse=True, return_counts=True)
+                pred_labels_i = torch.cat([pred_labels_i[thing_mask], stuff_labels], dim=0)
+
+                stuff_scores = torch.zeros_like(stuff_labels, dtype=torch.float)
+                stuff_scores.scatter_add_(dim=0, index=stuff_ids, src=pred_scores_i[stuff_mask])
+                stuff_scores = stuff_scores / stuff_counts
+                pred_scores_i = torch.cat([pred_scores_i[thing_mask], stuff_scores], dim=0)
+
+                stuff_ids = stuff_ids[:, None, None].expand(-1, iH, iW)
+                unmerged_stuff_masks = pan_seg_masks[stuff_mask]
+
+                num_stuff_preds = len(stuff_labels)
+                stuff_seg_masks = pan_seg_masks.new_zeros([num_stuff_preds, iH, iW])
+                stuff_seg_masks.scatter_add_(dim=0, index=stuff_ids, src=unmerged_stuff_masks)
+
+                thing_seg_masks = pan_seg_masks[thing_mask]
+                pan_seg_masks = torch.cat([thing_seg_masks, stuff_seg_masks], dim=0)
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
             pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
+
+            if self.seg_type == 'instance':
+                pred_dict['masks'].append(ins_seg_masks)
+
+            elif self.seg_type == 'panoptic':
+                pred_dict['masks'].append(pan_seg_masks)
+
+            else:
+                error_msg = f"Invalid type of segmentation task (got '{self.seg_type}')."
+                raise ValueError(error_msg)
 
         # Concatenate predictions of different batch entries
         pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
@@ -1059,12 +1326,13 @@ class RefineMaskRoIHead(StandardRoIHead):
             pred_dicts (List): List with prediction dictionaries containing following additional entry:
                 pred_dict (Dict): Prediction dictionary containing following keys:
                     - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                     - scores (FloatTensor): normalized prediction scores of shape [num_preds];
                     - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when an invalid type of duplicate removal mechanism is provided.
+            ValueError: Error when an invalid type of segmentation task if provided.
         """
 
         # Retrieve desired items from storage dictionary
@@ -1107,8 +1375,13 @@ class RefineMaskRoIHead(StandardRoIHead):
         num_stages = len(self.mask_head.stage_sup_size)
         itp_kwargs = {'mode': 'bilinear', 'align_corners': True}
 
+        # Get thing indices if needed
+        if self.seg_type == 'panoptic':
+            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
+            thing_ids = torch.as_tensor(thing_ids, device=device)
+
         # Initialize prediction dictionary
-        pred_keys = ('labels', 'mask_scores', 'scores', 'batch_ids')
+        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
         pred_dict = {pred_key: [] for pred_key in pred_keys}
 
         # Iterate over every batch entry
@@ -1159,7 +1432,7 @@ class RefineMaskRoIHead(StandardRoIHead):
                     pred_boxes_i = pred_boxes_i[top_pred_ids]
                     pred_scores_i = pred_scores_i[top_pred_ids]
 
-            # Get prediction masks
+            # Get mask scores and instance segmentation masks
             batch_ids_i = torch.full_like(pred_labels_i, i)
             roi_boxes_i = torch.cat([batch_ids_i[:, None], pred_boxes_i], dim=1)
             roi_feats_i = self.mask_roi_extractor(roi_feat_maps, roi_boxes_i)
@@ -1199,19 +1472,141 @@ class RefineMaskRoIHead(StandardRoIHead):
 
             mask_scores_i = mask_logits_i[-1].sigmoid()
             mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
+            ins_seg_masks = mask_scores_i > 0.5
 
-            pred_masks_i = mask_scores_i > 0.5
-            pred_scores_i = pred_scores_i * (pred_masks_i * mask_scores_i).flatten(1).sum(dim=1)
-            pred_scores_i = pred_scores_i / (pred_masks_i.flatten(1).sum(dim=1) + 1e-6)
+            # Update prediction scores based on mask scores if needed
+            if self.seg_type == 'instance':
+                pred_scores_i = pred_scores_i * (ins_seg_masks * mask_scores_i).flatten(1).sum(dim=1)
+                pred_scores_i = pred_scores_i / (ins_seg_masks.flatten(1).sum(dim=1) + 1e-6)
 
+            # Perform panoptic post-processing if needed
             if self.seg_type == 'panoptic':
-                mask_scores_i = pred_scores_i[:, None, None] * mask_scores_i
+
+                # Filter based on score if needed
+                score_thr = self.pan_post_attrs.get('score_thr', None)
+
+                if score_thr is not None:
+                    keep_mask = pred_scores_i > score_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Filter based on mask NMS if needed
+                nms_thr = self.pan_post_attrs.get('nms_thr', None)
+
+                if nms_thr is not None:
+                    pred_scores_i, sort_ids = pred_scores_i.sort(descending=True)
+
+                    pred_labels_i = pred_labels_i[sort_ids]
+                    mask_scores_i = mask_scores_i[sort_ids]
+                    ins_seg_masks = ins_seg_masks[sort_ids]
+
+                    num_preds = len(ins_seg_masks)
+                    flat_masks = ins_seg_masks.flatten(1)
+                    inter = torch.zeros(num_preds, num_preds, dtype=torch.float, device=device)
+
+                    for j in range(1, num_preds):
+                        inter[j, :j] = (flat_masks[j, None, :] * flat_masks[None, :j, :]).sum(dim=2)
+
+                    areas = flat_masks.sum(dim=1)
+                    union = areas[:, None] + areas[None, :] - inter
+
+                    ious = inter / union
+                    keep_mask = ious.amax(dim=1) < nms_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    mask_scores_i = mask_scores_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    ins_seg_masks = ins_seg_masks[keep_mask]
+
+                # Get panoptic segmentation masks
+                rel_mask_scores = pred_scores_i[:, None, None] * mask_scores_i
+                num_preds = len(rel_mask_scores)
+
+                if num_preds > 0:
+                    pan_seg_mask = rel_mask_scores.argmax(dim=0)
+                else:
+                    pan_seg_mask = ins_seg_masks.new_zeros([*rel_mask_scores.size()[1:]])
+
+                pred_ids = torch.arange(num_preds, device=device)
+                pan_seg_masks = pan_seg_mask[None, :, :] == pred_ids[:, None, None]
+
+                # Apply panoptic mask threshold if needed
+                pan_mask_thr = self.pan_post_attrs.get('pan_mask_thr', None)
+
+                if pan_mask_thr is not None:
+                    pan_seg_masks &= mask_scores_i > pan_mask_thr
+
+                # Filter based on instance-panoptic IoU if needed
+                ins_pan_thr = self.pan_post_attrs.get('ins_pan_thr', None)
+
+                if ins_pan_thr is not None:
+                    ins_flat_masks = ins_seg_masks.flatten(1)
+                    pan_flat_masks = pan_seg_masks.flatten(1)
+
+                    ins_areas = ins_flat_masks.sum(dim=1)
+                    pan_areas = pan_flat_masks.sum(dim=1)
+
+                    inter = (ins_flat_masks * pan_flat_masks).sum(dim=1)
+                    union = ins_areas + pan_areas - inter
+
+                    ious = inter / union
+                    keep_mask = ious > ins_pan_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Filter based on mask area if needed
+                area_thr = self.pan_post_attrs.get('area_thr', None)
+
+                if area_thr is not None:
+                    areas = pan_seg_masks.flatten(1).sum(dim=1)
+                    keep_mask = areas > area_thr
+
+                    pred_labels_i = pred_labels_i[keep_mask]
+                    pred_scores_i = pred_scores_i[keep_mask]
+                    pan_seg_masks = pan_seg_masks[keep_mask]
+
+                # Merge stuff predictions
+                thing_mask = (pred_labels_i[:, None] == thing_ids[None, :]).any(dim=1)
+                stuff_mask = ~thing_mask
+
+                stuff_labels = pred_labels_i[stuff_mask]
+                stuff_labels, stuff_ids, stuff_counts = stuff_labels.unique(return_inverse=True, return_counts=True)
+                pred_labels_i = torch.cat([pred_labels_i[thing_mask], stuff_labels], dim=0)
+
+                stuff_scores = torch.zeros_like(stuff_labels, dtype=torch.float)
+                stuff_scores.scatter_add_(dim=0, index=stuff_ids, src=pred_scores_i[stuff_mask])
+                stuff_scores = stuff_scores / stuff_counts
+                pred_scores_i = torch.cat([pred_scores_i[thing_mask], stuff_scores], dim=0)
+
+                stuff_ids = stuff_ids[:, None, None].expand(-1, iH, iW)
+                unmerged_stuff_masks = pan_seg_masks[stuff_mask]
+
+                num_stuff_preds = len(stuff_labels)
+                stuff_seg_masks = pan_seg_masks.new_zeros([num_stuff_preds, iH, iW])
+                stuff_seg_masks.scatter_add_(dim=0, index=stuff_ids, src=unmerged_stuff_masks)
+
+                thing_seg_masks = pan_seg_masks[thing_mask]
+                pan_seg_masks = torch.cat([thing_seg_masks, stuff_seg_masks], dim=0)
 
             # Add predictions to prediction dictionary
             pred_dict['labels'].append(pred_labels_i)
-            pred_dict['mask_scores'].append(mask_scores_i)
             pred_dict['scores'].append(pred_scores_i)
-            pred_dict['batch_ids'].append(batch_ids_i)
+            pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
+
+            if self.seg_type == 'instance':
+                pred_dict['masks'].append(ins_seg_masks)
+
+            elif self.seg_type == 'panoptic':
+                pred_dict['masks'].append(pan_seg_masks)
+
+            else:
+                error_msg = f"Invalid type of segmentation task (got '{self.seg_type}')."
+                raise ValueError(error_msg)
 
         # Concatenate predictions of different batch entries
         pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})

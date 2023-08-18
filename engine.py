@@ -126,7 +126,7 @@ def evaluate(model, dataloader, evaluator=None, eval_with_bnd=False, epoch=None,
             evaluator_i = deepcopy(evaluator)
             evaluator_i.metrics = []
 
-            if 'mask_scores' in pred_dict:
+            if 'masks' in pred_dict:
                 metrics = ['segm']
 
                 if eval_with_bnd:

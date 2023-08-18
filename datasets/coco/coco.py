@@ -25,6 +25,7 @@ from PIL import Image
 from pycocotools import mask as coco_mask
 import torch
 from torch.utils.data import Dataset
+from torchvision.transforms.functional import InterpolationMode
 
 from datasets.transforms import get_train_transforms, get_eval_transforms
 from structures.boxes import Boxes
@@ -360,10 +361,9 @@ class CocoEvaluator(object):
             pred_dict (Dict): Prediction dictionary potentially containing following keys:
                 - labels (LongTensor): predicted class indices of shape [num_preds];
                 - boxes (Boxes): structure containing axis-aligned bounding boxes of size [num_preds];
-                - mask_scores (FloatTensor): predicted segmentation mask scores of shape [num_preds, iH, iW];
+                - masks (FloatTensor): predicted segmentation masks of shape [num_preds, iH, iW];
                 - scores (FloatTensor): normalized prediction scores of shape [num_preds];
-                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds];
-                - mask_thr (float): value containing the normalized segmentation mask threshold.
+                - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
 
         Raises:
             ValueError: Error when CocoEvaluator evaluator has unknown result format.
@@ -376,7 +376,7 @@ class CocoEvaluator(object):
         # Extract predictions from prediction dictionary
         labels = pred_dict['labels']
         boxes = pred_dict.get('boxes', None)
-        mask_scores = pred_dict.get('mask_scores', None)
+        masks = pred_dict.get('masks', None)
         scores = pred_dict['scores']
         batch_ids = pred_dict['batch_ids']
 
@@ -386,62 +386,43 @@ class CocoEvaluator(object):
             boxes = boxes[well_defined].to_format('xywh')
 
             labels = labels[well_defined]
-            mask_scores = mask_scores[well_defined] if mask_scores is not None else None
+            masks = masks[well_defined] if masks is not None else None
             scores = scores[well_defined]
             batch_ids = batch_ids[well_defined]
 
         # Get segmentation masks in original image space
-        if mask_scores is not None:
-            sorted = (batch_ids.diff() >= 0).all().item()
-
-            if not sorted:
-                batch_ids, sort_ids = batch_ids.sort()
-
-                labels = labels[sort_ids]
-                boxes = boxes[sort_ids] if boxes is not None else None
-                mask_scores = mask_scores[sort_ids]
-                scores = scores[sort_ids]
-
+        if masks is not None:
             batch_size = len(images)
+            device = batch_ids.device
+
             pred_sizes = [0] + [(batch_ids == i).sum() for i in range(batch_size)]
-            pred_sizes = torch.tensor(pred_sizes, device=batch_ids.device).cumsum(dim=0)
+            pred_sizes = torch.tensor(pred_sizes, device=device).cumsum(dim=0)
 
             if self.result_format == 'default':
-                masks = mask_scores > pred_dict.get('mask_thr', 0.5)
-                masks = mask_inv_transform(masks, images, pred_sizes)
-                masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
+                interpolation = InterpolationMode.BILINEAR
 
             elif self.result_format == 'panoptic':
-                mask_scores = mask_inv_transform(mask_scores, images, pred_sizes)
-
-                masks = []
-                non_empty_list = []
-
-                for i in range(batch_size):
-                    mask_scores_i = mask_scores[i]
-
-                    max_ids = mask_scores_i.argmax(dim=0, keepdim=True)
-                    scatter_src = torch.ones_like(max_ids, dtype=torch.bool)
-
-                    masks_i = torch.zeros_like(mask_scores_i, dtype=torch.bool)
-                    masks_i.scatter_(dim=0, index=max_ids, src=scatter_src)
-
-                    non_empty_i = masks_i.flatten(1).sum(dim=1) > 0
-                    non_empty_list.append(non_empty_i)
-
-                    masks_i = masks_i[non_empty_i]
-                    masks_i = [mask_ij for mask_ij in masks_i]
-                    masks.extend(masks_i)
-
-                non_empty_mask = torch.cat(non_empty_list, dim=0)
-                labels = labels[non_empty_mask]
-                boxes = boxes[non_empty_mask] if boxes is not None else None
-                scores = scores[non_empty_mask]
-                batch_ids = batch_ids[non_empty_mask]
+                interpolation = InterpolationMode.NEAREST
 
             else:
-                error_msg = f"Unknown result format '{self.result_format}' for CocoEvaluator evaluator."
+                error_msg = f"Unknown result format for CocoEvaluator evaluator (got '{self.result_format}')."
                 raise ValueError(error_msg)
+
+            masks = mask_inv_transform(masks, images, pred_sizes, interpolation=interpolation)
+            masks = [mask_ij for masks_i in masks for mask_ij in masks_i]
+
+            if len(masks) > 0:
+                masks = torch.stack(masks, dim=0)
+                non_empty = masks.flatten(1).sum(dim=1) > 0
+
+                labels = labels[non_empty]
+                boxes = boxes[non_empty] if boxes is not None else None
+                masks = masks[non_empty]
+                scores = scores[non_empty]
+                batch_ids = batch_ids[non_empty]
+
+            masks = [mask for mask in masks]
+            masks = mask_to_rle(masks)
 
         # Get image indices corresponding to predictions
         image_ids = torch.as_tensor(images.image_ids)
@@ -471,27 +452,28 @@ class CocoEvaluator(object):
             error_msg = "Box predictions must be provided when using evaluation NMS."
             raise ValueError(error_msg)
 
-        if mask_scores is not None:
-            result_dict['segmentation'] = mask_to_rle(masks)
+        if masks is not None:
+            result_dict['segmentation'] = masks
 
         # Get list of result dictionaries
         result_dicts = pd.DataFrame(result_dict).to_dict(orient='records')
 
         # Make sure there is at least one result dictionary per image
-        for image_id in images.image_ids:
-            if image_id not in image_ids:
-                result_dict = {}
-                result_dict['image_id'] = image_id
-                result_dict['category_id'] = 0
-                result_dict['score'] = 0.0
+        if self.result_format == 'instance':
+            for image_id in images.image_ids:
+                if image_id not in image_ids:
+                    result_dict = {}
+                    result_dict['image_id'] = image_id
+                    result_dict['category_id'] = 1
+                    result_dict['score'] = 0.0
 
-                if boxes is not None:
-                    result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
+                    if boxes is not None:
+                        result_dict['bbox'] = [0.0, 0.0, 0.0, 0.0]
 
-                if mask_scores is not None:
-                    result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
+                    if masks is not None:
+                        result_dict['segmentation'] = {'size': [0, 0], 'counts': ''}
 
-                result_dicts.append(result_dict)
+                    result_dicts.append(result_dict)
 
         # Update result_dicts attribute
         self.result_dicts.extend(result_dicts)

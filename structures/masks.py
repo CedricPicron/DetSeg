@@ -5,19 +5,21 @@ Collection of utility functions related to masks.
 import numpy as np
 from pycocotools import mask as coco_mask
 import torchvision.transforms.functional as F
+from torchvision.transforms.functional import InterpolationMode
 
 
-def mask_inv_transform(in_masks, images, cum_masks_batch):
+def mask_inv_transform(in_masks, images, cum_masks_batch, interpolation=InterpolationMode.BILINEAR):
     """
     Transforms the given masks back to the original image space as encoded by the given Images structure.
 
     Args:
-        in_masks (Tensor): Input masks (or mask scores) of shape [num_masks, iH, iW].
+        in_masks (Tensor): Input masks of shape [num_masks, iH, iW].
         images (Images): Images structure [batch_size] containing batched images with their entire transform history.
         cum_masks_batch (LongTensor): Tensor with cumulative number of masks per batch entry of shape [batch_size+1].
+        interpolation (InterpolationMode): Object with resize interpolation mode (default=InterpolationMode.BILINEAR).
 
     Returns:
-        out_masks_list (List): List [batch_size] with output masks (or mask scores) of shape [num_masks_i, oH, oW].
+        out_masks_list (List): List [batch_size] with output masks of shape [num_masks_i, oH, oW].
 
     Raises:
         ValueError: Error when one of the transforms has an unknown transform type.
@@ -57,7 +59,7 @@ def mask_inv_transform(in_masks, images, cum_masks_batch):
                 new_width, new_height = transform[2]
 
                 if len(masks_i) > 0:
-                    masks_i = F.resize(masks_i, (new_height, new_width))
+                    masks_i = F.resize(masks_i, (new_height, new_width), interpolation=interpolation)
                 else:
                     masks_i = masks_i.new_zeros([0, new_height, new_width])
 
