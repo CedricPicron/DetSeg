@@ -182,7 +182,7 @@ model = dict(
                 ),
             ],
         ),
-        '8_0': dict(
+        **{f'{i}_0': dict(
             type='Sparse3d',
             seq_feats_key='key_feats',
             act_mask_key='seg_img_unc_mask',
@@ -192,7 +192,7 @@ model = dict(
             get_act_xy_ids=True,
             get_pas_feats=True,
             get_id_maps=True,
-            sparse_cfg=[[
+            sparse_cfg=[
                 dict(
                     type='CrossAttn1d',
                     in_size=256,
@@ -248,8 +248,8 @@ model = dict(
                     act_fn2='relu',
                     skip=True,
                 ),
-            ] for _ in range(2)],
-        ),
+            ],
+        ) for i in range(8, 10)},
     },
     head_cfgs={
         '6_0': dict(
@@ -421,7 +421,65 @@ model = dict(
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
-                        loss_weight=5.0,
+                        loss_weight=2.5,
+                    ),
+                    loss_reduction='tgt_sum',
+                ),
+            ],
+            qry_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.LayerNorm',
+                    normalized_shape=256,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+            ],
+            key_cfg=[
+                dict(
+                    type='nn.Linear',
+                    in_features=256,
+                    out_features=256,
+                    bias=True,
+                ),
+                dict(
+                    type='nn.ReLU',
+                    inplace=True,
+                ),
+            ],
+            update_mask_key='seg_qry_unc_mask',
+            get_unc_masks=True,
+            unc_thr=100,
+            get_segs=False,
+        ),
+        '9_0': dict(
+            type='BaseSegHead',
+            seg_qst_dicts=[
+                dict(
+                    name='mask',
+                    loss_cfg=dict(
+                        type='mmdet.CrossEntropyLoss',
+                        use_sigmoid=True,
+                        loss_weight=2.5,
                     ),
                     loss_reduction='tgt_sum',
                 ),

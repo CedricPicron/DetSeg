@@ -410,7 +410,7 @@ model = dict(
             ],
             key_map_ids=[1],
             get_unc_masks=True,
-            unc_thr=100,
+            unc_thr=200,
             get_segs=False,
         ),
         '8_0': dict(
