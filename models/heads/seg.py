@@ -36,6 +36,7 @@ class BaseSegHead(nn.Module):
         get_bnd_masks (bool): Boolean indicating whether to get the segmentation boundary masks.
         get_gain_masks (bool): Boolean indicating whether to get the segmentation gain masks.
         get_unc_masks (bool): Boolean indicating whether to get the segmentation uncertainty masks.
+        bnd_thr (int): Integer containing the relative boundary threshold per query (or None).
         gain_thr (int): Integer containing the relative gain threshold per query.
         unc_thr (int): Integer containing the relative uncertainty threshold per query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
@@ -71,8 +72,8 @@ class BaseSegHead(nn.Module):
     """
 
     def __init__(self, seg_qst_dicts, metadata, qry_cfg=None, key_cfg=None, key_map_ids=None, update_mask_key=None,
-                 get_bnd_masks=False, get_gain_masks=False, get_unc_masks=False, gain_thr=100, unc_thr=100,
-                 get_segs=True, seg_type='instance', box_mask_key=None, score_attrs=None, dup_attrs=None,
+                 get_bnd_masks=False, get_gain_masks=False, get_unc_masks=False, bnd_thr=None, gain_thr=100,
+                 unc_thr=100, get_segs=True, seg_type='instance', box_mask_key=None, score_attrs=None, dup_attrs=None,
                  max_segs=None, mask_decay=1e-6, mask_thr=0.5, pan_post_attrs=None, matcher_cfg=None, apply_ids=None,
                  **kwargs):
         """
@@ -94,6 +95,7 @@ class BaseSegHead(nn.Module):
             get_bnd_masks (bool): Boolean indicating whether to get the segmentation boundary masks (default=False).
             get_gain_masks (bool): Boolean indicating whether to get the segmentation gain masks (default=False).
             get_unc_masks (bool): Boolean indicating whether to get the segmentation uncertainty masks (default=False).
+            bnd_thr (int): Integer containing the relative boundary threshold per query (default=None).
             gain_thr (int): Integer containing the relative gain threshold per query (default=100).
             unc_thr (int): Integer containing the relative uncertainty threshold per query (default=100).
             get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
@@ -132,12 +134,15 @@ class BaseSegHead(nn.Module):
         self.loss_modules = nn.ModuleDict()
 
         for seg_qst_dict in seg_qst_dicts:
-            loss_module = build_model(seg_qst_dict.pop('loss_cfg'))
-            loss_module, loss_reduction_from_module = update_loss_module(loss_module)
+            loss_cfg = seg_qst_dict.pop('loss_cfg', None)
 
-            qst_name = seg_qst_dict['name']
-            self.loss_modules[qst_name] = loss_module
-            seg_qst_dict.setdefault('loss_reduction', loss_reduction_from_module)
+            if loss_cfg is not None:
+                loss_module = build_model(loss_cfg)
+                loss_module, loss_reduction_from_module = update_loss_module(loss_module)
+
+                qst_name = seg_qst_dict['name']
+                self.loss_modules[qst_name] = loss_module
+                seg_qst_dict.setdefault('loss_reduction', loss_reduction_from_module)
 
         # Set remaining attributes
         self.seg_qst_dicts = seg_qst_dicts
@@ -146,6 +151,7 @@ class BaseSegHead(nn.Module):
         self.get_bnd_masks = get_bnd_masks
         self.get_gain_masks = get_gain_masks
         self.get_unc_masks = get_unc_masks
+        self.bnd_thr = bnd_thr
         self.gain_thr = gain_thr
         self.unc_thr = unc_thr
         self.get_segs = get_segs
@@ -1017,9 +1023,25 @@ class BaseSegHead(nn.Module):
                 qry_bnd_mask = (qry_bnd_mask > 0.5) & (qry_bnd_mask < 8.5)
                 qry_bnd_masks.append(qry_bnd_mask)
 
-            qry_bnd_mask = maps_to_seq(qry_bnd_masks).squeeze(dim=2)
-            storage_dict['seg_qry_bnd_mask'] = qry_bnd_mask
+            qry_bnd_mask = maps_to_seq(qry_bnd_masks)
+            qry_bnd_mask = qry_bnd_mask.squeeze(dim=2)
 
+            if self.bnd_thr is not None:
+                qry_bnd_mask = qry_bnd_mask.float()
+                qry_bnd_mask *= torch.randn_like(qry_bnd_mask).abs()
+
+                num_qrys = len(qry_bnd_mask)
+                qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.bnd_thr)
+                topk_vals, key_ids = qry_bnd_mask.topk(self.bnd_thr, dim=1, sorted=False)
+
+                valid_mask = topk_vals > 0
+                qry_ids = qry_ids[valid_mask]
+                key_ids = key_ids[valid_mask]
+
+                qry_bnd_mask = torch.zeros_like(qry_bnd_mask, dtype=torch.bool)
+                qry_bnd_mask[qry_ids, key_ids] = True
+
+            storage_dict['seg_qry_bnd_mask'] = qry_bnd_mask
             batch_ids = storage_dict['batch_ids']
             img_bnd_masks = []
 
@@ -1230,21 +1252,18 @@ class BaseSegHead(nn.Module):
             # Get question name
             qst_name = seg_qst_dict['name']
 
-            # Get loss module
-            loss_module = self.loss_modules[qst_name]
-
-            # Get loss reduction keyword arguments
-            reduction_kwargs = {'loss_reduction': seg_qst_dict['loss_reduction']}
-
             # Handle mask question
             if qst_name == 'mask':
 
-                # Add loss reduction keyword arguments
+                # Get loss reduction keyword arguments
+                reduction_kwargs = {}
+                reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
                 reduction_kwargs['qry_ids'] = qry_ids
                 reduction_kwargs['tgt_ids'] = tgt_ids
 
                 # Get mask loss
                 if mask_logits.numel() > 0:
+                    loss_module = self.loss_modules[qst_name]
                     mask_losses = loss_module(mask_logits, mask_targets)
                     mask_loss = reduce_losses(mask_losses, **reduction_kwargs)
 
@@ -1302,12 +1321,15 @@ class BaseSegHead(nn.Module):
                     gain_targets = curr_rewards - prev_rewards
                     gain_targets = gain_targets[valid_mask]
 
-                    # Add loss reduction keyword arguments
+                    # Get loss reduction keyword arguments
+                    reduction_kwargs = {}
+                    reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
                     reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                     reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                     # Get gain loss
                     if gain_scores.numel() > 0:
+                        loss_module = self.loss_modules[qst_name]
                         gain_losses = loss_module(gain_scores, gain_targets)
                         gain_loss = reduce_losses(gain_losses, **reduction_kwargs)
 
@@ -1369,12 +1391,15 @@ class BaseSegHead(nn.Module):
                 # Get valid high-resolution targets
                 high_res_targets = non_uniform_mask[valid_mask].float()
 
-                # Add loss reduction keyword arguments
+                # Get loss reduction keyword arguments
+                reduction_kwargs = {}
+                reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
                 reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                 reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                 # Get high-resolution loss
                 if mask_logits.numel() > 0:
+                    loss_module = self.loss_modules[qst_name]
                     high_res_losses = loss_module(high_res_logits, high_res_targets)
                     high_res_loss = reduce_losses(high_res_losses, **reduction_kwargs)
 
@@ -1427,12 +1452,15 @@ class BaseSegHead(nn.Module):
                 # Get valid low-resolution targets
                 low_res_targets = uniform_mask[valid_mask].float()
 
-                # Add loss reduction keyword arguments
+                # Get loss reduction keyword arguments
+                reduction_kwargs = {}
+                reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
                 reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
                 reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
 
                 # Get low-resolution loss
                 if mask_logits.numel() > 0:
+                    loss_module = self.loss_modules[qst_name]
                     low_res_losses = loss_module(low_res_logits, low_res_targets)
                     low_res_loss = reduce_losses(low_res_losses, **reduction_kwargs)
 
