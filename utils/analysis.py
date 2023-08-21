@@ -7,19 +7,22 @@ import torch
 from torch.nn.utils import clip_grad_norm_
 from torch.utils.benchmark import Timer
 
-from utils.flops import FlopCountAnalysis, id_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
+from utils.flops import FlopCountAnalysis, id_attn_flop_jit, id_conv2d_flop_jit, msda_flop_jit, roi_align_mmcv_flop_jit
 
 EXTRA_OPS = {
     'aten::abs': None,
     'aten::affine_grid_generator': None,
+    'aten::any': None,
     'aten::argmin': None,
     'aten::avg_pool2d': None,
     'aten::clone': None,
     'aten::cos': None,
     'aten::cumsum': None,
     'aten::diff': None,
+    'aten::empty_like': None,
     'aten::expand_as': None,
     'aten::flip': None,
+    'aten::fliplr': None,
     'aten::le': None,
     'aten::linspace': None,
     'aten::lt': None,
@@ -29,6 +32,8 @@ EXTRA_OPS = {
     'aten::prod': None,
     'aten::pow': None,
     'aten::repeat_interleave': None,
+    'aten::resolve_conj': None,
+    'aten::resolve_neg': None,
     'aten::rsqrt': None,
     'aten::scatter_': None,
     'aten::sin': None,
@@ -37,6 +42,7 @@ EXTRA_OPS = {
     'aten::topk': None,
     'aten::_unique2': None,
     'aten::where': None,
+    'prim::PythonOp.IdAttn': id_attn_flop_jit,
     'prim::PythonOp.IdConv2d': id_conv2d_flop_jit,
     'prim::PythonOp.MSDeformAttnFunction': msda_flop_jit,
     'prim::PythonOp.RoIAlignFunction': roi_align_mmcv_flop_jit,

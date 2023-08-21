@@ -17,6 +17,32 @@ from fvcore.nn.jit_handles import get_shape
 from torch.jit import TracerWarning
 
 
+def id_attn_flop_jit(inputs, outputs):
+    """
+    Function counting the number of index-based attention FLOPs.
+
+    Args:
+        inputs (List): List with inputs of the index-based attention operation.
+        outputs (List): List with outputs of the index-based attention operation.
+
+    Returns:
+        flops (Counter): Counter dictionary containing the number of index-based attention FLOPs.
+    """
+
+    # Get feature indices from list with inputs
+    feat_ids = inputs[2]
+
+    # Get number of index-based attention FLOPs
+    num_act_feats, num_pts = get_shape(feat_ids)[:2]
+    feat_size = get_shape(outputs[0])[1]
+
+    flops = num_act_feats * num_pts * feat_size**2
+    flops += num_act_feats * num_pts * feat_size
+    flops = Counter({'id_attn': flops})
+
+    return flops
+
+
 def id_conv2d_flop_jit(inputs, outputs):
     """
     Function counting the number of 2D index-based convolution FLOPs.
