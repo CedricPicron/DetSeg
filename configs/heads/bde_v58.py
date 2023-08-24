@@ -6,9 +6,13 @@ model = dict(
         type='LearnedPos2d',
         pos_cfg=[
             dict(
+                type='SinePosEncoder2d',
+                feat_size=256,
+            ),
+            dict(
                 type='nn.Linear',
-                in_features=2,
-                out_features=4,
+                in_features=256,
+                out_features=256,
                 bias=True,
             ),
             dict(
@@ -17,27 +21,7 @@ model = dict(
             ),
             dict(
                 type='nn.Linear',
-                in_features=4,
-                out_features=16,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=16,
-                out_features=64,
-                bias=True,
-            ),
-            dict(
-                type='nn.ReLU',
-                inplace=True,
-            ),
-            dict(
-                type='nn.Linear',
-                in_features=64,
+                in_features=256,
                 out_features=256,
                 bias=True,
             ),
@@ -196,23 +180,13 @@ model = dict(
                     out_size=256,
                     skip=True,
                 ),
-                dict(
-                    type='TwoStepMLP',
-                    in_size=256,
-                    hidden_size=1024,
-                    out_size=256,
-                    norm1='layer',
-                    norm2='',
-                    act_fn1='',
-                    act_fn2='relu',
-                    skip=True,
-                ),
             ],
         ),
         **{f'{i}_0': dict(
             type='Sparse3d',
             seq_feats_key='key_feats',
-            act_mask_key='seg_img_gain_mask',
+            act_mask_key='seg_img_bnd_mask',
+            pos_feats_key='key_pos_feats',
             get_act_batch_ids=True,
             get_act_map_ids=True,
             get_act_xy_ids=True,
@@ -226,6 +200,7 @@ model = dict(
                         type='nn.LayerNorm',
                         normalized_shape=256,
                     ),
+                    qry_pos_key='act_pos_feats',
                     kv_feats_key='qry_feats',
                     key_pos_key='qry_pos_feats',
                     kv_size=256,
@@ -373,41 +348,22 @@ model = dict(
                 dict(
                     name='mask',
                     loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=10.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='gain',
-                    reward_jump=0.5,
-                    loss_cfg=dict(
-                        type='mmdet.SmoothL1Loss',
-                        beta=0.1,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='high_res',
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='low_res',
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
+                        type='ModuleSum',
+                        sub_module_cfgs=[
+                            dict(
+                                type='MaskLoss',
+                                mask_loss_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    loss_weight=10.0,
+                                ),
+                            ),
+                            dict(
+                                type='mmdet.DiceLoss',
+                                use_sigmoid=True,
+                                loss_weight=10.0,
+                            ),
+                        ],
                     ),
                     loss_reduction='tgt_sum',
                 ),
@@ -452,11 +408,12 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            key_map_ids=[1, 2, 3, 4, 5],
-            get_gain_masks=True,
+            key_map_ids=[1],
+            get_bnd_masks=True,
+            bnd_thr=400,
             get_segs=False,
         ),
-        **{f'{i}_0': dict(
+        '8_0': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
                 dict(
@@ -464,41 +421,7 @@ model = dict(
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=10.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='gain',
-                    reward_jump=0.5,
-                    loss_cfg=dict(
-                        type='mmdet.SmoothL1Loss',
-                        beta=0.1,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='high_res',
-                    max_new_preds=10000,
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='low_res',
-                    max_new_preds=10000,
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
+                        loss_weight=2.5,
                     ),
                     loss_reduction='tgt_sum',
                 ),
@@ -543,10 +466,11 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            update_mask_key='seg_qry_gain_mask',
-            get_gain_masks=True,
+            update_mask_key='seg_qry_bnd_mask',
+            get_bnd_masks=True,
+            bnd_thr=400,
             get_segs=False,
-        ) for i in range(8, 9)},
+        ),
         '9_0': dict(
             type='BaseSegHead',
             seg_qst_dicts=[
@@ -555,41 +479,7 @@ model = dict(
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
                         use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=10.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='gain',
-                    reward_jump=0.5,
-                    loss_cfg=dict(
-                        type='mmdet.SmoothL1Loss',
-                        beta=0.1,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='high_res',
-                    max_new_preds=10000,
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
-                    ),
-                    loss_reduction='tgt_sum',
-                ),
-                dict(
-                    name='low_res',
-                    max_new_preds=10000,
-                    loss_cfg=dict(
-                        type='mmdet.CrossEntropyLoss',
-                        use_sigmoid=True,
-                        reduction='sum',
-                        loss_weight=1.0,
+                        loss_weight=2.5,
                     ),
                     loss_reduction='tgt_sum',
                 ),
@@ -634,7 +524,7 @@ model = dict(
                     inplace=True,
                 ),
             ],
-            update_mask_key='seg_qry_gain_mask',
+            update_mask_key='seg_qry_bnd_mask',
             get_segs=True,
             seg_type='instance',
             dup_attrs=dict(
