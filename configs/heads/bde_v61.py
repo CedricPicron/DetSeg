@@ -369,7 +369,7 @@ model = dict(
                 ),
                 dict(
                     name='gain',
-                    reward_jump=0.5,
+                    reward_jump=1.0,
                 ),
             ],
             qry_cfg=[
