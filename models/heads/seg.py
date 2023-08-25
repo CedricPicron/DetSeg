@@ -1219,15 +1219,27 @@ class BaseSegHead(nn.Module):
 
         # Get mask targets
         if 'mask_targets' not in storage_dict:
-            tgt_masks = tgt_dict['masks'].float().unsqueeze(dim=1)
-            itp_kwargs = {'mode': 'bilinear', 'align_corners': False}
+            mask_targets_map = tgt_dict['masks'].float().unsqueeze(dim=1)
+            conv_kernel = torch.full(size=[1, 1, 2, 2], fill_value=0.25, device=device)
 
             map_shapes = storage_dict['map_shapes'].tolist()
+            num_maps = len(map_shapes)
             mask_targets_maps = []
 
-            for map_shape in map_shapes:
-                mask_targets_map = F.interpolate(tgt_masks, size=map_shape, **itp_kwargs)
-                mask_targets_maps.append(mask_targets_map)
+            while True:
+                mH, mW = mask_targets_map.size()[2:]
+
+                if [mH, mW] in map_shapes:
+                    mask_targets_maps.append(mask_targets_map)
+
+                    if len(mask_targets_maps) == num_maps:
+                        break
+
+                padding = [mH % 2, mW % 2]
+                mask_targets_map = F.conv2d(mask_targets_map, conv_kernel, stride=2, padding=padding)
+
+                mixed_mask = (mask_targets_map > 0) & (mask_targets_map < 1)
+                mask_targets_map[mixed_mask] = 0.5
 
             mask_targets = maps_to_seq(mask_targets_maps).squeeze(dim=2)
             storage_dict['mask_targets'] = mask_targets
