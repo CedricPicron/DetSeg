@@ -1319,7 +1319,7 @@ class BaseSegHead(nn.Module):
 
                     # Get valid gain targets
                     gain_targets = curr_rewards - prev_rewards
-                    gain_targets = gain_targets[valid_mask]
+                    gain_targets = gain_targets[valid_mask].detach()
 
                     # Get loss reduction keyword arguments
                     reduction_kwargs = {}
