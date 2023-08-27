@@ -184,6 +184,9 @@ class BaseSegHead(nn.Module):
             answers (FloatTensor): Answers to segmentation questions of shape [num_qsts, num_qrys, num_keys].
             qry_ids (LongTensor): Query indices with new segmentation answers of shape [num_new_answers].
             key_ids (LongTensor): Key indices with new segmentation answers of shape [num_new_answers].
+
+        Raises:
+            NotImplementedError: Error when having the high-resolution question in update mode.
         """
 
         # Retrieve various items from storage dictionary
@@ -199,6 +202,9 @@ class BaseSegHead(nn.Module):
         # Get batch size and device
         batch_size = len(images)
         device = qry_feats.device
+
+        # Get question names
+        qst_names = [seg_qst_dict['name'] for seg_qst_dict in self.seg_qst_dicts]
 
         # Get answers to segmentation questions
         if 'seg_answers' not in storage_dict:
@@ -240,89 +246,52 @@ class BaseSegHead(nn.Module):
                 qry_ids_list.append(exp_qry_ids)
                 key_ids_list.append(exp_key_ids)
 
+            if 'high_res' in qst_names:
+                high_res_qst_id = qst_names.index('high_res')
+                high_res_gains = answers[high_res_qst_id]
+                storage_dict['seg_high_res_gains'] = high_res_gains
+
+                key_map_ids = torch.as_tensor(self.key_map_ids, device=device)
+                key_map_ids = key_map_ids.msort()
+                assert (key_map_ids.diff() == 1).all().item()
+
+                min_key_map_id = key_map_ids[0].item()
+                insert_map_id = min_key_map_id - 1
+
+                if insert_map_id >= 0:
+                    map_shapes = storage_dict['map_shapes']
+                    high_res_gains = high_res_gains.unsqueeze(dim=2)
+
+                    high_res_gain_maps = seq_to_maps(high_res_gains, map_shapes)
+                    high_res_gain_map = high_res_gain_maps[min_key_map_id].clone()
+
+                    mH, mW = map_shapes[insert_map_id].tolist()
+                    padding = (mH % 2, mW % 2)
+                    output_padding = (mH % 2, mW % 2)
+
+                    kernel = torch.ones(1, 1, 2, 2, device=device)
+                    conv_kwargs = {'stride': 2, 'padding': padding, 'output_padding': output_padding}
+                    high_res_gain_map = F.conv_transpose2d(high_res_gain_map, kernel, **conv_kwargs)
+
+                    gain_qst_id = qst_names.index('gain')
+                    gains = answers[gain_qst_id].unsqueeze(dim=2)
+
+                    gain_maps = seq_to_maps(gains, map_shapes)
+                    gain_maps[insert_map_id] = high_res_gain_map
+
+                    gains = maps_to_seq(gain_maps).squeeze(dim=2)
+                    answers[gain_qst_id] = gains
+
+                keep_qst_mask = torch.ones(num_qsts, dtype=torch.bool, device=device)
+                keep_qst_mask[high_res_qst_id] = False
+                answers = answers[keep_qst_mask]
+
         else:
             update_mask = storage_dict[self.update_mask_key]
             pred_mask = update_mask.clone()
 
             answers = storage_dict['seg_answers']
             num_qsts = len(self.seg_qst_dicts)
-
-            for i, seg_qst_dict in enumerate(self.seg_qst_dicts):
-                qst_name = seg_qst_dict['name']
-
-                if qst_name == 'high_res':
-                    map_shapes = storage_dict['map_shapes']
-
-                    high_res_mask = (answers[i] > 0).unsqueeze(dim=2)
-                    high_res_masks = seq_to_maps(high_res_mask, map_shapes)
-
-                    kernel = torch.ones(1, 1, 3, 3, device=device)
-                    conv_kwargs = {'stride': 2, 'padding': 1}
-                    new_pred_masks = []
-
-                    for high_res_mask, map_shape in zip(high_res_masks[1:], map_shapes[:-1]):
-                        output_padding = (map_shape + 1) % 2
-                        conv_kwargs['output_padding'] = output_padding.tolist()
-
-                        new_pred_mask = F.conv_transpose2d(high_res_mask.float(), kernel, **conv_kwargs) > 0
-                        new_pred_masks.append(new_pred_mask)
-
-                    num_qrys = len(high_res_mask)
-                    fH, fW = map_shapes[-1]
-
-                    new_pred_mask = torch.zeros(num_qrys, 1, fH, fW, dtype=torch.bool, device=device)
-                    new_pred_masks.append(new_pred_mask)
-
-                    new_pred_mask = maps_to_seq(new_pred_masks).squeeze(dim=2) & (answers[i] == 0)
-                    max_new_preds = seg_qst_dict.get('max_new_preds', None)
-
-                    if max_new_preds is not None:
-                        if new_pred_mask.sum().item() > max_new_preds:
-                            new_pred_mask = new_pred_mask.flatten()
-                            new_pred_ids = new_pred_mask.nonzero()[:, 0]
-
-                            num_new_preds = len(new_pred_ids)
-                            rand_ids = torch.randperm(num_new_preds, device=device)
-                            remove_ids = new_pred_ids[rand_ids[max_new_preds:]]
-
-                            new_pred_mask[remove_ids] = False
-                            new_pred_mask = new_pred_mask.view_as(pred_mask)
-
-                    pred_mask |= new_pred_mask
-
-                elif qst_name == 'low_res':
-                    map_shapes = storage_dict['map_shapes']
-
-                    low_res_mask = (answers[i] > 0).unsqueeze(dim=2)
-                    low_res_masks = seq_to_maps(low_res_mask, map_shapes)
-
-                    num_qrys = len(low_res_mask)
-                    fH, fW = map_shapes[0]
-                    new_pred_masks = [torch.zeros(num_qrys, 1, fH, fW, dtype=torch.bool, device=device)]
-
-                    kernel = torch.ones(1, 1, 3, 3, device=device)
-                    conv_kwargs = {'stride': 2, 'padding': 1}
-
-                    for low_res_mask in low_res_masks[:-1]:
-                        new_pred_mask = F.conv2d(low_res_mask.float(), kernel, **conv_kwargs) > 0
-                        new_pred_masks.append(new_pred_mask)
-
-                    new_pred_mask = maps_to_seq(new_pred_masks).squeeze(dim=2) & (answers[i] == 0)
-                    max_new_preds = seg_qst_dict.get('max_new_preds', None)
-
-                    if max_new_preds is not None:
-                        if new_pred_mask.sum().item() > max_new_preds:
-                            new_pred_mask = new_pred_mask.flatten()
-                            new_pred_ids = new_pred_mask.nonzero()[:, 0]
-
-                            num_new_preds = len(new_pred_ids)
-                            rand_ids = torch.randperm(num_new_preds, device=device)
-                            remove_ids = new_pred_ids[rand_ids[max_new_preds:]]
-
-                            new_pred_mask[remove_ids] = False
-                            new_pred_mask = new_pred_mask.view_as(pred_mask)
-
-                    pred_mask |= new_pred_mask
 
             qry_ids_list = []
             key_ids_list = []
@@ -349,6 +318,10 @@ class BaseSegHead(nn.Module):
 
                 qry_ids_list.append(qry_ids)
                 key_ids_list.append(key_ids)
+
+            if 'high_res' in qst_names:
+                error_msg = 'Update mode currently does not support the high-resolution question.'
+                raise NotImplementedError(error_msg)
 
         # Get query and key indices for which new answer was computed
         qry_ids = torch.cat(qry_ids_list, dim=0)
@@ -1058,11 +1031,6 @@ class BaseSegHead(nn.Module):
             qst_id = qst_names.index('gain')
             gain_scores = answers[qst_id].clamp(min=0)
 
-            for qst_name in ('high_res', 'low_res'):
-                if qst_name in qst_names:
-                    qst_id = qst_names.index(qst_name)
-                    gain_scores *= 1 - answers[qst_id].sigmoid()
-
             num_qrys = len(gain_scores)
             qry_ids = torch.arange(num_qrys, device=device)[:, None].expand(-1, self.gain_thr)
             key_ids = gain_scores.topk(self.gain_thr, dim=1, sorted=False)[1]
@@ -1134,7 +1102,8 @@ class BaseSegHead(nn.Module):
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
                 - mask_targets (FloatTensor): segmentation mask targets of shape [num_qrys, num_keys];
                 - seg_gain_scores (FloatTensor): segmentation gain scores of shape [num_qrys, num_keys];
-                - seg_rewards (FloatTensor): segmentation rewards of shape [num_qrys, num_keys].
+                - seg_rewards (FloatTensor): segmentation rewards of shape [num_qrys, num_keys];
+                - seg_high_res_gains (FloatTensor): segmentation high-resolution gains of shape [num_qrys, num_keys].
 
             tgt_dict (Dict): Target dictionary containing at least following key:
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
@@ -1148,14 +1117,12 @@ class BaseSegHead(nn.Module):
             loss_dict (Dict): Loss dictionary (possibly) containing following additional keys:
                 - mask_loss_{id} (FloatTensor): segmentation mask loss of shape [];
                 - gain_loss_{id} (FloatTensor): segmentation gain loss of shape [];
-                - high_res_loss_{id} (FloatTensor): segmentation high-resolution loss of shape [];
-                - low_res_loss_{id} (FloatTensor): segmentation low-resolution loss of shape [].
+                - high_res_loss_{id} (FloatTensor): segmentation high-resolution loss of shape [].
 
             analysis_dict (Dict): Analysis dictionary (possibly) containing following additional keys (if not None):
                 - mask_acc_{id} (FloatTensor): segmentation mask accuracy of shape [];
                 - gain_err_{id} (FloatTensor): mean absolute gain error of shape [];
-                - high_res_acc_{id} (FloatTensor): segmentation high-resolution accuracy of shape [];
-                - low_res_acc_{id} (FloatTensor): segmentation low-resolution accuracy of shape [].
+                - high_res_acc_{id} (FloatTensor): segmentation high-resolution accuracy of shape [].
 
         Raises:
             ValueError: Error when a single query is matched with multiple targets.
@@ -1249,15 +1216,6 @@ class BaseSegHead(nn.Module):
 
         mask_targets = mask_targets[tgt_ids, key_ids]
 
-        # Get masks for resolution questions if needed
-        for qst_name in qst_names:
-            if qst_name in ('high_res', 'low_res'):
-                seg_mask = answers[mask_qst_id].sigmoid().unsqueeze(dim=2) > self.mask_thr
-                seg_masks = seq_to_maps(seg_mask, storage_dict['map_shapes'])
-
-                has_pred_mask = answers[mask_qst_id].unsqueeze(dim=2) != 0
-                has_pred_masks = seq_to_maps(has_pred_mask, storage_dict['map_shapes'])
-
         # Iterate over segmentation questions
         for i, seg_qst_dict in enumerate(self.seg_qst_dicts):
 
@@ -1308,7 +1266,7 @@ class BaseSegHead(nn.Module):
             elif qst_name == 'gain':
 
                 # Get current rewards
-                mask_scores = mask_logits.sigmoid()
+                mask_scores = mask_logits.detach().sigmoid()
                 curr_rewards = 1 - (mask_scores - mask_targets).abs()
 
                 reward_jump = seg_qst_dict.get('reward_jump', 0.5)
@@ -1321,23 +1279,18 @@ class BaseSegHead(nn.Module):
                 # Get gain loss and analyses if needed
                 if 'seg_gain_scores' in storage_dict:
 
-                    # Get valid mask
-                    prev_rewards = storage_dict['seg_rewards'][qry_ids, key_ids]
-                    valid_mask = prev_rewards != 0
-
-                    # Get valid gain scores
+                    # Get gain scores
                     gain_scores = storage_dict['seg_gain_scores'][qry_ids, key_ids]
-                    gain_scores = gain_scores[valid_mask]
 
-                    # Get valid gain targets
+                    # Get gain targets
+                    prev_rewards = storage_dict['seg_rewards'][qry_ids, key_ids]
                     gain_targets = curr_rewards - prev_rewards
-                    gain_targets = gain_targets[valid_mask].detach()
 
                     # Get loss reduction keyword arguments
                     reduction_kwargs = {}
                     reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
-                    reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
-                    reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
+                    reduction_kwargs['qry_ids'] = qry_ids
+                    reduction_kwargs['tgt_ids'] = tgt_ids
 
                     # Get gain loss
                     if gain_scores.numel() > 0:
@@ -1376,128 +1329,108 @@ class BaseSegHead(nn.Module):
             # Handle high-resolution question
             elif qst_name == 'high_res':
 
-                # Get non-uniform and valid masks
-                kernel = mask_logits.new_ones([1, 1, 3, 3])
+                # Update segmentation rewards if needed
+                key_map_ids = torch.as_tensor(self.key_map_ids, device=device)
+                key_map_ids = key_map_ids.msort()
+                assert (key_map_ids.diff() == 1).all().item()
 
-                num_qrys = len(seg_masks[0])
-                fH, fW = storage_dict['map_shapes'][0]
+                min_key_map_id = key_map_ids[0].item()
+                insert_map_id = min_key_map_id - 1
 
-                non_uniform_masks = [torch.zeros(num_qrys, 1, fH, fW, dtype=torch.bool, device=device)]
-                valid_masks = [torch.zeros(num_qrys, 1, fH, fW, dtype=torch.bool, device=device)]
+                if insert_map_id >= 0:
+                    rewards = storage_dict['seg_rewards'].unsqueeze(dim=2)
+                    map_shapes = storage_dict['map_shapes']
 
-                for (seg_mask, has_pred_mask) in zip(seg_masks[:-1], has_pred_masks[:-1]):
-                    seg_mask_sum = F.conv2d(seg_mask.float(), kernel, stride=2, padding=1)
-                    non_uniform_mask = (seg_mask_sum > 0.5) & (seg_mask_sum < 8.5)
-                    non_uniform_masks.append(non_uniform_mask)
+                    reward_maps = seq_to_maps(rewards, map_shapes)
+                    reward_map = reward_maps[min_key_map_id].clone()
 
-                    valid_mask = F.conv2d(has_pred_mask.float(), kernel, stride=2, padding=1) > 8.5
-                    valid_masks.append(valid_mask)
+                    mH, mW = map_shapes[insert_map_id].tolist()
+                    padding = (mH % 2, mW % 2)
+                    output_padding = (mH % 2, mW % 2)
 
-                non_uniform_mask = maps_to_seq(non_uniform_masks)[qry_ids, key_ids, 0]
-                valid_mask = maps_to_seq(valid_masks)[qry_ids, key_ids, 0]
+                    kernel = torch.ones(1, 1, 2, 2, device=device)
+                    conv_kwargs = {'stride': 2, 'padding': padding, 'output_padding': output_padding}
+                    reward_map = F.conv_transpose2d(reward_map, kernel, **conv_kwargs)
 
-                # Get valid high-resolution logits
-                high_res_logits = answers[i, qry_ids, key_ids]
-                high_res_logits = high_res_logits[valid_mask]
+                    reward_maps[insert_map_id] = reward_map
+                    rewards = maps_to_seq(reward_maps).squeeze(dim=2)
+                    storage_dict['seg_rewards'] = rewards
 
-                # Get valid high-resolution targets
-                high_res_targets = non_uniform_mask[valid_mask].float()
+                # Get high-resolution loss and analyses if needed
+                if qst_name in self.loss_modules:
 
-                # Get loss reduction keyword arguments
-                reduction_kwargs = {}
-                reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
-                reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
-                reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
+                    # Get map shapes
+                    map_shapes = storage_dict['map_shapes']
 
-                # Get high-resolution loss
-                if mask_logits.numel() > 0:
-                    loss_module = self.loss_modules[qst_name]
-                    high_res_losses = loss_module(high_res_logits, high_res_targets)
-                    high_res_loss = reduce_losses(high_res_losses, **reduction_kwargs)
+                    # Get high-resolution scores
+                    high_res_gains = storage_dict['seg_high_res_gains'].unsqueeze(dim=2)
+                    high_res_gain_maps = seq_to_maps(high_res_gains, map_shapes)
+                    gain_maps = []
+
+                    for i, high_res_gain_map in enumerate(high_res_gain_maps[1:]):
+                        mH, mW = map_shapes[i].tolist()
+                        padding = (mH % 2, mW % 2)
+                        output_padding = (mH % 2, mW % 2)
+
+                        kernel = torch.ones(1, 1, 2, 2, device=device)
+                        conv_kwargs = {'stride': 2, 'padding': padding, 'output_padding': output_padding}
+
+                        gain_map = F.conv_transpose2d(high_res_gain_map, kernel, **conv_kwargs)
+                        gain_maps.append(gain_map)
+
+                    gain_maps.append(torch.zeros_like(high_res_gain_maps[-1]))
+                    high_res_scores = maps_to_seq(gain_maps).squeeze(dim=2)
+                    high_res_scores = high_res_scores[qry_ids, key_ids]
+
+                    # Get high-resolution targets
+                    gain_qst_id = qst_names.index('gain')
+                    high_res_targets = answers[gain_qst_id].detach()
+                    high_res_targets = high_res_targets[qry_ids, key_ids]
+
+                    # Get valid high-resolution scores and targets
+                    valid_mask = (high_res_scores != 0) & (high_res_targets != 0)
+                    high_res_scores = high_res_scores[valid_mask]
+                    high_res_targets = high_res_targets[valid_mask]
+
+                    # Get valid query and target indices
+                    valid_qry_ids = qry_ids[valid_mask]
+                    valid_tgt_ids = tgt_ids[valid_mask]
+
+                    # Get loss reduction keyword arguments
+                    reduction_kwargs = {}
+                    reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
+                    reduction_kwargs['qry_ids'] = valid_qry_ids
+                    reduction_kwargs['tgt_ids'] = valid_tgt_ids
+
+                    # Get high-resolution loss
+                    if high_res_scores.numel() > 0:
+                        loss_module = self.loss_modules[qst_name]
+                        high_res_losses = loss_module(high_res_scores, high_res_targets)
+                        high_res_loss = reduce_losses(high_res_losses, **reduction_kwargs)
+
+                    else:
+                        high_res_loss = zero_loss
+
+                    # Add high-resolution loss to loss dictionary
+                    loss_name = f'high_res_loss_{id}' if id is not None else 'high_res_loss'
+                    loss_dict[loss_name] = high_res_loss
+
+                    # Perform high-resolution analyses if needed
+                    if analysis_dict is not None:
+
+                        # Get gain error
+                        if high_res_scores.numel() > 0:
+                            high_res_err = (high_res_scores - high_res_targets).abs().mean()
+                        else:
+                            high_res_err = torch.tensor(0.0, device=device)
+
+                        # Add gain error to analysis dictionary
+                        err_name = loss_name.replace('loss', 'err')
+                        analysis_dict[err_name] = high_res_err
 
                 else:
-                    high_res_loss = zero_loss
-
-                # Add high-resolution loss to loss dictionary
-                loss_name = f'high_res_loss_{id}' if id is not None else 'high_res_loss'
-                loss_dict[loss_name] = high_res_loss
-
-                # Perform high-resolution analyses if needed
-                if analysis_dict is not None:
-
-                    # Get high-resolution accuracy
-                    high_res_preds = high_res_logits > 0
-                    high_res_targets = high_res_targets.bool()
-
-                    if high_res_preds.numel() > 0:
-                        high_res_acc = (high_res_preds == high_res_targets).sum() / high_res_preds.numel()
-                    else:
-                        high_res_acc = torch.tensor(0.0, device=device)
-
-                    # Add high-resolution accuracy to analysis dictionary
-                    acc_name = loss_name.replace('loss', 'acc')
-                    analysis_dict[acc_name] = 100 * high_res_acc
-
-            # Handle low-resolution question
-            elif qst_name == 'low_res':
-
-                # Get uniform and valid masks
-                kernel = mask_logits.new_ones([1, 1, 3, 3])
-                uniform_masks = []
-                valid_masks = []
-
-                for (seg_mask, has_pred_mask) in zip(seg_masks, has_pred_masks):
-                    seg_mask_sum = F.conv2d(seg_mask.float(), kernel, padding=1)
-                    uniform_mask = (seg_mask_sum < 0.5) | (seg_mask_sum > 8.5)
-                    uniform_masks.append(uniform_mask)
-
-                    valid_mask = F.conv2d(has_pred_mask.float(), kernel, padding=1) > 8.5
-                    valid_masks.append(valid_mask)
-
-                uniform_mask = maps_to_seq(uniform_masks)[qry_ids, key_ids, 0]
-                valid_mask = maps_to_seq(valid_masks)[qry_ids, key_ids, 0]
-
-                # Get valid low-resolution logits
-                low_res_logits = answers[i, qry_ids, key_ids]
-                low_res_logits = low_res_logits[valid_mask]
-
-                # Get valid low-resolution targets
-                low_res_targets = uniform_mask[valid_mask].float()
-
-                # Get loss reduction keyword arguments
-                reduction_kwargs = {}
-                reduction_kwargs['loss_reduction'] = seg_qst_dict['loss_reduction']
-                reduction_kwargs['qry_ids'] = qry_ids[valid_mask]
-                reduction_kwargs['tgt_ids'] = tgt_ids[valid_mask]
-
-                # Get low-resolution loss
-                if mask_logits.numel() > 0:
-                    loss_module = self.loss_modules[qst_name]
-                    low_res_losses = loss_module(low_res_logits, low_res_targets)
-                    low_res_loss = reduce_losses(low_res_losses, **reduction_kwargs)
-
-                else:
-                    low_res_loss = zero_loss
-
-                # Add low-resolution loss to loss dictionary
-                loss_name = f'low_res_loss_{id}' if id is not None else 'low_res_loss'
-                loss_dict[loss_name] = low_res_loss
-
-                # Perform low-resolution analyses if needed
-                if analysis_dict is not None:
-
-                    # Get low-resolution accuracy
-                    low_res_preds = low_res_logits > 0
-                    low_res_targets = low_res_targets.bool()
-
-                    if low_res_preds.numel() > 0:
-                        low_res_acc = (low_res_preds == low_res_targets).sum() / low_res_preds.numel()
-                    else:
-                        low_res_acc = torch.tensor(0.0, device=device)
-
-                    # Add low-resolution accuracy to analysis dictionary
-                    acc_name = loss_name.replace('loss', 'acc')
-                    analysis_dict[acc_name] = 100 * low_res_acc
+                    loss_name = next(iter(loss_dict))
+                    loss_dict[loss_name] += zero_loss
 
             # Handle invalid question
             else:
