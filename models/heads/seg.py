@@ -293,6 +293,10 @@ class BaseSegHead(nn.Module):
             answers = storage_dict['seg_answers']
             num_qsts = len(self.seg_qst_dicts)
 
+            mask_qst_id = qst_names.index('mask')
+            prev_mask_logits = answers[mask_qst_id].clone().detach()
+            storage_dict['seg_prev_mask_logits'] = prev_mask_logits
+
             qry_ids_list = []
             key_ids_list = []
 
@@ -1101,6 +1105,7 @@ class BaseSegHead(nn.Module):
                 - matched_qry_ids (LongTensor): indices of matched queries of shape [num_pos_qrys];
                 - matched_tgt_ids (LongTensor): indices of corresponding matched targets of shape [num_pos_qrys];
                 - mask_targets (FloatTensor): segmentation mask targets of shape [num_qrys, num_keys];
+                - seg_prev_mask_logits (FloatTensor): previous segmentation mask logits of shape [num_qrys, num_keys];
                 - seg_gain_scores (FloatTensor): segmentation gain scores of shape [num_qrys, num_keys];
                 - seg_rewards (FloatTensor): segmentation rewards of shape [num_qrys, num_keys];
                 - seg_high_res_gains (FloatTensor): segmentation high-resolution gains of shape [num_qrys, num_keys].
@@ -1261,6 +1266,19 @@ class BaseSegHead(nn.Module):
                     # Add mask accuracy to analysis dictionary
                     acc_name = loss_name.replace('loss', 'acc')
                     analysis_dict[acc_name] = 100 * mask_acc
+
+                    # Perform previous mask analysis if needed
+                    if 'seg_prev_mask_logits' in storage_dict:
+                        mask_logits = storage_dict['seg_prev_mask_logits'][qry_ids, key_ids]
+                        mask_preds = mask_logits[acc_mask].sigmoid() > self.mask_thr
+
+                        if mask_preds.numel() > 0:
+                            mask_acc = (mask_preds == mask_targets_acc).sum() / mask_preds.numel()
+                        else:
+                            mask_acc = torch.tensor(0.0, device=device)
+
+                        acc_name = f'prev_{acc_name}'
+                        analysis_dict[acc_name] = 100 * mask_acc
 
             # Handle gain question
             elif qst_name == 'gain':
