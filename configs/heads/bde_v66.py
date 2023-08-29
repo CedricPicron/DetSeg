@@ -455,6 +455,7 @@ model = dict(
                     name='reward',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
+                        use_sigmoid=True,
                         loss_weight=2.5,
                     ),
                     loss_reduction='tgt_sum',
@@ -463,6 +464,7 @@ model = dict(
                     name='gain',
                     loss_cfg=dict(
                         type='mmdet.CrossEntropyLoss',
+                        use_sigmoid=True,
                         loss_weight=2.5,
                     ),
                     loss_reduction='tgt_sum',
