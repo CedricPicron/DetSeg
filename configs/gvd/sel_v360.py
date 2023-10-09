@@ -414,15 +414,15 @@ model = dict(
             dup_attrs=dict(
                 type='nms',
                 nms_candidates=1000,
-                nms_thr=0.60,
+                nms_thr=0.5,
             ),
             mask_thr=0.5,
             pan_post_attrs=dict(
                 score_thr=0.3,
-                nms_thr=0.9,
-                pan_mask_thr=0.3,
+                nms_thr=0.75,
+                pan_mask_thr=0.35,
                 ins_pan_thr=0.6,
-                area_thr=200,
+                area_thr=150,
             ),
             matcher_cfg=None,
             seg_loss_cfg=dict(
