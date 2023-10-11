@@ -40,8 +40,8 @@ for metric, (analysis_key, xlabel) in metrics_dict.items():
             y_data = []
 
         for j, model in enumerate(models):
-            analysis_file_name = Path() / f'../outputs/{model}/model_analysis.json'
-            result_file_name = Path() / f'../outputs/{model}/eval_2017_val_single_scale.txt'
+            model_dir = Path() / f'../outputs/{model}'
+            analysis_file_name = model_dir / 'model_analysis.json'
 
             with open(analysis_file_name, 'r') as analysis_file:
                 analysis_dict = json.load(analysis_file)
@@ -50,9 +50,17 @@ for metric, (analysis_key, xlabel) in metrics_dict.items():
                 if metric == 'Latency':
                     x = 1000 / x
 
+            if Path.exists(model_dir / 'eval_2017_val_single_scale.txt'):
+                result_file_name = model_dir / 'eval_2017_val_single_scale.txt'
+                eval_key = 'eval_2_segm'
+
+            else:
+                result_file_name = model_dir / 'log.txt'
+                eval_key = 'eval_eval_2_segm'
+
             with open(result_file_name, 'r') as result_file:
-                result_dict = json.loads(result_file.readline())
-                y = 100 * result_dict['eval_2_segm'][0]
+                result_dict = json.loads(result_file.readlines()[-1])
+                y = 100 * result_dict[eval_key][0]
 
             label = model_name if j == 0 else None
             plt.plot(x, y, color=color, marker=marker, linestyle='None', label=label)
