@@ -83,6 +83,62 @@ class BoxLoss(nn.Module):
 
 
 @MODELS.register_module()
+class DiceLossWrapper(nn.Module):
+    """
+    Class implementing the DiceLossWrapper.
+
+    Attributes:
+        dice_loss (nn.Module): Module implementing the DICE loss.
+        add_group_dim (bool): Boolean indicating whether to add group dimension to predictions and targets.
+    """
+
+    def __init__(self, dice_loss_cfg, add_group_dim=False):
+        """
+        Initializes the DiceLossWrapper module.
+
+        Args:
+            dice_loss_cfg (Dict): Configuration dictionary specifying the DICE loss module.
+            add_group_dim (bool): Boolean indicating whether to add group dimension (default=False).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build DICE loss module
+        self.dice_loss = build_model(dice_loss_cfg)
+
+        # Set remaining attributes
+        self.add_group_dim = add_group_dim
+
+    def forward(self, preds, targets, **kwargs):
+        """
+        Forward method of the DiceLossWrapper module.
+
+        Args:
+            preds (FloatTensor): Tensor with predictions of shape [*].
+            targets (FloatTensor): Tensor with targets of shape [*].
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying DICE loss module.
+
+        Returns:
+            dice_loss (FloatTensor): Tensor with DICE loss (or losses) of shape [] (or shape [*]).
+        """
+
+        # Add group dimension if needed
+        if self.add_group_dim:
+            preds = preds.unsqueeze(dim=0)
+            targets = targets.unsqueeze(dim=0)
+
+        # Compute DICE loss (or losses)
+        dice_loss = self.dice_loss(preds, targets, **kwargs)
+
+        # Remove group dimension if needed
+        if self.add_group_dim and dice_loss.dim() > 0:
+            dice_loss = dice_loss.squeeze(dim=0)
+
+        return dice_loss
+
+
+@MODELS.register_module()
 class MaskLoss(nn.Module):
     """
     Class implementing the MaskLoss module.
