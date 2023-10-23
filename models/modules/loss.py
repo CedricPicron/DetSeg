@@ -278,13 +278,14 @@ class SigmoidFocalLoss(nn.Module):
         self.reduction = reduction
         self.weight = weight
 
-    def forward(self, pred_logits, tgt_labels):
+    def forward(self, pred_logits, tgt_labels, weight=None):
         """
         Forward method of the SigmoidFocalLoss module.
 
         Args:
             pred_logits (FloatTensor): Tensor with prediction logits of shape [*].
             tgt_labels (Tensor): Tensor with binary classification labels of shape [*].
+            weight (FloatTensor): Tensor with element-wise loss weights of shape [*] (default=None).
 
         Returns:
             * If self.reduction is 'none':
@@ -299,7 +300,8 @@ class SigmoidFocalLoss(nn.Module):
 
         # Get weighted sigmoid focal loss
         tgt_labels = tgt_labels.to(pred_logits.dtype)
-        loss = self.weight * sigmoid_focal_loss(pred_logits, tgt_labels, self.alpha, self.gamma, self.reduction)
+        losses = sigmoid_focal_loss(pred_logits, tgt_labels, self.alpha, self.gamma, reduction='none')
+        loss = self.weight * weight_reduce_loss(losses, weight=weight, reduction=self.reduction)
 
         return loss
 

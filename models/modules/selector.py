@@ -37,15 +37,17 @@ class AnchorSelector(nn.Module):
             - gt_neg_thr (int): negative threshold used during ground-truth selection;
             - gt_pos_ratio (float): ratio of positives during ground-truth selection.
 
+        matcher (nn.Module): Module performing matching between anchors and target boxes.
+        pos_loss_type (str): String containing the type of positive loss weighting mechanism (or None).
+        pos_loss_weight (float): Value containing the weight used during positive loss weighting.
+        loss (nn.Module): Module computing the weighted selection loss.
         feat_sel_type (str): String containing the feature selection type.
         post (Sequential): Optional module post-processing the selected features.
         box_encoder (nn.Module): Optional module computing the box encodings of selected boxes.
-        matcher (nn.Module): Module performing matching between anchors and target boxes.
-        loss (nn.Module): Module computing the weighted selection loss.
     """
 
     def __init__(self, anchor_cfg, pre_logits_cfg, sel_attrs, matcher_cfg, loss_cfg, feat_map_ids=None, init_prob=0.01,
-                 feat_sel_type='map', post_cfg=None, box_encoder_cfg=None):
+                 pos_loss_type=None, pos_loss_weight=1.0, feat_sel_type='map', post_cfg=None, box_encoder_cfg=None):
         """
         Initializes the AnchorSelector module.
 
@@ -57,6 +59,8 @@ class AnchorSelector(nn.Module):
             loss_cfg (Dict): Configuration dictionary specifying the loss module.
             feat_map_ids (Tuple): Tuple containing the indices of feature maps used by this module (default=None).
             init_prob (float): Probability determining initial bias value of last logits sub-module (default=0.01).
+            pos_loss_type (str): String containing the type of positive loss weighting mechanism (default=None).
+            pos_loss_weight (float): Value containing the weight used during positive loss weighting (default=1.0).
             feat_sel_type (str): String containing the feature selection type (default='map').
             post_cfg (Dict): Configuration dictionary specifying the post-processing module (default=None).
             box_encoder_cfg (Dict): Configuration dictionary specifying the box encoder module (default=None).
@@ -88,9 +92,11 @@ class AnchorSelector(nn.Module):
         seq_dict = OrderedDict([('pre', pre_logits), ('proj', proj_logits)])
         self.logits = Sequential(seq_dict)
 
-        # Set selection-related attributes
-        self.sel_attrs = sel_attrs
-        self.feat_sel_type = feat_sel_type
+        # Build matcher module
+        self.matcher = build_model(matcher_cfg)
+
+        # Build loss module
+        self.loss = build_model(loss_cfg)
 
         # Build post-processing module if needed
         self.post = build_model(post_cfg, sequential=True) if post_cfg is not None else None
@@ -98,11 +104,11 @@ class AnchorSelector(nn.Module):
         # Build box encoder module if needed
         self.box_encoder = build_model(box_encoder_cfg) if box_encoder_cfg is not None else None
 
-        # Build matcher module
-        self.matcher = build_model(matcher_cfg)
-
-        # Build loss module
-        self.loss = build_model(loss_cfg)
+        # Set remaining attributes
+        self.sel_attrs = sel_attrs
+        self.pos_loss_type = pos_loss_type
+        self.pos_loss_weight = pos_loss_weight
+        self.feat_sel_type = feat_sel_type
 
     def perform_selection(self, feat_maps, storage_dict, tgt_dict=None, loss_dict=None, analysis_dict=None, **kwargs):
         """
@@ -140,6 +146,7 @@ class AnchorSelector(nn.Module):
         Raises:
             ValueError: Error when an invalid selection mode is provided.
             ValueError: Error when a target dictionary is provided but no corresponding loss dictionary.
+            ValueError: Error when an invalid type of positive loss weighting mechansism is provided.
         """
 
         # Get selection logits and probabilities
@@ -202,14 +209,47 @@ class AnchorSelector(nn.Module):
             pred_logits = sel_logits.flatten()[loss_mask]
             tgt_labels = match_labels[loss_mask]
 
-            sel_loss = self.loss(pred_logits, tgt_labels)
+            match_found_mask = (matched_qry_ids[:, None] == sel_ids[None, :]).any(dim=1)
+            tgt_found_ids = matched_tgt_ids[match_found_mask]
+
+            tgt_found_ids, tgt_inv_ids, tgt_counts = tgt_found_ids.unique(return_inverse=True, return_counts=True)
+            tgt_counts_found = tgt_counts[tgt_inv_ids]
+
+            tgt_counts = torch.zeros_like(matched_tgt_ids)
+            tgt_counts[match_found_mask] = tgt_counts_found
+
+            if self.pos_loss_type is not None:
+                weight = torch.ones_like(pred_logits)
+
+                if 'half' in self.pos_loss_type:
+                    pos_weight = torch.where(tgt_counts > 0, 0.5, 1.0)
+
+                elif 'inv_lin' in self.pos_loss_type:
+                    pos_weight = 1 / (1 + tgt_counts)
+
+                else:
+                    error_msg = f"Invalid type of positive loss weighting mechanism (got {self.pos_loss_type})."
+                    raise ValueError(error_msg)
+
+                unique_qry_ids, qry_inv_ids = matched_qry_ids.unique(return_inverse=True)
+                unique_pos_weight = torch.zeros_like(unique_qry_ids, dtype=torch.float, device=device)
+
+                reduce_kwargs = {'reduce': 'amax', 'include_self': False}
+                unique_pos_weight.scatter_reduce_(dim=0, index=qry_inv_ids, src=pos_weight, **reduce_kwargs)
+
+                if 'norm' in self.pos_loss_type:
+                    unique_pos_weight = len(unique_pos_weight) * unique_pos_weight / unique_pos_weight.sum()
+
+                weight[unique_qry_ids] = self.pos_loss_weight * unique_pos_weight
+
+            else:
+                weight = None
+
+            sel_loss = self.loss(pred_logits, tgt_labels, weight=weight)
             loss_dict['sel_loss'] = sel_loss
 
             # Get percentage of targets found
             if analysis_dict is not None:
-                tgt_found_mask = (matched_qry_ids[:, None] == sel_ids[None, :]).any(dim=1)
-                tgt_found_ids = matched_tgt_ids[tgt_found_mask].unique()
-
                 num_tgts_found = len(tgt_found_ids)
                 num_tgts = len(matched_tgt_ids.unique())
 
