@@ -13,15 +13,27 @@ import torchvision.transforms.functional as T
 class BaseSegHead(nn.Module, metaclass=ABCMeta):
     """
     Abstract class implementing the BaseSegHead module.
+
+    Attributes:
+        seg_type (str): String containing the type of segmentation task.
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
     """
 
-    def __init__(self):
+    def __init__(self, seg_type, metadata):
         """
         Initializes the BaseSegHead module.
+
+        Args:
+            seg_type (str): String containing the type of segmentation task.
+            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         """
 
         # Initialization of default nn.Module
         super().__init__()
+
+        # Set additional attributes
+        self.seg_type = seg_type
+        self.metadata = metadata
 
     @abstractmethod
     def compute_segs(self, storage_dict, pred_dicts, **kwargs):

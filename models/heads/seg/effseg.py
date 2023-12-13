@@ -39,7 +39,6 @@ class EffSegHead(BaseSegHead):
         seg_iters (int): Integer containing the number of segmentation iterations.
         refines_per_iter (int): Integer containing the number of refinements per segmentation iteration.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
-        seg_type (str): String containing the type of segmentation task.
 
         dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
             - type (str): string containing the type of duplicate removal mechanism (mandatory);
@@ -56,7 +55,6 @@ class EffSegHead(BaseSegHead):
             - ins_pan_thr (float): value containing the IoU threshold between instance and panoptic masks;
             - area_thr (int): integer containing the mask area threshold (or None).
 
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes.
         tgt_roi_ext (nn.ModuleList): List [seg_iters] of modules extracting the RoI-based target segmentation masks.
@@ -109,8 +107,8 @@ class EffSegHead(BaseSegHead):
             kwargs (Dict): Dictionary of unused keyword arguments.
         """
 
-        # Initialization of default nn.Module
-        super().__init__()
+        # Initialization of BaseSegHead module
+        super().__init__(seg_type, metadata)
 
         # Build various modules used to obtain segmentation and refinement logits from inputs
         self.key_2d = build_model(key_2d_cfg) if key_2d_cfg is not None else None
@@ -162,9 +160,7 @@ class EffSegHead(BaseSegHead):
         self.dup_attrs = dup_attrs
         self.max_segs = max_segs
         self.mask_thr = mask_thr
-        self.seg_type = seg_type
         self.pan_post_attrs = pan_post_attrs if pan_post_attrs is not None else dict()
-        self.metadata = metadata
         self.seg_loss_weights = seg_loss_weights
         self.ref_loss_weights = ref_loss_weights
         self.apply_ids = apply_ids

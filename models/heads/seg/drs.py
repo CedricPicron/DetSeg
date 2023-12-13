@@ -36,7 +36,6 @@ class DRSHead(BaseSegHead):
         gain_thr (int): Integer containing the relative gain threshold per query.
         unc_thr (int): Integer containing the relative uncertainty threshold per query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
-        seg_type (str): String containing the type of segmentation task.
         box_mask_key (str): String with key to retrieve box mask from the storage dictionary.
 
         score_attrs (Dict): Dictionary specifying the scoring mechanism possibly containing following keys:
@@ -61,7 +60,6 @@ class DRSHead(BaseSegHead):
             - ins_pan_thr (float): value containing the IoU threshold between instance and panoptic masks;
             - area_thr (int): integer containing the mask area threshold (or None).
 
-        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         loss_modules (nn.ModuleDict): Dictionary of modules computing the losses for the different questions.
         apply_ids (List): List with integers determining when the head should be applied.
@@ -115,8 +113,8 @@ class DRSHead(BaseSegHead):
             error_msg = f"The mask certainty decay factor should be between 0 and 1 (got '{mask_decay}')."
             raise ValueError(error_msg)
 
-        # Initialization of default nn.Module
-        super().__init__()
+        # Initialization of BaseSegHead module
+        super().__init__(seg_type, metadata)
 
         # Build query and key modules if needed
         self.qry = build_model(qry_cfg, sequential=True) if qry_cfg is not None else None
@@ -151,7 +149,6 @@ class DRSHead(BaseSegHead):
         self.gain_thr = gain_thr
         self.unc_thr = unc_thr
         self.get_segs = get_segs
-        self.seg_type = seg_type
         self.box_mask_key = box_mask_key
         self.score_attrs = score_attrs if score_attrs is not None else dict()
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
@@ -159,7 +156,6 @@ class DRSHead(BaseSegHead):
         self.mask_decay = mask_decay
         self.mask_thr = mask_thr
         self.pan_post_attrs = pan_post_attrs if pan_post_attrs is not None else dict()
-        self.metadata = metadata
         self.apply_ids = apply_ids
 
     def get_answers(self, storage_dict):
