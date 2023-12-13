@@ -258,7 +258,7 @@ model = dict(
             ),
         ),
         '6_2': dict(
-            type='BaseSegHead',
+            type='DRSHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',

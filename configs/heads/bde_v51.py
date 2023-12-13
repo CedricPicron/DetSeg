@@ -343,7 +343,7 @@ model = dict(
             loss_reduction='tgt_sum',
         ),
         '7_0': dict(
-            type='BaseSegHead',
+            type='DRSHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',
@@ -414,7 +414,7 @@ model = dict(
             get_segs=False,
         ),
         '8_0': dict(
-            type='BaseSegHead',
+            type='DRSHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',

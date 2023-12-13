@@ -322,7 +322,7 @@ model = dict(
             ),
         ),
         '7_0': dict(
-            type='BaseSegHead',
+            type='DRSHead',
             seg_qst_dicts=[
                 dict(
                     name='mask',

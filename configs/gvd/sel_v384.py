@@ -209,7 +209,7 @@ model = dict(
             ),
         ),
         dict(
-            type='TopDownSegHead',
+            type='EffSegHead',
             roi_ext_cfg=dict(
                 type='mmdet.SingleRoIExtractor',
                 roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),

@@ -226,7 +226,7 @@ model = dict(
             ),
         ),
         dict(
-            type='TopDownSegHead',
+            type='EffSegHead',
             qry_cfg=[
                 dict(
                     type='OneStepMLP',
