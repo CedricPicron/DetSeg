@@ -18,6 +18,7 @@ from .normalization import *  # noqa: F401, F403
 from .position import *  # noqa: F401, F403
 from .refine_mask import *  # noqa: F401, F403
 from .roi_extractor import *  # noqa: F401, F403
+from .roi_paster import *  # noqa: F401, F403
 from .sample import *  # noqa: F401, F403
 from .selector import *  # noqa: F401, F403
 from .sparse import *  # noqa: F401, F403
