@@ -273,8 +273,9 @@ class Sequential(nn.Sequential):
                 output (List): List of size [num_sub_modules] containing the outputs from each of the sub-modules.
         """
 
-        # Initialize empty list of outputs
-        output = []
+        # Initialize empty list of outputs if needed
+        if return_intermediate:
+            output = []
 
         # Iterate over all sub-modules
         for module in self:
@@ -283,13 +284,15 @@ class Sequential(nn.Sequential):
 
             input = module(input, **module_kwargs)
             kwargs.update(module_kwargs)
-            output.append(input)
 
-        # Select output from final sub-module if requested
-        if not return_intermediate:
-            output = output[-1]
+            if return_intermediate:
+                output.append(input)
 
-        return output
+        # Return list of outputs if needed
+        if return_intermediate:
+            return output
+
+        return input
 
 
 @MODELS.register_module()
