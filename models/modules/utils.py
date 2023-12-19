@@ -687,6 +687,64 @@ class SkipConnection(nn.Module):
 
 
 @MODELS.register_module()
+class StorageApply(nn.Module):
+    """
+    Class implementing the StorageApply module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input from storage dictionary.
+        module (nn.Module): Underlying module applied on the retrieved input.
+        out_key (str): String with key to store output in storage dictionary.
+    """
+
+    def __init__(self, in_key, module_cfg, out_key):
+        """
+        Initializes the StorageApply module.
+
+        Args:
+            in_key (str): String with key to retrieve input from storage dictionary.
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+            out_key (str): String with key to store output in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg)
+
+        # Set attributes
+        self.in_key = in_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageApply module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {in_key} (Any): input on which to apply the underlying module.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {out_key} (Any): output from the underlying module.
+        """
+
+        # Retrieve input from storage dictionary
+        input = storage_dict[self.in_key]
+
+        # Apply underlying module
+        output = self.module(input)
+
+        # Store output in storage dictionary
+        storage_dict[self.out_key] = output
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class StorageCat(nn.Module):
     """
     Class implementing the StorageCat module.
