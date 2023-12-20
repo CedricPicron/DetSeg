@@ -863,6 +863,58 @@ class StorageCat(nn.Module):
 
 
 @MODELS.register_module()
+class StorageCondition(nn.Module):
+    """
+    Class implementing the StorageCondition module.
+
+    Attributes:
+        cond_key (str): String with key to retrieve condition boolean from storage dictionary.
+        module (nn.Module): Underlying module only applied if the retrieved condition is true.
+    """
+
+    def __init__(self, cond_key, module_cfg):
+        """
+        Initializes the StorageCondition module.
+
+        Args:
+            cond_key (str): String with key to retrieve condition boolean from storage dictionary.
+            module_cfg (Dict): Configuration dictionary specifying the underlying module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg, sequential=True)
+
+        # Set additional attribute
+        self.cond_key = cond_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageCondition module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                {self.cond_key} (bool): boolean condition determining whether underlying module will be applied.
+
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary possibly containing additional or updated keys.
+        """
+
+        # Retrieve condition from storage dictionary
+        condition = storage_dict.get(self.cond_key, False)
+
+        # Apply underlying module if condition is true
+        if condition:
+            storage_dict = self.module(storage_dict, **kwargs)
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class StorageMasking(nn.Module):
     """
     Class implementing the StorageMasking module.
