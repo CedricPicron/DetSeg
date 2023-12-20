@@ -770,7 +770,7 @@ class StorageApply(nn.Module):
         super().__init__()
 
         # Build underlying module
-        self.module = build_model(module_cfg)
+        self.module = build_model(module_cfg, sequential=True)
 
         # Set attributes
         self.in_key = in_key
@@ -784,7 +784,7 @@ class StorageApply(nn.Module):
             storage_dict (Dict): Storage dictionary containing at least following key:
                 - {in_key} (Any): input on which to apply the underlying module.
 
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
@@ -795,7 +795,7 @@ class StorageApply(nn.Module):
         input = storage_dict[self.in_key]
 
         # Apply underlying module
-        output = self.module(input)
+        output = self.module(input, **kwargs)
 
         # Store output in storage dictionary
         storage_dict[self.out_key] = output
