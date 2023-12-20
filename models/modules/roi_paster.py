@@ -42,7 +42,7 @@ class MMDetRoIPaster(nn.Module):
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): Images structure containing the batched images of size [batch_size];
                 - roi_boxes (Boxes): 2D bounding boxes of RoIs of size [num_rois];
-                - {self.in_key} (FloatTensor): input tensor to be pasted of shape [num_rois, 1, rH, rW].
+                - {self.in_key} (FloatTensor): input tensor to be pasted of shape [num_rois, {1}, rH, rW].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
@@ -57,6 +57,9 @@ class MMDetRoIPaster(nn.Module):
         in_tensor = storage_dict[self.in_key]
 
         # Get pasted output tensor
+        if in_tensor.dim() == 3:
+            in_tensor = in_tensor.unsqueeze(dim=1)
+
         iW, iH = images.size()
         roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images).boxes
         out_tensor = _do_paste_mask(in_tensor, roi_boxes, iH, iW, skip_empty=False)[0]
