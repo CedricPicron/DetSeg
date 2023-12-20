@@ -687,7 +687,7 @@ class SelectClass(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {self.out_key} (FloatTensor): output feature map of shape [batch_size, 1, fH, fW].
+                - {self.out_key} (FloatTensor): output feature map of shape [batch_size, fH, fW].
         """
 
         # Retrieve desired items from storage dictionary
@@ -696,7 +696,6 @@ class SelectClass(nn.Module):
 
         # Get output feature map
         out_feat_map = in_feat_map[range(len(labels)), labels]
-        out_feat_map = out_feat_map[:, None]
 
         # Store output feature map in storage dictionary
         storage_dict[self.out_key] = out_feat_map
