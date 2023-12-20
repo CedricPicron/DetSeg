@@ -646,6 +646,65 @@ class QryInit(nn.Module):
 
 
 @MODELS.register_module()
+class SelectClass(nn.Module):
+    """
+    Class implementing the SelectClass module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input map from storage dictionary.
+        labels_key (str): String with key to retrieve class labels from storage dictionary.
+        out_key (str): String with key to store output map in storage dictionary.
+    """
+
+    def __init__(self, in_key, labels_key, out_key):
+        """
+        Initializes the SelectClass module.
+
+        Args:
+            in_key (str): String with key to retrieve input map from storage dictionary.
+            labels_key (str): String with key to retrieve class labels from storage dictionary.
+            out_key (str): String with key to store output map in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.labels_key = labels_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the SelectClass module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_key} (FloatTensor): input feature map of shape [batch_size, num_classes, fH, fW];
+                - {self.labels_key} (LongTensor): class labels of shape [batch_size].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (FloatTensor): output feature map of shape [batch_size, 1, fH, fW].
+        """
+
+        # Retrieve desired items from storage dictionary
+        in_feat_map = storage_dict[self.in_key]
+        labels = storage_dict[self.labels_key]
+
+        # Get output feature map
+        out_feat_map = in_feat_map[range(len(labels)), labels]
+        out_feat_map = out_feat_map[:, None]
+
+        # Store output feature map in storage dictionary
+        storage_dict[self.out_key] = out_feat_map
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class SkipConnection(nn.Module):
     """
     Class implementing the SkipConnection module.
