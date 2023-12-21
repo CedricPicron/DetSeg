@@ -538,6 +538,7 @@ class BaseBox2dHead(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional or updated keys:
                 - box_logits (FloatTensor): 2D bounding box logits of shape [num_qrys, 4];
                 - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys];
+                - qry_boxes (Boxes): 2D bounding boxes of queries of size [num_qrys];
                 - prior_boxes (Boxes): possibly updated prior 2D bounding boxes of size [num_qrys];
                 - add_encs (FloatTensor): possibly updated box encodings of shape [num_qrys, feat_size];
                 - box_scores (FloatTensor): unnormalized 2D bounding box scores of shape [num_qrys].
@@ -562,6 +563,7 @@ class BaseBox2dHead(nn.Module):
 
         pred_boxes = self.box_coder('apply', box_logits, prior_boxes, images=images)
         storage_dict['pred_boxes'] = pred_boxes
+        storage_dict['qry_boxes'] = pred_boxes
 
         # Update prior boxes if needed
         if self.update_prior_boxes:
