@@ -67,7 +67,7 @@ class BinaryAccuracy(nn.Module):
         # Get accuracy
         preds = preds > 0 if self.as_logits else preds > 0.5
         targets = targets.bool()
-        acc = (preds == targets).sum() / preds.numel()
+        acc = (preds == targets).sum() / max(preds.numel(), 1)
 
         if self.as_percentage:
             acc = 100 * acc
