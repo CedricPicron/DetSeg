@@ -11,6 +11,7 @@ from .ffn import *  # noqa: F401, F403
 from .fusion import *  # noqa: F401, F403
 from .interpolate import *  # noqa: F401, F403
 from .loss import *  # noqa: F401, F403
+from .mask import *  # noqa: F401, F403
 from .matcher import *  # noqa: F401, F403
 from .math import *  # noqa: F401, F403
 from .mlp import *  # noqa: F401, F403
