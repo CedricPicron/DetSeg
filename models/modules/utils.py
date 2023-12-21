@@ -753,9 +753,11 @@ class StorageApply(nn.Module):
         in_key (str): String with key to retrieve input from storage dictionary.
         module (nn.Module): Underlying module applied on the retrieved input.
         out_key (str): String with key to store output in storage dictionary.
+        storage_kwargs (Dict): Dictionary selecting keyword arguments from storage dictionary.
+        filter_kwargs (List): List of filterd keyword argument keys passed to underlying module (or None).
     """
 
-    def __init__(self, in_key, module_cfg, out_key):
+    def __init__(self, in_key, module_cfg, out_key, storage_kwargs=None, filter_kwargs=None):
         """
         Initializes the StorageApply module.
 
@@ -763,6 +765,8 @@ class StorageApply(nn.Module):
             in_key (str): String with key to retrieve input from storage dictionary.
             module_cfg (Dict): Configuration dictionary specifying the underlying module.
             out_key (str): String with key to store output in storage dictionary.
+            storage_kwargs (Dict): Dictionary selecting keyword arguments from storage dictionary (default=None).
+            filter_kwargs (List): List of filterd keyword argument keys passed to underlying module (default=None).
         """
 
         # Initialization of default nn.Module
@@ -774,6 +778,8 @@ class StorageApply(nn.Module):
         # Set attributes
         self.in_key = in_key
         self.out_key = out_key
+        self.storage_kwargs = storage_kwargs if storage_kwargs is not None else {}
+        self.filter_kwargs = filter_kwargs
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -781,20 +787,27 @@ class StorageApply(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
-                - {in_key} (Any): input on which to apply the underlying module.
+                - {self.in_key} (Any): input on which to apply the underlying module.
 
             kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {out_key} (Any): output from the underlying module.
+                - {self.out_key} (Any): output from the underlying module.
         """
 
         # Retrieve input from storage dictionary
         input = storage_dict[self.in_key]
 
+        # Get additional keyword arguments from storage dictionary
+        storage_kwargs = {v: storage_dict[k] for k, v in self.storage_kwargs.items()}
+
+        # Filter keyword arguments if needed
+        if self.filter_kwargs is not None:
+            kwargs = {k: kwargs[k] for k in self.filter_kwargs}
+
         # Apply underlying module
-        output = self.module(input, **kwargs)
+        output = self.module(input, **storage_kwargs, **kwargs)
 
         # Store output in storage dictionary
         storage_dict[self.out_key] = output
