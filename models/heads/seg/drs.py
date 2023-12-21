@@ -36,6 +36,7 @@ class DRSHead(BaseSegHead):
         gain_thr (int): Integer containing the relative gain threshold per query.
         unc_thr (int): Integer containing the relative uncertainty threshold per query.
         get_segs (bool): Boolean indicating whether to get segmentation predictions.
+        seg_type (str): String containing the type of segmentation task.
         box_mask_key (str): String with key to retrieve box mask from the storage dictionary.
 
         score_attrs (Dict): Dictionary specifying the scoring mechanism possibly containing following keys:
@@ -60,6 +61,7 @@ class DRSHead(BaseSegHead):
             - ins_pan_thr (float): value containing the IoU threshold between instance and panoptic masks;
             - area_thr (int): integer containing the mask area threshold (or None).
 
+        metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
         matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         loss_modules (nn.ModuleDict): Dictionary of modules computing the losses for the different questions.
         apply_ids (List): List with integers determining when the head should be applied.
@@ -113,8 +115,8 @@ class DRSHead(BaseSegHead):
             error_msg = f"The mask certainty decay factor should be between 0 and 1 (got '{mask_decay}')."
             raise ValueError(error_msg)
 
-        # Initialization of BaseSegHead module
-        super().__init__(seg_type, metadata)
+        # Initialization of default nn.Module
+        nn.Module.__init__(self)
 
         # Build query and key modules if needed
         self.qry = build_model(qry_cfg, sequential=True) if qry_cfg is not None else None
@@ -149,6 +151,7 @@ class DRSHead(BaseSegHead):
         self.gain_thr = gain_thr
         self.unc_thr = unc_thr
         self.get_segs = get_segs
+        self.seg_type = seg_type
         self.box_mask_key = box_mask_key
         self.score_attrs = score_attrs if score_attrs is not None else dict()
         self.dup_attrs = dup_attrs if dup_attrs is not None else dict()
@@ -156,6 +159,7 @@ class DRSHead(BaseSegHead):
         self.mask_decay = mask_decay
         self.mask_thr = mask_thr
         self.pan_post_attrs = pan_post_attrs if pan_post_attrs is not None else dict()
+        self.metadata = metadata
         self.apply_ids = apply_ids
 
     def get_answers(self, storage_dict):
@@ -324,6 +328,23 @@ class DRSHead(BaseSegHead):
         key_ids = torch.cat(key_ids_list, dim=0)
 
         return answers, qry_ids, key_ids
+
+    def get_mask_scores(batch_id, pred_qry_ids, pred_labels, pred_boxes, storage_dict):
+        """
+        Method computing the segmentation mask scores at image resolution.
+
+        Args:
+            batch_id (int): Integer containing the batch index.
+            pred_qry_ids (LongTensor): Query indices of predictions of shape [num_preds].
+            pred_labels (LongTensor): Class indices of predictions of shape [num_preds].
+            pred_boxes (Boxes): 2D bounding boxes of predictions of size [num_preds].
+            qry_boxes (Boxes): 2D bounding boxes of queries of size [num_qrys].
+            storage_dict (Dict): Dictionary storing various items of interest.
+
+        Returns:
+            mask_scores (FloatTensor): Segmentation mask scores of shape [num_preds, iH, iW].
+        """
+        pass
 
     @torch.no_grad()
     def compute_segs(self, storage_dict, pred_dicts, **kwargs):
@@ -899,9 +920,9 @@ class DRSHead(BaseSegHead):
 
         return storage_dict, images_dict
 
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict=None, id=None, **kwargs):
+    def compute_losses(self, storage_dict, tgt_dict, loss_dict, analysis_dict, id=None, **kwargs):
         """
-        Forward loss method of the DRSHead module.
+        Method computing the losses and collecting analysis metrics.
 
         Args:
             storage_dict (Dict): Storage dictionary (possibly) containing following keys (after matching):
@@ -944,10 +965,6 @@ class DRSHead(BaseSegHead):
             ValueError: Error when a single query is matched with multiple targets.
             ValueError: Error when an invalid segmentation question name is provided.
         """
-
-        # Perform matching if matcher is available
-        if self.matcher is not None:
-            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve desired items from storage dictionary
         qry_feats = storage_dict['qry_feats']

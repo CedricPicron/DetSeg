@@ -2,7 +2,6 @@
 Efficient Segmentation (EffSeg) head.
 """
 
-from detectron2.layers import batched_nms
 from mmdet.models.roi_heads.mask_heads.fcn_mask_head import _do_paste_mask
 import torch
 from torch import nn
@@ -38,38 +37,19 @@ class EffSegHead(BaseSegHead):
         key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
         seg_iters (int): Integer containing the number of segmentation iterations.
         refines_per_iter (int): Integer containing the number of refinements per segmentation iteration.
-        get_segs (bool): Boolean indicating whether to get segmentation predictions.
 
-        dup_attrs (Dict): Optional dictionary specifying the duplicate removal mechanism, possibly containing:
-            - type (str): string containing the type of duplicate removal mechanism (mandatory);
-            - nms_candidates (int): integer containing the maximum number of candidate detections retained before NMS;
-            - nms_thr (float): value of IoU threshold used during NMS to remove duplicate detections.
-
-        max_segs (int): Optional integer with the maximum number of returned segmentation predictions.
-        mask_thr (float): Value containing the normalized (instance) segmentation mask threshold.
-
-        pan_post_attrs (Dict): Dictionary specifying the panoptic post-processing mechanism possibly containing:
-            - score_thr (float): value containing the instance score threshold (or None);
-            - nms_thr (float): value containing the IoU threshold used during mask IoU (or None);
-            - pan_mask_thr (float): value containing the normalized panoptic segmentation mask threshold;
-            - ins_pan_thr (float): value containing the IoU threshold between instance and panoptic masks;
-            - area_thr (int): integer containing the mask area threshold (or None).
-
-        matcher (nn.Module): Optional matcher module determining the target segmentation maps.
         roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes.
         tgt_roi_ext (nn.ModuleList): List [seg_iters] of modules extracting the RoI-based target segmentation masks.
         seg_loss (nn.Module): Module computing the segmentation loss.
         seg_loss_weights (Tuple): Tuple of size [seg_iters] containing the segmentation loss weights.
         ref_loss (nn.Module): Module computing the refinement loss.
         ref_loss_weights (Tuple): Tuple of size [seg_iters] containing the refinement loss weights.
-        apply_ids (List): List with integers determining when the head should be applied.
     """
 
     def __init__(self, roi_ext_cfg, seg_cfg, ref_cfg, fuse_td_cfg, fuse_key_cfg, trans_cfg, proc_cfg, key_min_id,
-                 key_max_id, seg_iters, refines_per_iter, mask_thr, metadata, seg_loss_cfg, seg_loss_weights,
-                 ref_loss_cfg, ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None,
-                 roi_ins_cfg=None, get_segs=True, seg_type='instance', dup_attrs=None, max_segs=None,
-                 pan_post_attrs=None, matcher_cfg=None, roi_sizes=None, apply_ids=None, **kwargs):
+                 key_max_id, seg_iters, refines_per_iter, seg_loss_cfg, seg_loss_weights, ref_loss_cfg,
+                 ref_loss_weights, key_2d_cfg=None, pos_enc_cfg=None, qry_cfg=None, fuse_qry_cfg=None,
+                 roi_ins_cfg=None, roi_sizes=None, **kwargs):
         """
         Initializes the EffSegHead module.
 
@@ -85,8 +65,6 @@ class EffSegHead(BaseSegHead):
             key_max_id (int): Integer containing the downsampling index of the lowest resolution key feature map.
             seg_iters (int): Integer containing the number of segmentation iterations.
             refines_per_iter (int): Integer containing the number of refinements per segmentation iteration.
-            mask_thr (float): Value containing the mask threshold used to determine the segmentation masks.
-            metadata (detectron2.data.Metadata): Metadata instance containing additional dataset information.
             seg_loss_cfg (Dict): Configuration dictionary specifying the segmentation loss module.
             seg_loss_weights (Tuple): Tuple of size [seg_iters] containing the segmentation loss weights.
             ref_loss_cfg (Dict): Configuration dictionary specifying the refinement loss module.
@@ -96,19 +74,12 @@ class EffSegHead(BaseSegHead):
             qry_cfg (Dict): Configuration dictionary specifying the query module (default=None).
             fuse_qry_cfg (Dict): Configuration dictionary specifying the fuse query module (default=None).
             roi_ins_cfg (Dict): Configuration dictionary specifying the RoI-instance module (default=None).
-            get_segs (bool): Boolean indicating whether to get segmentation predictions (default=True).
-            seg_type (str): String containing the type of segmentation task (default='instance').
-            dup_attrs (Dict): Attribute dictionary specifying the duplicate removal mechanism (default=None).
-            max_segs (int): Integer with the maximum number of returned segmentation predictions (default=None).
-            pan_post_attrs (Dict): Attribute dictionary specifying the panoptic post-processing (default=None).
-            matcher_cfg (Dict): Configuration dictionary specifying the matcher module (default=None).
             roi_sizes (Tuple): Tuple of size [seg_iters] containing the RoI sizes (default=None).
-            apply_ids (List): List with integers determining when the head should be applied (default=None).
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            kwargs (Dict): Dictionary of keyword arguments passed to the BaseSegHead __init__ method.
         """
 
         # Initialization of BaseSegHead module
-        super().__init__(seg_type, metadata)
+        super().__init__(**kwargs)
 
         # Build various modules used to obtain segmentation and refinement logits from inputs
         self.key_2d = build_model(key_2d_cfg) if key_2d_cfg is not None else None
@@ -126,9 +97,6 @@ class EffSegHead(BaseSegHead):
         self.fuse_key = nn.ModuleList([build_model(cfg_i) for cfg_i in fuse_key_cfg])
         self.trans = nn.ModuleList([build_model(cfg_i) for cfg_i in trans_cfg])
         self.proc = nn.ModuleList([build_model(cfg_i) for cfg_i in proc_cfg])
-
-        # Build matcher module if needed
-        self.matcher = build_model(matcher_cfg) if matcher_cfg is not None else None
 
         # Set attribute containing the RoI sizes
         if roi_sizes is None:
@@ -156,308 +124,65 @@ class EffSegHead(BaseSegHead):
         self.key_max_id = key_max_id
         self.seg_iters = seg_iters
         self.refines_per_iter = refines_per_iter
-        self.get_segs = get_segs
-        self.dup_attrs = dup_attrs
-        self.max_segs = max_segs
-        self.mask_thr = mask_thr
-        self.pan_post_attrs = pan_post_attrs if pan_post_attrs is not None else dict()
         self.seg_loss_weights = seg_loss_weights
         self.ref_loss_weights = ref_loss_weights
-        self.apply_ids = apply_ids
 
-    @torch.no_grad()
-    def compute_segs(self, storage_dict, pred_dicts, **kwargs):
+    def get_mask_scores(self, pred_qry_ids, qry_boxes, storage_dict, **kwargs):
         """
-        Method computing the segmentation predictions.
+        Method computing the segmentation mask scores at image resolution.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following keys:
-                - batch_ids (LongTensor): batch indices of queries of shape [num_qrys];
-                - images (Images): Images structure containing the batched images of size [batch_size];
-                - cls_logits (FloatTensor): classification logits of shape [num_qrys, num_labels];
-                - pred_boxes (Boxes): predicted 2D bounding boxes of size [num_qrys].
+            pred_qry_ids (LongTensor): Query indices of predictions of shape [num_preds].
+            qry_boxes (FloatTensor): 2D bounding boxes of queries of shape [num_qrys, 4].
 
-            pred_dicts (List): List of size [num_pred_dicts] collecting various prediction dictionaries.
-            kwargs (Dict): Dictionary of unused keyword arguments.
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - images (Images): Images structure containing the batched images of size [batch_size].
+
+            kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
 
         Returns:
-            pred_dicts (List): List with prediction dictionaries containing following additional entry:
-                pred_dict (Dict): Prediction dictionary containing following keys:
-                    - labels (LongTensor): predicted class indices of shape [num_preds];
-                    - masks (BoolTensor): predicted segmentation masks of shape [num_preds, iH, iW];
-                    - scores (FloatTensor): normalized prediction scores of shape [num_preds];
-                    - batch_ids (LongTensor): batch indices of predictions of shape [num_preds].
-
-        Raises:
-            ValueError: Error when an invalid type of duplicate removal or rescoring mechanism is provided.
-            ValueError: Error when an invalid type of segmentation task if provided.
+            mask_scores (FloatTensor): Segmentation mask scores of shape [num_preds, iH, iW].
         """
 
-        # Retrieve various items from storage dictionary
-        batch_ids = storage_dict['batch_ids']
-        images = storage_dict['images']
-        cls_logits = storage_dict['cls_logits']
-        pred_boxes = storage_dict['pred_boxes']
+        # Get query indices for which to compute segmentation masks
+        mask_qry_ids, non_unique_ids = pred_qry_ids.unique(sorted=True, return_inverse=True)
 
-        # Get image width and height with padding
-        iW, iH = images.size()
+        # Get segmentation predictions for desired queries
+        self.get_preds(storage_dict, mask_qry_ids=mask_qry_ids, **kwargs)
 
-        # Get number of queries and number of classes
-        num_qrys = cls_logits.size(dim=0)
-        num_classes = cls_logits.size(dim=1) - 1
+        # Retrieve various items related to segmentation predictions from storage dictionary
+        roi_ids_list = storage_dict['roi_ids_list']
+        pos_ids_list = storage_dict['pos_ids_list']
+        seg_logits_list = storage_dict['seg_logits_list']
 
-        # Get batch size and device
-        batch_size = len(images)
-        device = cls_logits.device
+        # Get mask scores and instance segmentation masks
+        num_rois = len(mask_qry_ids)
+        rH = rW = self.roi_sizes[0]
 
-        # Get query and batch indices
-        qry_ids = torch.arange(num_qrys, device=device)
+        device = pred_qry_ids.device
+        mask_logits = torch.zeros(num_rois, 1, rH, rW, device=device)
 
-        if self.seg_type == 'instance':
-            qry_ids = qry_ids[:, None].expand(-1, num_classes).reshape(-1)
-            batch_ids = batch_ids[:, None].expand(-1, num_classes).reshape(-1)
+        for j in range(self.seg_iters):
+            roi_ids = roi_ids_list[j]
+            pos_ids = pos_ids_list[j]
 
-        # Get prediction labels and scores
-        if self.seg_type == 'instance':
-            pred_labels = torch.arange(num_classes, device=device)[None, :].expand(num_qrys, -1).reshape(-1)
-            pred_scores = cls_logits[:, :-1].sigmoid().view(-1)
+            seg_logits = seg_logits_list[j]
+            mask_logits[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]] = seg_logits
 
-        else:
-            pred_scores, pred_labels = cls_logits[:, :-1].sigmoid().max(dim=1)
+            if j < self.seg_iters-1:
+                rH = rW = self.roi_sizes[j+1]
+                mask_logits = F.interpolate(mask_logits, (rH, rW), mode='bilinear', align_corners=False)
 
-        # Get prediction boxes in desired format
-        pred_boxes = pred_boxes.to_format('xyxy').to_img_scale(images).boxes
+        mask_scores = mask_logits.sigmoid()
+        mask_boxes = qry_boxes[mask_qry_ids]
+        iW, iH = storage_dict['images'].size()
 
-        # Get thing indices if needed
-        if self.seg_type == 'panoptic':
-            thing_ids = tuple(self.metadata.thing_dataset_id_to_contiguous_id.values())
-            thing_ids = torch.as_tensor(thing_ids, device=device)
+        mask_scores = _do_paste_mask(mask_scores, mask_boxes, iH, iW, skip_empty=False)[0]
+        mask_scores = mask_scores[non_unique_ids]
 
-        # Initialize prediction dictionary
-        pred_keys = ('labels', 'masks', 'scores', 'batch_ids')
-        pred_dict = {pred_key: [] for pred_key in pred_keys}
+        return mask_scores
 
-        # Iterate over every batch entry
-        for i in range(batch_size):
-
-            # Get predictions corresponding to batch entry
-            batch_mask = batch_ids == i
-
-            qry_ids_i = qry_ids[batch_mask]
-            pred_labels_i = pred_labels[batch_mask]
-            pred_scores_i = pred_scores[batch_mask]
-
-            # Remove duplicate predictions if needed
-            if self.dup_attrs is not None:
-                dup_removal_type = self.dup_attrs['type']
-
-                if dup_removal_type == 'nms':
-                    num_candidates = self.dup_attrs['nms_candidates']
-                    num_preds = len(pred_scores_i)
-                    candidate_ids = pred_scores_i.topk(min(num_candidates, num_preds))[1]
-
-                    qry_ids_i = qry_ids_i[candidate_ids]
-                    pred_labels_i = pred_labels_i[candidate_ids]
-                    pred_scores_i = pred_scores_i[candidate_ids]
-
-                    pred_boxes_i = pred_boxes[qry_ids_i]
-                    iou_thr = self.dup_attrs['nms_thr']
-                    non_dup_ids = batched_nms(pred_boxes_i, pred_scores_i, pred_labels_i, iou_thr)
-
-                    qry_ids_i = qry_ids_i[non_dup_ids]
-                    pred_labels_i = pred_labels_i[non_dup_ids]
-                    pred_scores_i = pred_scores_i[non_dup_ids]
-
-                else:
-                    error_msg = f"Invalid type of duplicate removal mechanism (got '{dup_removal_type}')."
-                    raise ValueError(error_msg)
-
-            # Only keep top predictions if needed
-            if self.max_segs is not None:
-                if len(pred_scores_i) > self.max_segs:
-                    top_pred_ids = pred_scores_i.topk(self.max_segs)[1]
-
-                    qry_ids_i = qry_ids_i[top_pred_ids]
-                    pred_labels_i = pred_labels_i[top_pred_ids]
-                    pred_scores_i = pred_scores_i[top_pred_ids]
-
-            # Get query indices for which to compute segmentations
-            qry_ids_i, non_unique_ids = qry_ids_i.unique(sorted=True, return_inverse=True)
-
-            # Get segmentation and refinement predictions for desired queries
-            self.get_preds(storage_dict, seg_qry_ids=qry_ids_i, **kwargs)
-
-            # Retrieve various items related to segmentation predictions from storage dictionary
-            roi_ids_list = storage_dict['roi_ids_list']
-            pos_ids_list = storage_dict['pos_ids_list']
-            seg_logits_list = storage_dict['seg_logits_list']
-
-            # Get mask scores and instance segmentation masks
-            num_rois = len(qry_ids_i)
-            rH = rW = self.roi_sizes[0]
-            mask_logits = torch.zeros(num_rois, 1, rH, rW, device=device)
-
-            for j in range(self.seg_iters):
-                roi_ids = roi_ids_list[j]
-                pos_ids = pos_ids_list[j]
-
-                seg_logits = seg_logits_list[j]
-                mask_logits[roi_ids, 0, pos_ids[:, 1], pos_ids[:, 0]] = seg_logits
-
-                if j < self.seg_iters-1:
-                    rH = rW = self.roi_sizes[j+1]
-                    mask_logits = F.interpolate(mask_logits, (rH, rW), mode='bilinear', align_corners=False)
-
-            mask_scores_i = mask_logits.sigmoid()
-            pred_boxes_i = pred_boxes[qry_ids_i]
-
-            mask_scores_i = _do_paste_mask(mask_scores_i, pred_boxes_i, iH, iW, skip_empty=False)[0]
-            mask_scores_i = mask_scores_i[non_unique_ids]
-            ins_seg_masks = mask_scores_i > self.mask_thr
-
-            # Update prediction scores based on mask scores if needed
-            if self.seg_type == 'instance':
-                pred_scores_i = pred_scores_i * (ins_seg_masks * mask_scores_i).flatten(1).sum(dim=1)
-                pred_scores_i = pred_scores_i / (ins_seg_masks.flatten(1).sum(dim=1) + 1e-6)
-
-            # Perform panoptic post-processing if needed
-            if self.seg_type == 'panoptic':
-
-                # Filter based on score if needed
-                score_thr = self.pan_post_attrs.get('score_thr', None)
-
-                if score_thr is not None:
-                    keep_mask = pred_scores_i > score_thr
-
-                    pred_labels_i = pred_labels_i[keep_mask]
-                    mask_scores_i = mask_scores_i[keep_mask]
-                    pred_scores_i = pred_scores_i[keep_mask]
-                    ins_seg_masks = ins_seg_masks[keep_mask]
-
-                # Filter based on mask NMS if needed
-                nms_thr = self.pan_post_attrs.get('nms_thr', None)
-
-                if nms_thr is not None:
-                    pred_scores_i, sort_ids = pred_scores_i.sort(descending=True)
-
-                    pred_labels_i = pred_labels_i[sort_ids]
-                    mask_scores_i = mask_scores_i[sort_ids]
-                    ins_seg_masks = ins_seg_masks[sort_ids]
-
-                    num_preds = len(ins_seg_masks)
-                    flat_masks = ins_seg_masks.flatten(1)
-                    inter = torch.zeros(num_preds, num_preds, dtype=torch.float, device=device)
-
-                    for j in range(1, num_preds):
-                        inter[j, :j] = (flat_masks[j, None, :] * flat_masks[None, :j, :]).sum(dim=2)
-
-                    areas = flat_masks.sum(dim=1)
-                    union = areas[:, None] + areas[None, :] - inter
-
-                    ious = inter / union
-                    keep_mask = ious.amax(dim=1) < nms_thr
-
-                    pred_labels_i = pred_labels_i[keep_mask]
-                    mask_scores_i = mask_scores_i[keep_mask]
-                    pred_scores_i = pred_scores_i[keep_mask]
-                    ins_seg_masks = ins_seg_masks[keep_mask]
-
-                # Get panoptic segmentation masks
-                rel_mask_scores = pred_scores_i[:, None, None] * mask_scores_i
-                num_preds = len(rel_mask_scores)
-
-                if num_preds > 0:
-                    pan_seg_mask = rel_mask_scores.argmax(dim=0)
-                else:
-                    pan_seg_mask = ins_seg_masks.new_zeros([*rel_mask_scores.size()[1:]])
-
-                pred_ids = torch.arange(num_preds, device=device)
-                pan_seg_masks = pan_seg_mask[None, :, :] == pred_ids[:, None, None]
-
-                # Apply panoptic mask threshold if needed
-                pan_mask_thr = self.pan_post_attrs.get('pan_mask_thr', None)
-
-                if pan_mask_thr is not None:
-                    pan_seg_masks &= mask_scores_i > pan_mask_thr
-
-                # Filter based on instance-panoptic IoU if needed
-                ins_pan_thr = self.pan_post_attrs.get('ins_pan_thr', None)
-
-                if ins_pan_thr is not None:
-                    ins_flat_masks = ins_seg_masks.flatten(1)
-                    pan_flat_masks = pan_seg_masks.flatten(1)
-
-                    ins_areas = ins_flat_masks.sum(dim=1)
-                    pan_areas = pan_flat_masks.sum(dim=1)
-
-                    inter = (ins_flat_masks * pan_flat_masks).sum(dim=1)
-                    union = ins_areas + pan_areas - inter
-
-                    ious = inter / union
-                    keep_mask = ious > ins_pan_thr
-
-                    pred_labels_i = pred_labels_i[keep_mask]
-                    pred_scores_i = pred_scores_i[keep_mask]
-                    pan_seg_masks = pan_seg_masks[keep_mask]
-
-                # Filter based on mask area if needed
-                area_thr = self.pan_post_attrs.get('area_thr', None)
-
-                if area_thr is not None:
-                    areas = pan_seg_masks.flatten(1).sum(dim=1)
-                    keep_mask = areas > area_thr
-
-                    pred_labels_i = pred_labels_i[keep_mask]
-                    pred_scores_i = pred_scores_i[keep_mask]
-                    pan_seg_masks = pan_seg_masks[keep_mask]
-
-                # Merge stuff predictions
-                thing_mask = (pred_labels_i[:, None] == thing_ids[None, :]).any(dim=1)
-                stuff_mask = ~thing_mask
-
-                stuff_labels = pred_labels_i[stuff_mask]
-                stuff_labels, stuff_ids, stuff_counts = stuff_labels.unique(return_inverse=True, return_counts=True)
-                pred_labels_i = torch.cat([pred_labels_i[thing_mask], stuff_labels], dim=0)
-
-                stuff_scores = torch.zeros_like(stuff_labels, dtype=torch.float)
-                stuff_scores.scatter_add_(dim=0, index=stuff_ids, src=pred_scores_i[stuff_mask])
-                stuff_scores = stuff_scores / stuff_counts
-                pred_scores_i = torch.cat([pred_scores_i[thing_mask], stuff_scores], dim=0)
-
-                stuff_ids = stuff_ids[:, None, None].expand(-1, iH, iW)
-                unmerged_stuff_masks = pan_seg_masks[stuff_mask]
-
-                num_stuff_preds = len(stuff_labels)
-                stuff_seg_masks = pan_seg_masks.new_zeros([num_stuff_preds, iH, iW])
-                stuff_seg_masks.scatter_add_(dim=0, index=stuff_ids, src=unmerged_stuff_masks)
-
-                thing_seg_masks = pan_seg_masks[thing_mask]
-                pan_seg_masks = torch.cat([thing_seg_masks, stuff_seg_masks], dim=0)
-
-            # Add predictions to prediction dictionary
-            pred_dict['labels'].append(pred_labels_i)
-            pred_dict['scores'].append(pred_scores_i)
-            pred_dict['batch_ids'].append(torch.full_like(pred_labels_i, i))
-
-            if self.seg_type == 'instance':
-                pred_dict['masks'].append(ins_seg_masks)
-
-            elif self.seg_type == 'panoptic':
-                pred_dict['masks'].append(pan_seg_masks)
-
-            else:
-                error_msg = f"Invalid type of segmentation task (got '{self.seg_type}')."
-                raise ValueError(error_msg)
-
-        # Concatenate predictions of different batch entries
-        pred_dict.update({k: torch.cat(v, dim=0) for k, v in pred_dict.items()})
-
-        # Add prediction dictionary to list of prediction dictionaries
-        pred_dicts.append(pred_dict)
-
-        return pred_dicts
-
-    def get_preds(self, storage_dict, seg_qry_ids, **kwargs):
+    def get_preds(self, storage_dict, mask_qry_ids, **kwargs):
         """
         Method computing the segmentation and refinement logits for the desired queries.
 
@@ -470,7 +195,7 @@ class EffSegHead(BaseSegHead):
                 - feat_ids (LongTensor): indices of selected features resulting in query features of shape [num_qrys];
                 - pred_boxes (Boxes): predicted 2D bounding boxes obtained from query features of size [num_qrys].
 
-            seg_qry_ids (LongTensor): Query indices for which to compute segmentations of shape [num_segs].
+            mask_qry_ids (LongTensor): Query indices for which to compute segmentation masks of shape [num_masks].
             kwargs (Dict): Dictionary of keyword arguments not used by this module.
 
         Returns:
@@ -492,10 +217,10 @@ class EffSegHead(BaseSegHead):
         batch_size = len(images)
         device = qry_feats.device
 
-        # Select for which queries to compute segmentations
-        qry_feats = qry_feats[seg_qry_ids]
-        qry_boxes = qry_boxes[seg_qry_ids]
-        batch_ids = batch_ids[seg_qry_ids]
+        # Select for which queries to compute segmentation masks
+        qry_feats = qry_feats[mask_qry_ids]
+        qry_boxes = qry_boxes[mask_qry_ids]
+        batch_ids = batch_ids[mask_qry_ids]
 
         # Extract RoI features
         roi_boxes = qry_boxes.to_format('xyxy').to_img_scale(images).boxes.detach()
@@ -687,33 +412,9 @@ class EffSegHead(BaseSegHead):
 
         return storage_dict
 
-    def forward_pred(self, storage_dict, images_dict=None, **kwargs):
+    def compute_losses(self, storage_dict, tgt_dict, loss_dict, analysis_dict, id=None, **kwargs):
         """
-        Forward prediction method of the EffSegHead module.
-
-        Args:
-            storage_dict (Dict): Dictionary storing various items of interest.
-            images_dict (Dict): Dictionary with annotated images of predictions/targets (default=None).
-            kwargs (Dict): Dictionary of keyword arguments passed to some underlying methods.
-
-        Returns:
-            storage_dict (Dict): Dictionary with (possibly) additional stored items of interest.
-            images_dict (Dict): Dictionary (possibly) containing additional images annotated with segmentations.
-        """
-
-        # Get segmentation predictions if needed
-        if self.get_segs and not self.training:
-            self.compute_segs(storage_dict=storage_dict, **kwargs)
-
-        # Draw predicted and target segmentations if needed
-        if images_dict is not None:
-            self.draw_segs(storage_dict=storage_dict, images_dict=images_dict, **kwargs)
-
-        return storage_dict, images_dict
-
-    def forward_loss(self, storage_dict, tgt_dict, loss_dict, analysis_dict, id=None, **kwargs):
-        """
-        Forward loss method of the EffSegHead module.
+        Method computing the losses and collecting analysis metrics.
 
         Args:
             storage_dict (Dict): Storage dictionary containing following keys (after matching):
@@ -727,7 +428,7 @@ class EffSegHead(BaseSegHead):
                 - masks (BoolTensor): target segmentation masks of shape [num_targets, iH, iW].
 
             loss_dict (Dict): Dictionary containing different weighted loss terms.
-            analysis_dict (Dict): Dictionary containing different analyses.
+            analysis_dict (Dict): Dictionary containing different analysis metrics.
             id (int or str): Integer or string containing the head id (default=None).
             kwargs (Dict): Dictionary of keyword arguments passed to some underlying modules.
 
@@ -749,10 +450,6 @@ class EffSegHead(BaseSegHead):
         # Retrieve query features and get device
         qry_feats = storage_dict['qry_feats']
         device = qry_feats.device
-
-        # Perform matching if matcher is available
-        if self.matcher is not None:
-            self.matcher(storage_dict, tgt_dict=tgt_dict, analysis_dict=analysis_dict, **kwargs)
 
         # Retrieve matched query and target indices from storage dictionary
         matched_qry_ids = storage_dict['matched_qry_ids']
@@ -812,7 +509,7 @@ class EffSegHead(BaseSegHead):
             raise ValueError(error_msg)
 
         # Get segmentation and refinement predictions for desired queries
-        self.get_preds(storage_dict, seg_qry_ids=matched_qry_ids, **kwargs)
+        self.get_preds(storage_dict, mask_qry_ids=matched_qry_ids, **kwargs)
 
         # Retrieve various items related to segmentation predictions from storage dictionary
         roi_ids_list = storage_dict['roi_ids_list']
