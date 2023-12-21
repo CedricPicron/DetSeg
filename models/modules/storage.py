@@ -420,3 +420,54 @@ class StorageMasking(nn.Module):
         output = forward_method(*args, **kwargs)
 
         return output
+
+
+@MODELS.register_module()
+class StorageTransfer(nn.Module):
+    """
+    Class implementing the StorageTransfer module.
+
+    Attributes:
+        in_keys (List): List with keys of storage dictionary items to transfer to different dictionary.
+        dict_key (str): String containing the dictionary to which storage dictionary items are transferred.
+    """
+
+    def __init__(self, in_keys, dict_key):
+        """
+        Initializes the StorageTransfer module.
+
+        Args:
+            in_keys (List): List with keys of storage dictionary items to transfer to different dictionary.
+            dict_key (str): String containing the dictionary to which storage dictionary items are transferred.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_keys = in_keys
+        self.dict_key = dict_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageTransfer module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {in_key} (Any): item to be transferred to different dictionary.
+
+            kwargs (Dict): Dictionary of keyword arguments containing at least following key:
+                - {self.dict_key} (Dict): dictionary to which items are transferred.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary with transferred items removed.
+        """
+
+        # Retrieve dictionary to which items are transferred
+        transfer_dict = kwargs[self.dict_key]
+
+        # Transfer items
+        for in_key in self.in_keys:
+            transfer_dict[in_key] = storage_dict.pop(in_key)
+
+        return storage_dict
