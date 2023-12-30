@@ -163,7 +163,7 @@ class AnchorSelector(nn.Module):
             abs_sel_ids = torch.arange(batch_size * num_anchors, device=device)
             abs_sel_ids = abs_sel_ids[sel_probs.flatten() >= self.sel_attrs['abs_thr']]
 
-        elif 'rel' in sel_mode:
+        if 'rel' in sel_mode:
             rel_sel_ids = torch.topk(sel_probs, self.sel_attrs['rel_thr'], dim=1, sorted=False).indices
             rel_sel_ids = rel_sel_ids + num_anchors * torch.arange(batch_size, device=device)[:, None]
             rel_sel_ids = rel_sel_ids.flatten()
