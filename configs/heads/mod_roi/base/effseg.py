@@ -6,7 +6,7 @@ model = dict(
         *_base_.model.head_cfgs,
         dict(
             type='ModRoIHead',
-            cls_agn_masks=False,
+            cls_agn_masks=True,
             roi_ext_cfg=dict(
                 type='MMDetRoIExtractor',
                 mmdet_roi_ext_cfg=dict(
@@ -19,9 +19,12 @@ model = dict(
             mask_logits_cfg=[
                 dict(
                     type='PosMapFusion',
-                    in_key=None,
-                    out_key=None,
-                    pos_cfg=None,
+                    in_key='roi_feats',
+                    out_key='roi_feats',
+                    pos_cfg=dict(
+                        type='SinePosEncoder2d',
+                        feat_size=256,
+                    ),
                 ),
                 dict(
                     type='QryMapFusion',
@@ -64,22 +67,26 @@ model = dict(
                 dict(
                     type='StorageApply',
                     in_key='roi_feats',
+                    out_key='roi_feats',
+                    module_cfg=dict(
+                        type='mmdet.ConvModule',
+                        num_layers=4,
+                        in_channels=256,
+                        out_channels=256,
+                        kernel_size=3,
+                        padding=1,
+                    ),
+                ),
+                dict(
+                    type='StorageApply',
+                    in_key='roi_feats',
                     out_key='mask_logits',
                     module_cfg=[
                         dict(
-                            type='mmdet.ConvModule',
-                            num_layers=4,
+                            type='nn.Conv2d',
                             in_channels=256,
                             out_channels=256,
-                            kernel_size=3,
-                            padding=1,
-                        ),
-                        dict(
-                            type='nn.ConvTranspose2d',
-                            in_channels=256,
-                            out_channels=256,
-                            kernel_size=2,
-                            stride=2,
+                            kernel_size=1,
                         ),
                         dict(
                             type='nn.ReLU',
@@ -88,16 +95,33 @@ model = dict(
                         dict(
                             type='nn.Conv2d',
                             in_channels=256,
-                            out_channels=80,
+                            out_channels=1,
                             kernel_size=1,
                         ),
                     ],
                 ),
                 dict(
-                    type='SelectClass',
-                    in_key='mask_logits',
-                    labels_key='roi_labels',
-                    out_key='mask_logits',
+                    type='StorageApply',
+                    in_key='roi_feats',
+                    out_key='ref_logits',
+                    module_cfg=[
+                        dict(
+                            type='nn.Conv2d',
+                            in_channels=256,
+                            out_channels=256,
+                            kernel_size=1,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='nn.Conv2d',
+                            in_channels=256,
+                            out_channels=1,
+                            kernel_size=1,
+                        ),
+                    ],
                 ),
                 dict(
                     type='StorageCondition',
@@ -105,6 +129,19 @@ model = dict(
                     module_cfg=[
                         dict(
                             type='DenseRoIMaskTargets',
+                            in_key='mask_logits',
+                            boxes_key='roi_boxes',
+                            tgt_ids_key='matched_tgt_ids',
+                            out_key='mask_targets',
+                        ),
+                        dict(
+                            type='StorageApply',
+                            in_key='mask_targets',
+                            out_key='mask_targets',
+                            module_cfg=dict(
+                                type='Unsqueeze',
+                                dim=1,
+                            ),
                         ),
                         dict(
                             type='StorageApply',
@@ -131,12 +168,14 @@ model = dict(
                         dict(
                             type='StorageTransfer',
                             in_keys=['mask_loss'],
+                            out_keys=['mask_loss_0'],
                             dict_key='loss_dict',
                             transfer_mode='out',
                         ),
                         dict(
                             type='StorageTransfer',
                             in_keys=['mask_acc'],
+                            out_keys=['mask_acc_0'],
                             dict_key='analysis_dict',
                             transfer_mode='out',
                         ),

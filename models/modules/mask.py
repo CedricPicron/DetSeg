@@ -23,8 +23,7 @@ class DenseRoIMaskTargets(nn.Module):
         out_key (str): String with key to store mask targets in storage dictionary.
     """
 
-    def __init__(self, in_key='mask_logits', boxes_key='roi_boxes', tgt_ids_key='matched_tgt_ids',
-                 out_key='mask_targets'):
+    def __init__(self, in_key, boxes_key, tgt_ids_key, out_key):
         """
         Initializes the DenseRoIMaskTargets module.
 
@@ -52,7 +51,7 @@ class DenseRoIMaskTargets(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
                 - images (Images): Images structure containing the batched images of size [batch_size];
-                - {self.in_key} (FloatTensor): dense mask predictions of shape [num_rois, rH, rW];
+                - {self.in_key} (FloatTensor): dense mask predictions of shape [num_rois, {1}, rH, rW];
                 - {self.boxes_key} (Boxes): 2D bounding boxes of RoIs of size [num_rois];
                 - {self.tgt_ids_key} (LongTensor): target indices corresponding to RoIs of shape [num_rois].
 

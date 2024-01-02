@@ -240,6 +240,10 @@ model = dict(
                     module_cfg=[
                         dict(
                             type='DenseRoIMaskTargets',
+                            in_key='mask_logits',
+                            boxes_key='roi_boxes',
+                            tgt_ids_key='matched_tgt_ids',
+                            out_key='mask_targets',
                         ),
                         dict(
                             type='StorageApply',
