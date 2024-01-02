@@ -176,13 +176,13 @@ class PosMapFusion(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following key:
-                - {in_key} (FloatTensor): Input feature map of shape [batch_size, feat_size, fH, fW].
+                - {in_key} (FloatTensor): input feature map of shape [batch_size, feat_size, fH, fW].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {out_key} (FloatTensor): Output feature map of shape [batch_size, feat_size, fH, fW].
+                - {out_key} (FloatTensor): output feature map of shape [batch_size, feat_size, fH, fW].
         """
 
         # Retrieve input feature map from storage dictionary
@@ -251,14 +251,14 @@ class QryMapFusion(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
-                - {in_key} (FloatTensor): Input feature map of shape [num_qrys, feat_size, fH, fW];
-                - {qry_key} (FloatTensor): Query features of shape [num_qrys, feat_size].
+                - {in_key} (FloatTensor): input feature map of shape [num_qrys, feat_size, fH, fW];
+                - {qry_key} (FloatTensor): query features of shape [num_qrys, feat_size].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {out_key} (FloatTensor): Output feature map of shape [num_qrys, feat_size, fH, fW].
+                - {out_key} (FloatTensor): output feature map of shape [num_qrys, feat_size, fH, fW].
         """
 
         # Retrieve desired items from storage dictionary
