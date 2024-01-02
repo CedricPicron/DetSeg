@@ -126,11 +126,13 @@ model = dict(
                             type='StorageTransfer',
                             in_keys=['mask_loss'],
                             dict_key='loss_dict',
+                            transfer_mode='out',
                         ),
                         dict(
                             type='StorageTransfer',
                             in_keys=['mask_acc'],
                             dict_key='analysis_dict',
+                            transfer_mode='out',
                         ),
                     ],
                 ),

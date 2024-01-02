@@ -56,6 +56,49 @@ class ApplyAll(nn.Module):
 
 
 @MODELS.register_module()
+class ApplyOneToOne(nn.Module):
+    """
+    Class implementing the ApplyOneToOne module.
+
+    The ApplyOneToOne module applies one specific sub-module to each input from the input list.
+
+    Attributes:
+        sub_modules (nn.ModuleList): List [num_sub_modules] of sub-modules applied to inputs from input list.
+    """
+
+    def __init__(self, sub_module_cfgs):
+        """
+        Initializes the ApplyOneToOne module.
+
+        Args:
+            sub_module_cfgs (List): List [num_sub_modules] of configuration dictionaries specifying the sub-modules.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build sub-modules
+        self.sub_modules = nn.ModuleList([build_model(cfg_i, sequential=True) for cfg_i in sub_module_cfgs])
+
+    def forward(self, in_list, **kwargs):
+        """
+        Forward method of the ApplyOneToOne module.
+
+        Args:
+            in_list (List): List with inputs to be processed by the sub-module.
+            kwargs (Dict): Dictionary of keyword arguments passed to each sub-module.
+
+        Returns:
+            out_list (List): List with resulting outputs of the sub-modules.
+        """
+
+        # Apply sub-modules to inputs from input list
+        out_list = [module_i(in_i) for in_i, module_i in zip(in_list, self.sub_modules)]
+
+        return out_list
+
+
+@MODELS.register_module()
 class ApplyToSelected(nn.Module):
     """
     Class implementing the ApplyToSelected module.
@@ -100,49 +143,6 @@ class ApplyToSelected(nn.Module):
         # Get output list
         out_list = in_list.copy()
         out_list[self.select_id] = self.module(in_list[self.select_id], **kwargs)
-
-        return out_list
-
-
-@MODELS.register_module()
-class ApplyOneToOne(nn.Module):
-    """
-    Class implementing the ApplyOneToOne module.
-
-    The ApplyOneToOne module applies one specific sub-module to each input from the input list.
-
-    Attributes:
-        sub_modules (nn.ModuleList): List [num_sub_modules] of sub-modules applied to inputs from input list.
-    """
-
-    def __init__(self, sub_module_cfgs):
-        """
-        Initializes the ApplyOneToOne module.
-
-        Args:
-            sub_module_cfgs (List): List [num_sub_modules] of configuration dictionaries specifying the sub-modules.
-        """
-
-        # Initialization of default nn.Module
-        super().__init__()
-
-        # Build sub-modules
-        self.sub_modules = nn.ModuleList([build_model(cfg_i, sequential=True) for cfg_i in sub_module_cfgs])
-
-    def forward(self, in_list, **kwargs):
-        """
-        Forward method of the ApplyOneToOne module.
-
-        Args:
-            in_list (List): List with inputs to be processed by the sub-module.
-            kwargs (Dict): Dictionary of keyword arguments passed to each sub-module.
-
-        Returns:
-            out_list (List): List with resulting outputs of the sub-modules.
-        """
-
-        # Apply sub-modules to inputs from input list
-        out_list = [module_i(in_i) for in_i, module_i in zip(in_list, self.sub_modules)]
 
         return out_list
 
@@ -340,6 +340,47 @@ class GetBoxesTensor(nn.Module):
 
 
 @MODELS.register_module()
+class GetItem(nn.Module):
+    """
+    Class implementing the GetItem module.
+
+    Attributes:
+        index (Any): Object selecting the desired items from the input.
+    """
+
+    def __init__(self, index):
+        """
+        Initializes the GetItem module.
+
+        Args:
+            index (any): Object selecting the desired items from the input.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set index attribute
+        self.index = index
+
+    def forward(self, input, **kwargs):
+        """
+        Forward method of the GetItem module.
+
+        Args:
+            input (Any): Input to select the desired items from.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            output (Any): Output containing the selected items.
+        """
+
+        # Get output with selected items
+        output = input[self.index]
+
+        return output
+
+
+@MODELS.register_module()
 class GetPosFromBoxes(nn.Module):
     """
     Class implementing the GetPosFromBoxes module.
@@ -517,49 +558,6 @@ class GetPosFromMaps(nn.Module):
             storage_dict[self.pos_module_key] = pos_feat_maps
 
         return feat_maps
-
-
-@MODELS.register_module()
-class IdAvg2d(nn.Module):
-    """
-    Class implementing the IdAvg2d module.
-    """
-
-    def __init__(self):
-        """
-        Initializes the IdAvg2d module.
-        """
-
-        # Initialization of default nn.Module
-        super().__init__()
-
-    def forward(self, core_feats, aux_feats, id_map, **kwargs):
-        """
-        Forward method of the IdAvg2d module.
-
-        Args:
-            core_feats (FloatTensor): Core features of shape [num_core_feats, feat_size].
-            aux_feats (FloatTensor): Auxiliary features of shape [num_aux_feats, feat_size].
-            id_map (LongTensor): Index map with feature indices of shape [num_rois, rH, rW].
-            kwargs (Dict): Dictionary with unused keyword arguments.
-
-        Returns:
-            avg_feat (FloatTensor): Average feature of shape [1, feat_size].
-        """
-
-        # Get average feature
-        num_core_feats = len(core_feats)
-        num_aux_feats = len(aux_feats)
-        num_feats = num_core_feats + num_aux_feats
-
-        counts = torch.bincount(id_map.flatten(), minlength=num_feats)
-        counts = counts[:, None]
-
-        avg_feat = (counts[:num_core_feats] * core_feats).sum(dim=0, keepdim=True)
-        avg_feat += (counts[num_core_feats:] * aux_feats).sum(dim=0, keepdim=True)
-        avg_feat *= 1/id_map.numel()
-
-        return avg_feat
 
 
 @MODELS.register_module()
@@ -787,41 +785,53 @@ class TopDown(nn.Module):
 
 
 @MODELS.register_module()
-class View(nn.Module):
+class Uncertainty(nn.Module):
     """
-    Class implementing the View module.
+    Class implementing the Uncertainty module.
 
     Attributes:
-        out_shape (Tuple): Tuple containing the output shape.
+        in_key (str): String with key to retrieve input logits from storage dictionary.
+        out_key (str): String with key to store output uncertainty values in storage dictionary.
     """
 
-    def __init__(self, out_shape):
+    def __init__(self, in_key, out_key):
         """
-        Initializes the View module.
+        Initializes the Uncertainty module.
 
         Args:
-            out_shape (Tuple): Tuple containing the output shape.
+            in_key (str): String with key to retrieve input logits from storage dictionary.
+            out_key (str): String with key to store output uncertainty values in storage dictionary.
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set output shape attribute
-        self.out_shape = out_shape
+        # Set additional attributes
+        self.in_key = in_key
+        self.out_key = out_key
 
-    def forward(self, in_tensor, **kwargs):
+    def forward(self, storage_dict, **kwargs):
         """
-        Forward method of the View module.
+        Forward method of the Uncertainty module.
 
         Args:
-            in_tensor (Tensor): Input tensor of shape [*in_shape].
-            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.in_key} (FloatTensor): input logits of shape [*].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            out_tensor (Tensor): Output tensor of shape [*out_shape].
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (FloatTensor): output uncertainty values of shape [*].
         """
 
-        # Get output tensor
-        out_tensor = in_tensor.view(*self.out_shape)
+        # Retrieve input logits from storage dictionary
+        logits = storage_dict[self.in_key]
 
-        return out_tensor
+        # Get uncertainty values
+        unc_vals = -logits.abs()
+
+        # Store uncertainty values in storage dictionary
+        storage_dict[self.out_key] = unc_vals
+
+        return storage_dict

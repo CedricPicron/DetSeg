@@ -1,11 +1,59 @@
 """
 Collection of storage-related modules.
 """
+from copy import copy, deepcopy
 
 import torch
 from torch import nn
 
 from models.build import build_model, MODELS
+
+
+@MODELS.register_module()
+class StorageAdd(nn.Module):
+    """
+    Class implementing the StorageAdd module.
+
+    Attributes:
+        module_key (str): String with key to add desired module to storage dictionary.
+        module (nn.Module): Module added to the storage dictionary.
+    """
+
+    def __init__(self, module_key, module_cfg):
+        """
+        Initializes the StorageAdd module.
+
+        Args:
+            module_key (str): String with key to add desired module to storage dictionary.
+            module_cfg (Dict): Configuration dictionary specifying the module to be stored.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build module to be stored
+        self.module = build_model(module_cfg)
+
+        # Set additional attribute
+        self.module_key = module_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageAdd module.
+
+        Args:
+            storage_dict (Dict): Dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.module_key} (nn.Module): module to be stored.
+        """
+
+        # Add desired module to storage dictionary
+        storage_dict[self.module_key] = self.module
+
+        return storage_dict
 
 
 @MODELS.register_module()
@@ -185,6 +233,176 @@ class StorageCondition(nn.Module):
 
         # Apply underlying module if condition is true
         if condition:
+            storage_dict = self.module(storage_dict, **kwargs)
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class StorageCopy(nn.Module):
+    """
+    Class implementing the StorageCopy module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input from storage dictionary.
+        out_key (str): String with key to store (possibly copied) input in storage dictionary.
+        copy_type (str): String indicating the type of copy operation.
+    """
+
+    def __init__(self, in_key, out_key, copy_type='assign'):
+        """
+        Initializes the StorageCopy module.
+
+        Args:
+            in_key (str): String with key to retrieve input from storage dictionary.
+            out_key (str): String with key to store (possibly copied) input in storage dictionary.
+            copy_type (str): String indicating the type of copy operation (default='assign').
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.out_key = out_key
+        self.copy_type = copy_type
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageCopy module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.in_key} (Any): input possibly copied and stored in new key.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (Any): retrieved input which was possibly copied.
+
+        Raises:
+            ValueError: Error when an invalid copy type is provided.
+        """
+
+        # Retrieve input from storage dictionary
+        input = storage_dict[self.in_key]
+
+        # Get output
+        if self.copy_type == 'assign':
+            output = input
+
+        elif self.copy_type == 'deep':
+            output = deepcopy(input)
+
+        elif self.copy_type == 'shallow':
+            output = copy(input)
+
+        else:
+            error_msg = f"Invalid copy type in StorageCopy (got '{self.copy_type}')."
+            raise ValueError(error_msg)
+
+        # Store output in storage dictionary
+        storage_dict[self.out_key] = output
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class StorageGetApply(nn.Module):
+    """
+    Class implementing the StorageGetApply module.
+
+    Attributes:
+        module_key (str): String with key to retrieve underlying module from storage dictionary.
+    """
+
+    def __init__(self, module_key):
+        """
+        Initializes the StorageGetApply module.
+
+        Args:
+            module_key (str): String with key to retrieve underlying module from storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attribute
+        self.module_key = module_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageGetApply module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.module_key} (nn.Module): underlying module to be applied.
+
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary possibly containing new or updated keys.
+        """
+
+        # Retrieve underlying module from storage dictionary
+        module = storage_dict[self.module_key]
+
+        # Apply underlying module
+        storage_dict = module(storage_dict, **kwargs)
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class StorageIterate(nn.Module):
+    """
+    Class implementing the StorageIterate module.
+
+    Attributes:
+        num_iters (int): Integer containing the number of iterations over the underlying module.
+        module (nn.Module): Underlying module to be iterated over.
+        last_iter_key (str): String with key to store the last iteration boolean (or None).
+    """
+
+    def __init__(self, num_iters, module_cfg, last_iter_key=None):
+        """
+        Initializes the StorageIterate module.
+
+        Args:
+            num_iters (int): Integer containing the number of iterations over the underlying module.
+            module_cfg (Dict): Configuration dictionary specifying the module to be iterated over.
+            last_iter_key (str): String with key to store the last iteration boolean (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying module
+        self.module = build_model(module_cfg)
+
+        # Set additional attributes
+        self.num_iters = num_iters
+        self.last_iter_key = last_iter_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the StorageIterate module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary storing various items of interest.
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary possibly containing following additional key:
+                - {self.last_iter_key} (bool): boolean indicating whether in last iteration.
+        """
+
+        # Iteratively apply underlying module
+        for i in range(self.num_iters):
+            if self.last_iter_key is not None:
+                storage_dict[self.last_iter_key] = i == (self.num_iters - 1)
+
             storage_dict = self.module(storage_dict, **kwargs)
 
         return storage_dict
@@ -428,17 +646,21 @@ class StorageTransfer(nn.Module):
     Class implementing the StorageTransfer module.
 
     Attributes:
-        in_keys (List): List with keys of storage dictionary items to transfer to different dictionary.
-        dict_key (str): String containing the dictionary to which storage dictionary items are transferred.
+        in_keys (List): List of size [num_transfers] with keys of dictionary items to transfer.
+        dict_key (str): String with dictionary name involved in the transfer to or from storage dictionary.
+        transfer_mode (str): String containing the transfer mode.
+        out_keys (List): List of size [num_transfers] with keys of transferred dictionary items.
     """
 
-    def __init__(self, in_keys, dict_key):
+    def __init__(self, in_keys, dict_key, transfer_mode, out_keys=None):
         """
         Initializes the StorageTransfer module.
 
         Args:
-            in_keys (List): List with keys of storage dictionary items to transfer to different dictionary.
-            dict_key (str): String containing the dictionary to which storage dictionary items are transferred.
+            in_keys (List): List of size [num_transfers] with keys of dictionary items to transfer.
+            dict_key (str): String with dictionary name involved in the transfer to or from storage dictionary.
+            transfer_mode (str): String containing the transfer mode.
+            out_keys (List): List of size [num_transfers] with keys of transferred dictionary items (default=None).
         """
 
         # Initialization of default nn.Module
@@ -447,6 +669,8 @@ class StorageTransfer(nn.Module):
         # Set additional attributes
         self.in_keys = in_keys
         self.dict_key = dict_key
+        self.transfer_mode = transfer_mode
+        self.out_keys = out_keys if out_keys is not None else in_keys
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -454,20 +678,32 @@ class StorageTransfer(nn.Module):
 
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
-                - {in_key} (Any): item to be transferred to different dictionary.
+                - {in_key} (Any): item to be transferred from one dictionary to another.
 
             kwargs (Dict): Dictionary of keyword arguments containing at least following key:
-                - {self.dict_key} (Dict): dictionary to which items are transferred.
+                - {self.dict_key} (Dict): dictionary from or to which items are transferred.
 
         Returns:
-            storage_dict (Dict): Storage dictionary with transferred items removed.
+            storage_dict (Dict): Storage dictionary with transferred items added or removed.
+
+        Raises:
+            ValueError: Error when an invalid transfer mode is provided.
         """
 
-        # Retrieve dictionary to which items are transferred
+        # Retrieve dictionary from or to which items are transferred
         transfer_dict = kwargs[self.dict_key]
 
         # Transfer items
-        for in_key in self.in_keys:
-            transfer_dict[in_key] = storage_dict.pop(in_key)
+        if self.transfer_mode == 'in':
+            for in_key, out_key in zip(self.in_keys, self.out_keys):
+                storage_dict[out_key] = transfer_dict.get(in_key)
+
+        elif self.transfer_mode == 'out':
+            for in_key, out_key in zip(self.in_keys, self.out_keys):
+                transfer_dict[out_key] = storage_dict.pop(in_key)
+
+        else:
+            error_msg = f"Invalid transfer mode in StorageTransfer (got {self.transfer_mode})."
+            raise ValueError(error_msg)
 
         return storage_dict
