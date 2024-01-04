@@ -148,11 +148,12 @@ class MapSampler2d(nn.Module):
             num_groups_i = batch_mask.sum().item()
 
             if num_groups_i > 0:
-                storage_dict['in_map'] = sample_map[i, None].expand(num_groups_i, -1, -1, -1)
-                storage_dict['in_pts'] = sample_pts[batch_mask]
+                storage_dict['in_map'] = sample_map[i, None]
+                storage_dict['in_pts'] = sample_pts[batch_mask].view(1, num_groups_i*num_pts, 2)
 
                 storage_dict = self.sampler(storage_dict, **kwargs)
-                sample_feats[batch_mask] = storage_dict.pop('out_feats')
+                out_feats = storage_dict.pop('out_feats')
+                sample_feats[batch_mask] = out_feats.view(num_groups_i, num_pts, feat_size)
 
         storage_dict.pop('in_map', None)
         storage_dict.pop('in_pts', None)
