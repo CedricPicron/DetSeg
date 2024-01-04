@@ -62,7 +62,7 @@ class DenseRoIMaskTargets(nn.Module):
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {self.out_key} (FloatTensor): dense mask targets of shape [num_rois, rH, rW].
+                - {self.out_key} (FloatTensor): dense mask targets of shape [num_rois, {1}, rH, rW].
         """
 
         # Retrieve desired items from storage dictionary
@@ -80,6 +80,7 @@ class DenseRoIMaskTargets(nn.Module):
 
         roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images).boxes
         mask_targets = mask_target_single(roi_boxes, tgt_ids, tgt_masks, mask_tgt_cfg)
+        mask_targets = mask_targets.view_as(mask_preds)
 
         # Store mask targets in storage dictionary
         storage_dict[self.out_key] = mask_targets

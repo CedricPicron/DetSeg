@@ -136,15 +136,6 @@ model = dict(
                         ),
                         dict(
                             type='StorageApply',
-                            in_key='mask_targets',
-                            out_key='mask_targets',
-                            module_cfg=dict(
-                                type='Unsqueeze',
-                                dim=1,
-                            ),
-                        ),
-                        dict(
-                            type='StorageApply',
                             in_key='mask_logits',
                             out_key='mask_loss',
                             storage_kwargs={'mask_targets': 'label'},
