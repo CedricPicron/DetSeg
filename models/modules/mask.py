@@ -28,10 +28,10 @@ class DenseRoIMaskTargets(nn.Module):
         Initializes the DenseRoIMaskTargets module.
 
         Args:
-            in_key (str): String with key to retrieve mask predictions from storage dictionary (default='mask_logits').
-            boxes_key (str): String with key to retrieve RoI boxes from storage dictionary (default='roi_boxes').
-            tgt_ids_key (str): String with key to retrieve target indices (default='matched_tgt_ids').
-            out_key (str): String with key to store mask targets in storage dictionary (default='mask_targets').
+            in_key (str): String with key to retrieve mask predictions from storage dictionary.
+            boxes_key (str): String with key to retrieve RoI boxes from storage dictionary.
+            tgt_ids_key (str): String with key to retrieve target indices.
+            out_key (str): String with key to store mask targets in storage dictionary.
         """
 
         # Initialization of default nn.Module
