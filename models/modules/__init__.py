@@ -26,4 +26,5 @@ from .selector import *  # noqa: F401, F403
 from .sparse import *  # noqa: F401, F403
 from .sps import *  # noqa: F401, F403
 from .storage import *  # noqa: F401, F403
+from .target import *  # noqa: F401, F403
 from .utils import *  # noqa: F401, F403

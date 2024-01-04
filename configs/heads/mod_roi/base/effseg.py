@@ -9,6 +9,10 @@ model = dict(
             cls_agn_masks=True,
             roi_ext_cfg=dict(
                 type='MMDetRoIExtractor',
+                in_key='feat_maps',
+                boxes_key='roi_boxes',
+                ids_key='roi_batch_ids',
+                out_key='roi_feats',
                 mmdet_roi_ext_cfg=dict(
                     type='mmdet.SingleRoIExtractor',
                     roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
@@ -128,11 +132,51 @@ model = dict(
                     cond_key='is_training',
                     module_cfg=[
                         dict(
-                            type='DenseRoIMaskTargets',
-                            in_key='mask_logits',
+                            type='StorageTransfer',
+                            in_keys=['masks'],
+                            dict_key='tgt_dict',
+                            out_keys=['tgt_map'],
+                            transfer_mode='in',
+                        ),
+                        dict(
+                            type='StorageApply',
+                            in_key='tgt_map',
+                            out_key='tgt_map',
+                            module_cfg=[
+                                dict(
+                                    type='Float',
+                                ),
+                                dict(
+                                    type='Unsqueeze',
+                                    dim=1,
+                                ),
+                            ],
+                        ),
+                        dict(
+                            type='MMDetRoIExtractor',
+                            in_key='tgt_map',
                             boxes_key='roi_boxes',
-                            tgt_ids_key='matched_tgt_ids',
+                            ids_key='matched_tgt_ids',
+                            out_key='roi_tgt_map',
+                            mmdet_roi_ext_cfg=dict(
+                                type='mmdet.SingleRoIExtractor',
+                                roi_layer=dict(type='RoIAlign', output_size=14, sampling_ratio=0),
+                                out_channels=1,
+                                featmap_strides=[1],
+                            ),
+                        ),
+                        dict(
+                            type='BinaryTargets',
+                            in_key='roi_tgt_map',
                             out_key='mask_targets',
+                            threshold=0.5,
+                        ),
+                        dict(
+                            type='AmbiguityTargets',
+                            in_key='roi_tgt_map',
+                            out_key='ref_targets',
+                            low_bnd=0.0,
+                            up_bnd=1.0,
                         ),
                         dict(
                             type='StorageApply',
@@ -146,7 +190,23 @@ model = dict(
                                     type='mmdet.CrossEntropyLoss',
                                     use_sigmoid=True,
                                     reduction='sum',
-                                    loss_weight=1.0,
+                                    loss_weight=0.25,
+                                ),
+                            ),
+                        ),
+                        dict(
+                            type='StorageApply',
+                            in_key='ref_logits',
+                            out_key='ref_loss',
+                            storage_kwargs={'ref_targets': 'label'},
+                            filter_kwargs=[],
+                            module_cfg=dict(
+                                type='MaskLoss',
+                                mask_loss_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    reduction='sum',
+                                    loss_weight=0.25,
                                 ),
                             ),
                         ),
@@ -157,16 +217,22 @@ model = dict(
                             out_key='mask_acc',
                         ),
                         dict(
+                            type='BinaryAccuracy',
+                            pred_key='ref_logits',
+                            tgt_key='ref_targets',
+                            out_key='ref_acc',
+                        ),
+                        dict(
                             type='StorageTransfer',
-                            in_keys=['mask_loss'],
-                            out_keys=['mask_loss_0'],
+                            in_keys=['mask_loss', 'ref_loss'],
+                            out_keys=['mask_loss_0', 'ref_loss_0'],
                             dict_key='loss_dict',
                             transfer_mode='out',
                         ),
                         dict(
                             type='StorageTransfer',
-                            in_keys=['mask_acc'],
-                            out_keys=['mask_acc_0'],
+                            in_keys=['mask_acc', 'ref_acc'],
+                            out_keys=['mask_acc_0', 'ref_acc_0'],
                             dict_key='analysis_dict',
                             transfer_mode='out',
                         ),
