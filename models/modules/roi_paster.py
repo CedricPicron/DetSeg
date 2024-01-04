@@ -14,17 +14,18 @@ class MMDetRoIPaster(nn.Module):
     Module implementing the MMDetRoIPaster module.
 
     Attributes:
-        in_key (str): String with key to retrieve input to paste from storage dictionary.
-        out_key (str): String with key to store pasted output in storage dictionary.
+        in_key (str): String with key to retrieve input map to paste from storage dictionary.
+        out_key (str): String with key to store pasted output map in storage dictionary.
     """
 
-    def __init__(self, in_key='mask_scores', out_key='mask_scores'):
+    def __init__(self, in_key, boxes_key, out_key):
         """
         Initializes the MMDetRoIPaster module.
 
         Args:
-            in_key (str): String with key to retrieve input to paste from storage dictionary (default='mask_scores').
-            out_key (str): String with key to store pasted output in storage dictionary (default='mask_scores').
+            in_key (str): String with key to retrieve input map to paste from storage dictionary.
+            boxes_key (str): String with key to retrieve RoI boxes from storage dictionary.
+            out_key (str): String with key to store pasted output map in storage dictionary.
         """
 
         # Initialization of default nn.Module
@@ -32,6 +33,7 @@ class MMDetRoIPaster(nn.Module):
 
         # Set additional attributes
         self.in_key = in_key
+        self.boxes_key = boxes_key
         self.out_key = out_key
 
     def forward(self, storage_dict, **kwargs):
@@ -41,30 +43,30 @@ class MMDetRoIPaster(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - images (Images): Images structure containing the batched images of size [batch_size];
-                - roi_boxes (Boxes): 2D bounding boxes of RoIs of size [num_rois];
-                - {self.in_key} (FloatTensor): input tensor to be pasted of shape [num_rois, {1}, rH, rW].
+                - {self.in_key} (FloatTensor): input map to be pasted of shape [num_rois, {1}, rH, rW];
+                - {self.boxes_key} (Boxes): 2D bounding boxes of RoIs of size [num_rois].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {self.out_key} (FloatTensor): pasted output tensor of shape [num_rois, 1, iH, iW].
+                - {self.out_key} (FloatTensor): pasted output map of shape [num_rois, iH, iW].
         """
 
         # Retrieve desired items from storage dictionary
         images = storage_dict['images']
-        roi_boxes = storage_dict['roi_boxes'].clone()
-        in_tensor = storage_dict[self.in_key]
+        in_map = storage_dict[self.in_key]
+        roi_boxes = storage_dict[self.boxes_key].clone()
 
-        # Get pasted output tensor
-        if in_tensor.dim() == 3:
-            in_tensor = in_tensor.unsqueeze(dim=1)
+        # Get pasted output map
+        if in_map.dim() == 3:
+            in_map = in_map.unsqueeze(dim=1)
 
         iW, iH = images.size()
         roi_boxes = roi_boxes.to_format('xyxy').to_img_scale(images).boxes
-        out_tensor = _do_paste_mask(in_tensor, roi_boxes, iH, iW, skip_empty=False)[0]
+        out_map = _do_paste_mask(in_map, roi_boxes, iH, iW, skip_empty=False)[0]
 
-        # Store pasted output tensor in storage dictionary
-        storage_dict[self.out_key] = out_tensor
+        # Store pasted output map in storage dictionary
+        storage_dict[self.out_key] = out_map
 
         return storage_dict

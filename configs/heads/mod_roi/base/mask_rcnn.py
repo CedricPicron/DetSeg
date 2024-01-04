@@ -147,6 +147,9 @@ model = dict(
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',
+                in_key='mask_scores',
+                boxes_key='roi_boxes',
+                out_key='mask_scores',
             ),
             dup_attrs=dict(
                 type='nms',
