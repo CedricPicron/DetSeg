@@ -61,7 +61,7 @@ class BoxToImgPts(nn.Module):
         boxes = storage_dict[self.boxes_key].clone()
 
         # Get image-normalized points
-        boxes = boxes.to_format('xywh').to_img_scale(images).boxes.detach()
+        boxes = boxes.to_format('xywh').normalize(images).boxes.detach()
 
         num_pts = box_pts.size()[1]
         boxes = boxes[:, None, :].expand(-1, num_pts, -1)
