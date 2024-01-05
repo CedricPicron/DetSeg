@@ -257,7 +257,7 @@ model = dict(
                         dict(
                             type='nn.Flatten',
                             start_dim=0,
-                            end_dim=2,
+                            end_dim=3,
                         ),
                     ],
                 ),
@@ -266,6 +266,21 @@ model = dict(
                     in_key='act_feats',
                     out_key='ref_bool',
                     num_refines=10000,
+                ),
+                dict(
+                    type='StorageCondition',
+                    cond_key='ref_bool',
+                    module_cfg=[
+                        dict(
+                            type='Topk',
+                            in_key='ref_logits',
+                            out_ids_key='ref_ids',
+                            topk_kwargs=dict(
+                                k=10000,
+                                sorted=False,
+                            ),
+                        ),
+                    ],
                 ),
             ],
             roi_paster_cfg=dict(

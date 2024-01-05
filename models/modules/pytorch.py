@@ -285,6 +285,70 @@ class Permute(nn.Module):
 
 
 @MODELS.register_module()
+class Topk(nn.Module):
+    """
+    Class implementing the Topk module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input tensor from storage dictionary.
+        out_vals_key (str): String with key to store topk output values in storage dictionary (or None).
+        out_ids_key (str): String with key to store topk output indices in storage dictionary (or None).
+        topk_kwargs (Dict): Dictionary of keyword arguments specifying the topk operation.
+    """
+
+    def __init__(self, in_key, topk_kwargs, out_vals_key=None, out_ids_key=None):
+        """
+        Initializes the Topk module.
+
+        Args:
+            in_key (str): String with key to retrieve input tensor from storage dictionary.
+            topk_kwargs (Dict): Dictionary of keyword arguments specifying the topk operation.
+            out_vals_key (str): String with key to store topk output values in storage dictionary (default=None).
+            out_ids_key (str): String with key to store topk output indices in storage dictionary (default=None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.out_vals_key = out_vals_key
+        self.out_ids_key = out_ids_key
+        self.topk_kwargs = topk_kwargs
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the Topk module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.in_key} (Tensor): input tensor on which to apply the topk operation.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
+                - {self.out_vals_key} (Tensor): output tensor with topk values;
+                - {self.out_ids_key} (LongTensor): output tensor with indices corresponding to the topk values.
+        """
+
+        # Retrieve input tensor from storage dictionary
+        in_tensor = storage_dict[self.in_key]
+
+        # Get topk values and indices
+        out_vals, out_ids = torch.topk(in_tensor, **self.topk_kwargs)
+
+        # Store outputs in storage dictionary if needed
+        if self.out_vals_key is not None:
+            storage_dict[self.out_vals_key] = out_vals
+
+        if self.out_ids_key is not None:
+            storage_dict[self.out_ids_key] = out_ids
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class Transpose(nn.Module):
     """
     Class implementing the Transpose module.
