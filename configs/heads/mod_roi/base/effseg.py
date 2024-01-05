@@ -261,6 +261,12 @@ model = dict(
                         ),
                     ],
                 ),
+                dict(
+                    type='RefineBool',
+                    in_key='act_feats',
+                    out_key='ref_bool',
+                    num_refines=10000,
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',
