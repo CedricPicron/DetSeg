@@ -280,6 +280,12 @@ model = dict(
                                 sorted=False,
                             ),
                         ),
+                        dict(
+                            type='IdsToMask',
+                            in_key='ref_ids',
+                            size_key='ref_logits',
+                            out_key='ref_mask',
+                        ),
                     ],
                 ),
             ],

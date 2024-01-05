@@ -561,6 +561,66 @@ class GetPosFromMaps(nn.Module):
 
 
 @MODELS.register_module()
+class IdsToMask(nn.Module):
+    """
+    Class implementing the IdsToMask module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input indices from storage dictionary.
+        size_key (str): String with key to retrieve tensor with size information from storage dictionary.
+        out_key (str): String with key to store output mask in storage dictionary.
+    """
+
+    def __init__(self, in_key, size_key, out_key):
+        """
+        Initializes the IdsToMask module.
+
+        Args:
+            in_key (str): String with key to retrieve input indices from storage dictionary.
+            size_key (str): String with key to retrieve tensor with size information from storage dictionary.
+            out_key (str): String with key to store output mask in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.size_key = size_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the IdsToMask module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_key} (LongTensor): input tensor containing the indices of True elements;
+                - {self.size_key} (Tensor): tensor from which to infer the mask size.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (Tensor): output mask with True elements at locations of input indices.
+        """
+
+        # Retrieve desired items from storage dictionary
+        in_ids = storage_dict[self.in_key]
+        size_tensor = storage_dict[self.size_key]
+
+        # Get output mask
+        mask_size = size_tensor.size(dim=0)
+        out_mask = torch.zeros(mask_size, dtype=torch.bool, device=in_ids.device)
+        out_mask[in_ids] = True
+
+        # Store output mask in storage dictionary
+        storage_dict[self.out_key] = out_mask
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class QryInit(nn.Module):
     """
     Class implementing the QryInit module.
