@@ -188,7 +188,7 @@ model = dict(
                                 ),
                             ),
                             dict(
-                                type='SparseBool2d',
+                                type='PointRendBool',
                                 in_key='mask_logits',
                                 out_key='point_bool',
                                 num_updates=784,
@@ -222,7 +222,7 @@ model = dict(
                                         module_key='point_head',
                                     ),
                                     dict(
-                                        type='SparseInsert2d',
+                                        type='GridInsert2d',
                                         in_key='mask_logits',
                                         ins_ids_key='roi_sample_ids',
                                         ins_feats_key='point_logits',

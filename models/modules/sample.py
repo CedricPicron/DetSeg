@@ -50,13 +50,13 @@ class BaseSampler2d(nn.Module):
         Args:
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - {self.in_map_key} (FloatTensor): map to sample from of shape [num_groups, feat_size, fH, fW];
-                - {self.in_pts_key} (FloatTensor): normalized sample points of shape [num_groups, num_samples, 2].
+                - {self.in_pts_key} (FloatTensor): normalized sample points of shape [num_groups, num_pts, 2].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             storage_dict (Dict): Storage dictionary containing following additional key:
-                - {self.out_key} (FloatTensor): sampled features of shape [num_groups, num_samples, feat_size].
+                - {self.out_key} (FloatTensor): sampled features of shape [num_groups, num_pts, feat_size].
         """
 
         # Retrieve desired items from storage dictionary
