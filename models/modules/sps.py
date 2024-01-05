@@ -13,6 +13,121 @@ from models.functional.utils import maps_to_seq, seq_to_maps
 
 
 @MODELS.register_module()
+class IdAttn2d(nn.Module):
+    """
+    Class implementing the IdAttn2d module.
+
+    Attributes:
+        attn_weights (nn.Linear): Module computing the unnormalized attention weights.
+        val_proj (nn.Linear): Module computing the value features.
+        out_proj (nn.Linear): Module computing the output features.
+        num_pts (int): Integer containing the number of attention points.
+    """
+
+    def __init__(self, feat_size, num_pts=4):
+        """
+        Initializes the IdAttn2d module.
+
+        Args:
+            feat_size (int): Integer containing the feature size.
+            num_pts (int): Integer containing the number of attention points (default=4).
+
+        Raises:
+            ValueError: Error when the feature size is not divisible by 8.
+        """
+
+        # Check divisibility feature size by 8
+        if feat_size % 8 != 0:
+            error_msg = f"The feature size ({feat_size}) must be divisible by 8."
+            raise ValueError(error_msg)
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Initialize module computing the unnormalized attention weights
+        self.attn_weights = nn.Linear(feat_size, 8 * num_pts)
+        nn.init.zeros_(self.attn_weights.weight)
+        nn.init.zeros_(self.attn_weights.bias)
+
+        # Initialize module computing the value features
+        self.val_proj = nn.Linear(feat_size, feat_size)
+        nn.init.xavier_uniform_(self.val_proj.weight)
+        nn.init.zeros_(self.val_proj.bias)
+
+        # Initialize module computing the output features
+        self.out_proj = nn.Linear(feat_size, feat_size)
+        nn.init.xavier_uniform_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
+        # Set remaining attributes
+        self.num_pts = num_pts
+
+    def forward(self, in_act_feats, storage_dict, **kwargs):
+        """
+        Forward method of the IdAttn2d module.
+
+        Args:
+            in_act_feats (FloatTensor): Input active features of shape [num_act_feats, feat_size].
+
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - act_batch_ids (LongTensor): batch indices of active features of shape [num_act_feats];
+                - act_map_ids (LongTensor): map indices of active features of shape [num_act_feats];
+                - act_xy_ids (LongTensor): (X, Y) location indices of active features of shape [num_act_feats, 2];
+                - pas_feats (FloatTensor): passive features of shape [num_pas_feats, feat_size];
+                - id_maps (List): list [num_maps] with feature indices of shape [batch_size, 1, fH, fW].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_act_feats (FloatTensor): Output active features of shape [num_act_feats, feat_size].
+        """
+
+        # Retrieve desired items from storage dictionary
+        act_batch_ids = storage_dict['act_batch_ids']
+        act_map_ids = storage_dict['act_map_ids']
+        act_xy_ids = storage_dict['act_xy_ids']
+        pas_feats = storage_dict['pas_feats']
+        id_maps = storage_dict['id_maps']
+
+        # Get device and number of active features
+        device = in_act_feats.device
+        num_act_feats = len(in_act_feats)
+
+        # Get attention location indices
+        attn_offs = torch.tensor([[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]], device=device)
+        attn_offs = torch.arange(1, self.num_pts+1, device=device)[:, None, None] * attn_offs[None, :, :]
+        attn_xy_ids = act_xy_ids[:, None, None, :] + attn_offs[None, :, :, :]
+
+        # Get feature indices
+        act_batch_ids = act_batch_ids[:, None, None].expand(-1, self.num_pts, 8)
+        feat_ids = attn_xy_ids.new_empty([num_act_feats, self.num_pts, 8])
+
+        for map_id, id_map in enumerate(id_maps):
+            fH, fW = id_map.size()[-2:]
+            map_mask = act_map_ids == map_id
+
+            x_ids = attn_xy_ids[map_mask, :, :, 0].clamp_(min=0, max=fW-1)
+            y_ids = attn_xy_ids[map_mask, :, :, 1].clamp_(min=0, max=fH-1)
+
+            batch_ids = act_batch_ids[map_mask]
+            feat_ids[map_mask] = id_map[batch_ids, 0, y_ids, x_ids]
+
+        # Get feature weights
+        attn_weights = self.attn_weights(in_act_feats).view(num_act_feats, 8, self.num_pts)
+        feat_weights = F.softmax(attn_weights, dim=2).transpose(1, 2)
+
+        # Get weighted value features
+        weight = self.val_proj.weight
+        bias = self.val_proj.bias
+        val_feats = id_attn(in_act_feats, pas_feats, feat_ids, feat_weights, weight, bias)
+
+        # Get output active features
+        out_act_feats = self.out_proj(val_feats)
+
+        return out_act_feats
+
+
+@MODELS.register_module()
 class IdAvg2d(nn.Module):
     """
     Class implementing the IdAvg2d module.
@@ -128,121 +243,6 @@ class IdBase2d(nn.Module):
         out_feat_map[batch_ids, :, y_ids, x_ids] = act_feats
 
         return out_feat_map
-
-
-@MODELS.register_module()
-class IdAttn2d(nn.Module):
-    """
-    Class implementing the IdAttn2d module.
-
-    Attributes:
-        attn_weights (nn.Linear): Module computing the unnormalized attention weights.
-        val_proj (nn.Linear): Module computing the value features.
-        out_proj (nn.Linear): Module computing the output features.
-        num_pts (int): Integer containing the number of attention points.
-    """
-
-    def __init__(self, feat_size, num_pts=4):
-        """
-        Initializes the IdAttn2d module.
-
-        Args:
-            feat_size (int): Integer containing the feature size.
-            num_pts (int): Integer containing the number of attention points (default=4).
-
-        Raises:
-            ValueError: Error when the feature size is not divisible by 8.
-        """
-
-        # Check divisibility feature size by 8
-        if feat_size % 8 != 0:
-            error_msg = f"The feature size ({feat_size}) must be divisible by 8."
-            raise ValueError(error_msg)
-
-        # Initialization of default nn.Module
-        super().__init__()
-
-        # Initialize module computing the unnormalized attention weights
-        self.attn_weights = nn.Linear(feat_size, 8 * num_pts)
-        nn.init.zeros_(self.attn_weights.weight)
-        nn.init.zeros_(self.attn_weights.bias)
-
-        # Initialize module computing the value features
-        self.val_proj = nn.Linear(feat_size, feat_size)
-        nn.init.xavier_uniform_(self.val_proj.weight)
-        nn.init.zeros_(self.val_proj.bias)
-
-        # Initialize module computing the output features
-        self.out_proj = nn.Linear(feat_size, feat_size)
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        nn.init.zeros_(self.out_proj.bias)
-
-        # Set remaining attributes
-        self.num_pts = num_pts
-
-    def forward(self, in_act_feats, storage_dict, **kwargs):
-        """
-        Forward method of the IdAttn2d module.
-
-        Args:
-            in_act_feats (FloatTensor): Input active features of shape [num_act_feats, feat_size].
-
-            storage_dict (Dict): Storage dictionary containing at least following keys:
-                - act_batch_ids (LongTensor): batch indices of active features of shape [num_act_feats];
-                - act_map_ids (LongTensor): map indices of active features of shape [num_act_feats];
-                - act_xy_ids (LongTensor): (X, Y) location indices of active features of shape [num_act_feats, 2];
-                - pas_feats (FloatTensor): passive features of shape [num_pas_feats, feat_size];
-                - id_maps (List): list [num_maps] with feature indices of shape [batch_size, 1, fH, fW].
-
-            kwargs (Dict): Dictionary of unused keyword arguments.
-
-        Returns:
-            out_act_feats (FloatTensor): Output active features of shape [num_act_feats, feat_size].
-        """
-
-        # Retrieve desired items from storage dictionary
-        act_batch_ids = storage_dict['act_batch_ids']
-        act_map_ids = storage_dict['act_map_ids']
-        act_xy_ids = storage_dict['act_xy_ids']
-        pas_feats = storage_dict['pas_feats']
-        id_maps = storage_dict['id_maps']
-
-        # Get device and number of active features
-        device = in_act_feats.device
-        num_act_feats = len(in_act_feats)
-
-        # Get attention location indices
-        attn_offs = torch.tensor([[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]], device=device)
-        attn_offs = torch.arange(1, self.num_pts+1, device=device)[:, None, None] * attn_offs[None, :, :]
-        attn_xy_ids = act_xy_ids[:, None, None, :] + attn_offs[None, :, :, :]
-
-        # Get feature indices
-        act_batch_ids = act_batch_ids[:, None, None].expand(-1, self.num_pts, 8)
-        feat_ids = attn_xy_ids.new_empty([num_act_feats, self.num_pts, 8])
-
-        for map_id, id_map in enumerate(id_maps):
-            fH, fW = id_map.size()[-2:]
-            map_mask = act_map_ids == map_id
-
-            x_ids = attn_xy_ids[map_mask, :, :, 0].clamp_(min=0, max=fW-1)
-            y_ids = attn_xy_ids[map_mask, :, :, 1].clamp_(min=0, max=fH-1)
-
-            batch_ids = act_batch_ids[map_mask]
-            feat_ids[map_mask] = id_map[batch_ids, 0, y_ids, x_ids]
-
-        # Get feature weights
-        attn_weights = self.attn_weights(in_act_feats).view(num_act_feats, 8, self.num_pts)
-        feat_weights = F.softmax(attn_weights, dim=2).transpose(1, 2)
-
-        # Get weighted value features
-        weight = self.val_proj.weight
-        bias = self.val_proj.bias
-        val_feats = id_attn(in_act_feats, pas_feats, feat_ids, feat_weights, weight, bias)
-
-        # Get output active features
-        out_act_feats = self.out_proj(val_feats)
-
-        return out_act_feats
 
 
 @MODELS.register_module()
@@ -383,6 +383,79 @@ class IdScaleAttn(nn.Module):
         out_act_feats = self.out_proj(val_feats)
 
         return out_act_feats
+
+
+@MODELS.register_module()
+class MapToSps(nn.Module):
+    """
+    Class implementing the MapToSps module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input map from storage dictionary.
+        out_act_key (str): String with key to store output active features in storage dictionary.
+        out_pas_key (str): String with key to store output passive features in storage dictionary.
+        out_id_key (str): String with key to store output index map in storage dictionary.
+    """
+
+    def __init__(self, in_key, out_act_key, out_pas_key, out_id_key):
+        """
+        Initializes the MapToSps module.
+
+        Args:
+            in_key (str): String with key to retrieve input map from storage dictionary.
+            out_act_key (str): String with key to store output active features in storage dictionary.
+            out_pas_key (str): String with key to store output passive features in storage dictionary.
+            out_id_key (str): String with key to store output index map in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.out_act_key = out_act_key
+        self.out_pas_key = out_pas_key
+        self.out_id_key = out_id_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the MapToSps module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.in_key} (FloatTensor): input feature map of shape [num_groups, feat_size, fH, fW].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - {self.out_act_key} (FloatTensor): output active features of shape [num_groups*fH*fW, feat_size];
+                - {self.out_pas_key} (FloatTensor): output passive features of shape [0, feat_size];
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, fH, fW].
+        """
+
+        # Retrieve input map from storage dictionary
+        in_map = storage_dict[self.in_key]
+
+        # Get shape and device of input map
+        num_groups, feat_size, fH, fW = in_map.size()
+        device = in_map.device
+
+        # Get active features
+        act_feats = in_map.permute(0, 2, 3, 1).flatten(0, 2)
+
+        # Get passive features
+        pas_feats = in_map.new_empty([0, feat_size])
+
+        # Get index map
+        id_map = torch.arange(num_groups*fH*fW, device=device).view(num_groups, fH, fW)
+
+        # Store output in storage dictionary
+        storage_dict[self.out_act_key] = act_feats
+        storage_dict[self.out_pas_key] = pas_feats
+        storage_dict[self.out_id_key] = id_map
+
+        return storage_dict
 
 
 @MODELS.register_module()
