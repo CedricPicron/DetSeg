@@ -244,6 +244,47 @@ class Mul(nn.Module):
 
 
 @MODELS.register_module()
+class Permute(nn.Module):
+    """
+    Class implementing the Permute module.
+
+    Attributes:
+        dims (List): List of integers containing the output ordering of dimensions.
+    """
+
+    def __init__(self, dims):
+        """
+        Initializes the Permute module.
+
+        Args:
+            dims (List): List of integers containing the output ordering of dimensions.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set dims attribute
+        self.dims = dims
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Permute module.
+
+        Args:
+            in_tensor (Tensor): Input tensor to be permuted.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Permuted output tensor.
+        """
+
+        # Get output tensor
+        out_tensor = torch.permute(in_tensor, self.dims)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Transpose(nn.Module):
     """
     Class implementing the Transpose module.
@@ -278,7 +319,7 @@ class Transpose(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            out_tensor (FloatTensor): Transposed output tensor.
+            out_tensor (Tensor): Transposed output tensor.
         """
 
         # Get output tensor

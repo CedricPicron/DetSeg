@@ -238,6 +238,29 @@ model = dict(
                         ),
                     ],
                 ),
+                dict(
+                    type='MapToSps',
+                    in_key='roi_feats',
+                    out_act_key='act_feats',
+                    out_pas_key='pas_feats',
+                    out_id_key='sps_id_map',
+                ),
+                dict(
+                    type='StorageApply',
+                    in_key='ref_logits',
+                    out_key='ref_logits',
+                    module_cfg=[
+                        dict(
+                            type='Permute',
+                            dims=[0, 2, 3, 1],
+                        ),
+                        dict(
+                            type='nn.Flatten',
+                            start_dim=0,
+                            end_dim=2,
+                        ),
+                    ],
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',
