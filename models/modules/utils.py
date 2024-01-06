@@ -340,9 +340,67 @@ class GetBoxesTensor(nn.Module):
 
 
 @MODELS.register_module()
-class GetItem(nn.Module):
+class GetItemStorage(nn.Module):
     """
-    Class implementing the GetItem module.
+    Class implementing the GetItemStorage module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input from storage dictionary.
+        index_key (str): String with key to retrieve index from storage dictionary.
+        out_key (str): String with key to store output in storage dictionary.
+    """
+
+    def __init__(self, in_key, index_key, out_key):
+        """
+        Initializes the GetItemStorage module.
+
+        Args:
+            in_key (str): String with key to retrieve input from storage dictionary.
+            index_key (str): String with key to retrieve index from storage dictionary.
+            out_key (str): String with key to store output in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set index attribute
+        self.in_key = in_key
+        self.index_key = index_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the GetItemStorage module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_key} (Any): input to select items from;
+                - {self.index_key} (Any): index indicating items to be selected.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (Any): output with selected items from input.
+        """
+
+        # Retrieve desired items from storage dictionary
+        input = storage_dict[self.in_key]
+        index = storage_dict[self.index_key]
+
+        # Get output with selected items
+        output = input[index]
+
+        # Store output in storage dictionary
+        storage_dict[self.out_key] = output
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class GetItemTensor(nn.Module):
+    """
+    Class implementing the GetItemTensor module.
 
     Attributes:
         index (Any): Object selecting the desired items from the input.
@@ -350,7 +408,7 @@ class GetItem(nn.Module):
 
     def __init__(self, index):
         """
-        Initializes the GetItem module.
+        Initializes the GetItemTensor module.
 
         Args:
             index (any): Object selecting the desired items from the input.
@@ -364,7 +422,7 @@ class GetItem(nn.Module):
 
     def forward(self, input, **kwargs):
         """
-        Forward method of the GetItem module.
+        Forward method of the GetItemTensor module.
 
         Args:
             input (Any): Input to select the desired items from.

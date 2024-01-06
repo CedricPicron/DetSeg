@@ -316,6 +316,12 @@ model = dict(
                             out_pas_key='pas_feats',
                             out_id_key='sps_id_map',
                         ),
+                        dict(
+                            type='GetItemStorage',
+                            in_key='act_batch_ids',
+                            index_key='ref_mask',
+                            out_key='act_batch_ids'
+                        ),
                     ],
                 ),
                 dict(

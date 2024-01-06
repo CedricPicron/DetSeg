@@ -103,7 +103,7 @@ model = dict(
                     in_key='feat_maps',
                     out_key='feat_map_0',
                     module_cfg=dict(
-                        type='GetItem',
+                        type='GetItemTensor',
                         index=0,
                     ),
                 ),
