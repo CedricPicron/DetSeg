@@ -365,6 +365,16 @@ model = dict(
                     in_keys=['act_feats', 'fuse_feats'],
                     out_key='act_feats',
                 ),
+                dict(
+                    type='StorageApply',
+                    in_key='act_batch_ids',
+                    out_key='act_batch_ids',
+                    module_cfg=dict(
+                        type='RepeatInterleave',
+                        repeats=4,
+                        dim=0,
+                    ),
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',

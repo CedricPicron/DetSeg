@@ -379,6 +379,50 @@ class Permute(nn.Module):
 
 
 @MODELS.register_module()
+class RepeatInterleave(nn.Module):
+    """
+    Class implementing the RepeatInterleave module.
+
+    Attributes:
+        repeats (int): Integer containing the number of repeats.
+        dim (int): Integer containing the dimension along which to repeat.
+    """
+
+    def __init__(self, repeats, dim):
+        """
+        Initializes the RepeatInterleave module.
+
+        Args:
+            repeats (int): Integer containing the number of repeats.
+            dim (int): Integer containing the dimension along which to repeat.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.repeats = repeats
+        self.dim = dim
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the RepeatInterleave module.
+
+        Args:
+            in_tensor (Tensor): Input tensor to be repeated.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Repeated output tensor.
+        """
+
+        # Get output tensor
+        out_tensor = torch.repeat_interleave(in_tensor, self.repeats, dim=self.dim)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Topk(nn.Module):
     """
     Class implementing the Topk module.
