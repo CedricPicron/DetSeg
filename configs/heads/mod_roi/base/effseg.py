@@ -247,6 +247,26 @@ model = dict(
                 ),
                 dict(
                     type='StorageApply',
+                    in_key='roi_batch_ids',
+                    out_key='act_batch_ids',
+                    module_cfg=[
+                        dict(
+                            type='Unsqueeze',
+                            dim=1,
+                        ),
+                        dict(
+                            type='Expand',
+                            size=[-1, 196],
+                        ),
+                        dict(
+                            type='nn.Flatten',
+                            start_dim=0,
+                            end_dim=1,
+                        ),
+                    ],
+                ),
+                dict(
+                    type='StorageApply',
                     in_key='ref_logits',
                     out_key='ref_logits',
                     module_cfg=[

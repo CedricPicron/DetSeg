@@ -151,6 +151,47 @@ class Exp(nn.Module):
 
 
 @MODELS.register_module()
+class Expand(nn.Module):
+    """
+    Class implementing the Expand module.
+
+    Args:
+        size (List): List of size [num_dims] containing the size of the expanded tensor.
+    """
+
+    def __init__(self, size):
+        """
+        Initializes the Expand module.
+
+        Args:
+            size (List): List of size [num_dims] containing the size of the expanded tensor.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set size attribute
+        self.size = size
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Expand module.
+
+        Args:
+            in_tensor (Tensor): Input tensor to be expanded.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (FloatTensor): Expanded output tensor.
+        """
+
+        # Get output tensor
+        out_tensor = in_tensor.expand(*self.size)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Float(nn.Module):
     """
     Class implementing the Float module.
