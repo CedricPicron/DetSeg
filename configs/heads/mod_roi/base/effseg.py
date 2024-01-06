@@ -298,6 +298,42 @@ model = dict(
                         ),
                     ],
                 ),
+                dict(
+                    type='StorageApply',
+                    in_key='act_feats',
+                    out_key='fuse_feats',
+                    module_cfg=[
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**8,
+                            out_features=2**10,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='View',
+                            out_shape=(-1, 2**8),
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**8,
+                            out_features=2**8,
+                            bias=True,
+                        ),
+                    ]
+                ),
+                dict(
+                    type='SpsUpsample',
+                    in_act_key='act_feats',
+                    in_pas_key='pas_feats',
+                    in_id_key='sps_id_map',
+                    out_act_key='act_feats',
+                    out_pas_key='pas_feats',
+                    out_id_key='sps_id_map',
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',

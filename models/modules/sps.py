@@ -746,3 +746,92 @@ class SpsMask(nn.Module):
         storage_dict[self.out_id_key] = out_id_map
 
         return storage_dict
+
+
+@MODELS.register_module()
+class SpsUpsample(nn.Module):
+    """
+    Class implementing the SpsUpsample module.
+
+    Attributes:
+        in_act_key (str): String with key to retrieve input active features from storage dictionary.
+        in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
+        in_id_key (str): String with key to retrieve input index map from storage dictionary.
+        out_act_key (str): String with key to store output active features in storage dictionary.
+        out_pas_key (str): String with key to store output passive features in storage dictionary.
+        out_id_key (str): String with key to store output index map in storage dictionary.
+    """
+
+    def __init__(self, in_act_key, in_pas_key, in_id_key, out_act_key, out_pas_key, out_id_key):
+        """
+        Initializes the SpsUpsample module.
+
+        Args:
+            in_act_key (str): String with key to retrieve input active features from storage dictionary.
+            in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
+            in_id_key (str): String with key to retrieve input index map from storage dictionary.
+            out_act_key (str): String with key to store output active features in storage dictionary.
+            out_pas_key (str): String with key to store output passive features in storage dictionary.
+            out_id_key (str): String with key to store output index map in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_act_key = in_act_key
+        self.in_pas_key = in_pas_key
+        self.in_id_key = in_id_key
+        self.out_act_key = out_act_key
+        self.out_pas_key = out_pas_key
+        self.out_id_key = out_id_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the SpsUpsample module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_act_key} (FloatTensor): input active features of shape [num_act, feat_size];
+                - {self.in_pas_key} (FloatTensor): input passive features of shape [num_pas, feat_size];
+                - {self.in_id_key} (LongTensor): input index map of shape [num_groups, mH, mW].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - {self.out_act_key} (FloatTensor): output active features of shape [4*num_act, feat_size];
+                - {self.out_pas_key} (FloatTensor): output passive features of shape [num_pas, feat_size];
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, 2*mH, 2*mW].
+        """
+
+        # Retrieve desired items from storage dictionary
+        in_act_feats = storage_dict[self.in_act_key]
+        in_pas_feats = storage_dict[self.in_pas_key]
+        in_id_map = storage_dict[self.in_id_key]
+
+        # Get output active features
+        out_act_feats = in_act_feats.repeat_interleave(4, dim=0)
+
+        # Get output passive features
+        out_pas_feats = in_pas_feats
+
+        # Get output index map
+        num_act = in_act_feats.size(dim=0)
+        act_id_mask = in_id_map < num_act
+
+        id_map_0 = in_id_map
+        id_map_1 = torch.where(act_id_mask, id_map_0 + 1, id_map_0)
+        id_map_2 = torch.where(act_id_mask, id_map_0 + 2, id_map_0)
+        id_map_3 = torch.where(act_id_mask, id_map_0 + 3, id_map_0)
+
+        id_map_01 = torch.stack([id_map_0, id_map_1], dim=3).flatten(2)
+        id_map_23 = torch.stack([id_map_2, id_map_3], dim=3).flatten(2)
+        out_id_map = torch.stack([id_map_01, id_map_23], dim=2).flatten(1, 2)
+
+        # Store outputs in storage dictionary
+        storage_dict[self.out_act_key] = out_act_feats
+        storage_dict[self.out_pas_key] = out_pas_feats
+        storage_dict[self.out_id_key] = out_id_map
+
+        return storage_dict
