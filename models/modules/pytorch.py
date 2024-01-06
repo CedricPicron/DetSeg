@@ -11,6 +11,59 @@ from models.build import MODELS
 
 
 @MODELS.register_module()
+class Add(nn.Module):
+    """
+    Class implementing the Add module.
+
+    Attributes:
+        in_keys (List): List of strings with keys to retrieve input tensors from storage dictionary.
+        out_key (str): String with key to store addition output tensor in storage dictionary.
+    """
+
+    def __init__(self, in_keys, out_key):
+        """
+        Initializes the Add module.
+
+        Args:
+            in_keys (List): List of strings with keys to retrieve input tensors from storage dictionary.
+            out_key (str): String with key to store addition output tensor in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_keys = in_keys
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the Add module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {in_key} (Tensor): input tensor to be added of shape [*].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (Tensor): addition output tensor of shape [*].
+        """
+
+        # Retrieve input tensors from storage dictionary
+        in_list = [storage_dict[in_key] for in_key in self.in_keys]
+
+        # Get output tensor
+        out_tensor = sum(in_list)
+
+        # Store output tensor in storage dictionary
+        storage_dict[self.out_key] = out_tensor
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class Cat(nn.Module):
     """
     Class implementing the Cat module.

@@ -334,6 +334,11 @@ model = dict(
                     out_pas_key='pas_feats',
                     out_id_key='sps_id_map',
                 ),
+                dict(
+                    type='Add',
+                    in_keys=['act_feats', 'fuse_feats'],
+                    out_key='act_feats',
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',
