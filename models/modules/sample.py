@@ -86,7 +86,7 @@ class MapSampler2d(nn.Module):
         in_pts_key (str): String with key to retrieve input sample points from storage dictionary.
         batch_ids_key (str): String with key to retrieve group batch indices from storage dictionary.
         out_key (str): String with key to store output sampled features in storage dictionary.
-        sampler (BaseSampler): Module sampling the features at the desired locations.
+        sampler (BaseSampler2d): Module sampling the features at the desired locations.
     """
 
     def __init__(self, in_map_key, in_pts_key, batch_ids_key, out_key, **kwargs):
@@ -118,7 +118,7 @@ class MapSampler2d(nn.Module):
         Forward method of the MapSampler2d module.
 
         Args:
-            storage_dict (Dict): Storage dictionary (possibly) containing following keys:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
                 - {self.in_map_key} (FloatTensor): feature map to sample from of shape [batch_size, feat_size, fH, fW];
                 - {self.in_pts_key} (FloatTensor): normalized sample points of shape [num_groups, num_pts, 2];
                 - {self.batch_ids_key} (LongTensor): batch indices corresponding to each group of shape [num_groups].
@@ -157,6 +157,102 @@ class MapSampler2d(nn.Module):
 
         storage_dict.pop('in_map', None)
         storage_dict.pop('in_pts', None)
+
+        # Store sampled features in storage dictionary
+        storage_dict[self.out_key] = sample_feats
+
+        return storage_dict
+
+
+@MODELS.register_module()
+class MapsSampler2d(nn.Module):
+    """
+    Class implementing the MapsSampler2d module.
+
+    Attributes:
+        in_maps_key (str): String with key to retrieve inputs map from storage dictionary.
+        in_pts_key (str): String with key to retrieve input sample points from storage dictionary.
+        batch_ids_key (str): String with key to retrieve group batch indices from storage dictionary.
+        map_ids_key (str): String with key to retrieve group map indices from storage dictionary.
+        out_key (str): String with key to store output sampled features in storage dictionary.
+        sampler (MapSampler2d): Module sampling the features at the desired locations.
+    """
+
+    def __init__(self, in_map_key, in_pts_key, batch_ids_key, map_ids_key, out_key, **kwargs):
+        """
+        Initializes the MapsSampler2d module.
+
+        Args:
+            in_map_key (str): String with key to retrieve input map from storage dictionary.
+            in_pts_key (str): String with key to retrieve input sample points from storage dictionary.
+            batch_ids_key (str): String with key to retrieve group batch indices from storage dictionary.
+            map_ids_key (str): String with key to retrieve group map indices from storage dictionary.
+            out_key (str): String with key to store output sampled features in storage dictionary.
+            kwargs (Dict): Dictionary of keyword arguments passed to the MapSampler2d __init__ method.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Build underlying sampler
+        self.sampler = MapSampler2d('in_map', 'in_pts', 'in_batch_ids', 'out_feats', **kwargs)
+
+        # Set additional attributes
+        self.in_map_key = in_map_key
+        self.in_pts_key = in_pts_key
+        self.batch_ids_key = batch_ids_key
+        self.map_ids_key = map_ids_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the MapsSampler2d module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_maps_key} (List): list [num_maps] of feature maps of shape [batch_size, feat_size, fH, fW];
+                - {self.in_pts_key} (FloatTensor): normalized sample points of shape [num_groups, num_pts, 2];
+                - {self.batch_ids_key} (LongTensor): batch indices corresponding to each group of shape [num_groups];
+                - {self.map_ids_key} (LongTensor): map indices corresponding to each group of shape [num_groups].
+
+            kwargs (Dict): Dictionary of keyword arguments passed to the underlying sampler module.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (FloatTensor): sampled features of shape [num_groups, num_pts, feat_size].
+        """
+
+        # Retrieve desired items from storage dictionary
+        sample_maps = storage_dict[self.in_maps_key]
+        sample_pts = storage_dict[self.in_pts_key]
+        batch_ids = storage_dict[self.batch_ids_key]
+        map_ids = storage_dict[self.map_ids_key]
+
+        # Get number of maps, tensor shapes and device
+        num_maps = len(sample_maps)
+        feat_size = sample_maps[0].size(dim=1)
+        num_groups, num_pts = sample_pts.size()[:2]
+        device = sample_pts.device
+
+        # Get sampled features
+        sample_feats = torch.empty(num_groups, num_pts, feat_size, dtype=torch.float, device=device)
+
+        for i in range(num_maps):
+            map_mask = map_ids == i
+            num_groups_i = map_mask.sum().item()
+
+            if num_groups_i > 0:
+                storage_dict['in_map'] = sample_maps[i]
+                storage_dict['in_pts'] = sample_pts[map_mask]
+                storage_dict['in_batch_ids'] = batch_ids[map_mask]
+
+                storage_dict = self.sampler(storage_dict, **kwargs)
+                out_feats = storage_dict.pop('out_feats')
+                sample_feats[map_mask] = out_feats.view(num_groups_i, num_pts, feat_size)
+
+        storage_dict.pop('in_map', None)
+        storage_dict.pop('in_pts', None)
+        storage_dict.pop('in_batch_ids', None)
 
         # Store sampled features in storage dictionary
         storage_dict[self.out_key] = sample_feats

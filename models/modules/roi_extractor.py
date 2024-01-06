@@ -19,9 +19,10 @@ class MMDetRoIExtractor(nn.Module):
         ids_key (str): String with key to retrieve RoI group indices from storage dictionary.
         out_key (str): String with key to store output RoI map in storage dictionary.
         mmdet_roi_ext (nn.Module): Module containing the MMDetection RoI extractor.
+        map_ids_key (Dict): String with key to store RoI map indices in storage dictionary (or None).
     """
 
-    def __init__(self, in_key, boxes_key, ids_key, out_key, mmdet_roi_ext_cfg):
+    def __init__(self, in_key, boxes_key, ids_key, out_key, mmdet_roi_ext_cfg, map_ids_key=None):
         """
         Initializes the MMDetRoIExtractor module.
 
@@ -31,6 +32,7 @@ class MMDetRoIExtractor(nn.Module):
             ids_key (str): String with key to retrieve RoI group indices from storage dictionary.
             out_key (str): String with key to store output RoI map in storage dictionary.
             mmdet_roi_ext_cfg (Dict): Configuration dictionary specifying the underlying MMDetection RoI extractor.
+            map_ids_key (Dict): String with key to store RoI map indices in storage dictionary (or None).
         """
 
         # Initialization of default nn.Module
@@ -44,6 +46,7 @@ class MMDetRoIExtractor(nn.Module):
         self.boxes_key = boxes_key
         self.ids_key = ids_key
         self.out_key = out_key
+        self.map_ids_key = map_ids_key
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -59,8 +62,9 @@ class MMDetRoIExtractor(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            storage_dict (Dict): Storage dictionary containing following additional key:
-                - {self.out_key} (FloatTensor): extracted RoI features of shape [num_rois, feat_size, rH, rW].
+            storage_dict (Dict): Storage dictionary (possibly) containing following additional keys:
+                - {self.out_key} (FloatTensor): extracted RoI features of shape [num_rois, feat_size, rH, rW];
+                - {self.map_ids_key} (LongTensor): map indices from which RoIs were extracted of shape [num_rois].
         """
 
         # Retrieve desired items from storage dictionary
@@ -81,5 +85,10 @@ class MMDetRoIExtractor(nn.Module):
 
         # Store RoI features in storage dictionary
         storage_dict[self.out_key] = roi_feats
+
+        # Get and store RoI map indices if needed
+        if self.map_ids_key is not None:
+            map_ids = self.mmdet_roi_ext.map_roi_levels(roi_boxes, self.mmdet_roi_ext.num_inputs)
+            storage_dict[self.map_ids_key] = map_ids
 
         return storage_dict
