@@ -395,9 +395,11 @@ class MapToSps(nn.Module):
         out_act_key (str): String with key to store output active features in storage dictionary.
         out_pas_key (str): String with key to store output passive features in storage dictionary.
         out_id_key (str): String with key to store output index map in storage dictionary.
+        out_grp_key (str): String with key to store output group indices in storage dictionary.
+        out_pos_key (str): String with key to store output position indices in storage dictionary.
     """
 
-    def __init__(self, in_key, out_act_key, out_pas_key, out_id_key):
+    def __init__(self, in_key, out_act_key, out_pas_key, out_id_key, out_grp_key, out_pos_key):
         """
         Initializes the MapToSps module.
 
@@ -406,6 +408,8 @@ class MapToSps(nn.Module):
             out_act_key (str): String with key to store output active features in storage dictionary.
             out_pas_key (str): String with key to store output passive features in storage dictionary.
             out_id_key (str): String with key to store output index map in storage dictionary.
+            out_grp_key (str): String with key to store output group indices in storage dictionary.
+            out_pos_key (str): String with key to store output position indices in storage dictionary.
         """
 
         # Initialization of default nn.Module
@@ -416,6 +420,8 @@ class MapToSps(nn.Module):
         self.out_act_key = out_act_key
         self.out_pas_key = out_pas_key
         self.out_id_key = out_id_key
+        self.out_grp_key = out_grp_key
+        self.out_pos_key = out_pos_key
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -431,7 +437,9 @@ class MapToSps(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - {self.out_act_key} (FloatTensor): output active features of shape [num_groups*fH*fW, feat_size];
                 - {self.out_pas_key} (FloatTensor): output passive features of shape [0, feat_size];
-                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, fH, fW].
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, fH, fW];
+                - {self.out_grp_key} (LongTensor): output active group indices of shape [num_groups*fH*fW];
+                - {self.out_pos_key} (LongTensor): output active position indices of shape [num_groups*fH*fW, 2].
         """
 
         # Retrieve input map from storage dictionary
@@ -450,10 +458,23 @@ class MapToSps(nn.Module):
         # Get index map
         id_map = torch.arange(num_groups*fH*fW, device=device).view(num_groups, fH, fW)
 
-        # Store output in storage dictionary
+        # Get active group indices
+        act_grp_ids = torch.arange(num_groups, device=device)[:, None].expand(-1, fH*fW).flatten()
+
+        # Get active position indices
+        x_ids = torch.arange(fW, device=device)
+        y_ids = torch.arange(fH, device=device)
+
+        act_pos_ids = torch.meshgrid(x_ids, y_ids, indexing='xy')
+        act_pos_ids = torch.stack(act_pos_ids, dim=2)
+        act_pos_ids = act_pos_ids[None, :, :, :].expand(num_groups, -1, -1, -1).flatten(0, 2)
+
+        # Store outputs in storage dictionary
         storage_dict[self.out_act_key] = act_feats
         storage_dict[self.out_pas_key] = pas_feats
         storage_dict[self.out_id_key] = id_map
+        storage_dict[self.out_grp_key] = act_grp_ids
+        storage_dict[self.out_pos_key] = act_pos_ids
 
         return storage_dict
 
@@ -661,13 +682,18 @@ class SpsMask(nn.Module):
         in_act_key (str): String with key to retrieve input active features from storage dictionary.
         in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
         in_id_key (str): String with key to retrieve input index map from storage dictionary.
+        in_grp_key (str): String with key to retrieve input group indices from storage dictionary.
+        in_pos_key (str): String with key to retrieve input position indices from storage dictionary.
         mask_key (str): String with key to retrieve active mask from storage dictionary.
         out_act_key (str): String with key to store output active features in storage dictionary.
         out_pas_key (str): String with key to store output passive features in storage dictionary.
         out_id_key (str): String with key to store output index map in storage dictionary.
+        out_grp_key (str): String with key to store output group indices in storage dictionary.
+        out_pos_key (str): String with key to store output position indices in storage dictionary.
     """
 
-    def __init__(self, in_act_key, in_pas_key, in_id_key, mask_key, out_act_key, out_pas_key, out_id_key):
+    def __init__(self, in_act_key, in_pas_key, in_id_key, in_grp_key, in_pos_key, mask_key, out_act_key, out_pas_key,
+                 out_id_key, out_grp_key, out_pos_key):
         """
         Initializes the SpsMask module.
 
@@ -675,10 +701,14 @@ class SpsMask(nn.Module):
             in_act_key (str): String with key to retrieve input active features from storage dictionary.
             in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
             in_id_key (str): String with key to retrieve input index map from storage dictionary.
+            in_grp_key (str): String with key to retrieve input group indices from storage dictionary.
+            in_pos_key (str): String with key to retrieve input position indices from storage dictionary.
             mask_key (str): String with key to retrieve active mask from storage dictionary.
             out_act_key (str): String with key to store output active features in storage dictionary.
             out_pas_key (str): String with key to store output passive features in storage dictionary.
             out_id_key (str): String with key to store output index map in storage dictionary.
+            out_grp_key (str): String with key to store output group indices in storage dictionary.
+            out_pos_key (str): String with key to store output position indices in storage dictionary.
         """
 
         # Initialization of default nn.Module
@@ -688,10 +718,14 @@ class SpsMask(nn.Module):
         self.in_act_key = in_act_key
         self.in_pas_key = in_pas_key
         self.in_id_key = in_id_key
+        self.in_grp_key = in_grp_key
+        self.in_pos_key = in_pos_key
         self.mask_key = mask_key
         self.out_act_key = out_act_key
         self.out_pas_key = out_pas_key
         self.out_id_key = out_id_key
+        self.out_grp_key = out_grp_key
+        self.out_pos_key = out_pos_key
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -702,6 +736,8 @@ class SpsMask(nn.Module):
                 - {self.in_act_key} (FloatTensor): input active features of shape [num_in_act, feat_size];
                 - {self.in_pas_key} (FloatTensor): input passive features of shape [num_in_pas, feat_size];
                 - {self.in_id_key} (LongTensor): input index map of shape [num_groups, mH, mW];
+                - {self.in_grp_key} (LongTensor): input group indices of shape [num_in_act];
+                - {self.in_pos_key} (LongTensor): input position indices of shape [num_in_act, 2];
                 - {self.mask_key} (BoolTensor): mask selecting the output active features of shape [num_in_act].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
@@ -710,13 +746,17 @@ class SpsMask(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - {self.out_act_key} (FloatTensor): output active features of shape [num_out_act, feat_size];
                 - {self.out_pas_key} (FloatTensor): output passive features of shape [num_out_pas, feat_size];
-                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, mH, mW].
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, mH, mW];
+                - {self.out_grp_key} (LongTensor): output group indices of shape [num_out_act];
+                - {self.out_pos_key} (LongTensor): output position indices of shape [num_out_act, 2].
         """
 
         # Retrieve desired items from storage dictionary
         in_act_feats = storage_dict[self.in_act_key]
         in_pas_feats = storage_dict[self.in_pas_key]
         in_id_map = storage_dict[self.in_id_key]
+        in_grp_ids = storage_dict[self.in_grp_key]
+        in_pos_ids = storage_dict[self.in_pos_key]
         act_mask = storage_dict[self.mask_key]
 
         # Get output active features
@@ -740,10 +780,18 @@ class SpsMask(nn.Module):
         new_ids = torch.cat([new_act_ids, new_pas_ids], dim=0)
         out_id_map = new_ids[in_id_map]
 
+        # Get output group indices
+        out_grp_ids = in_grp_ids[act_mask]
+
+        # Get output position indices
+        out_pos_ids = in_pos_ids[act_mask]
+
         # Store outputs in storage dictionary
         storage_dict[self.out_act_key] = out_act_feats
         storage_dict[self.out_pas_key] = out_pas_feats
         storage_dict[self.out_id_key] = out_id_map
+        storage_dict[self.out_grp_key] = out_grp_ids
+        storage_dict[self.out_pos_key] = out_pos_ids
 
         return storage_dict
 
@@ -757,12 +805,17 @@ class SpsUpsample(nn.Module):
         in_act_key (str): String with key to retrieve input active features from storage dictionary.
         in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
         in_id_key (str): String with key to retrieve input index map from storage dictionary.
+        in_grp_key (str): String with key to retrieve input group indices from storage dictionary.
+        in_pos_key (str): String with key to retrieve input position indices from storage dictionary.
         out_act_key (str): String with key to store output active features in storage dictionary.
         out_pas_key (str): String with key to store output passive features in storage dictionary.
         out_id_key (str): String with key to store output index map in storage dictionary.
+        out_grp_key (str): String with key to store output group indices in storage dictionary.
+        out_pos_key (str): String with key to store output position indices in storage dictionary.
     """
 
-    def __init__(self, in_act_key, in_pas_key, in_id_key, out_act_key, out_pas_key, out_id_key):
+    def __init__(self, in_act_key, in_pas_key, in_id_key, in_grp_key, in_pos_key, out_act_key, out_pas_key, out_id_key,
+                 out_grp_key, out_pos_key):
         """
         Initializes the SpsUpsample module.
 
@@ -770,9 +823,13 @@ class SpsUpsample(nn.Module):
             in_act_key (str): String with key to retrieve input active features from storage dictionary.
             in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
             in_id_key (str): String with key to retrieve input index map from storage dictionary.
+            in_grp_key (str): String with key to retrieve input group indices from storage dictionary.
+            in_pos_key (str): String with key to retrieve input position indices from storage dictionary.
             out_act_key (str): String with key to store output active features in storage dictionary.
             out_pas_key (str): String with key to store output passive features in storage dictionary.
             out_id_key (str): String with key to store output index map in storage dictionary.
+            out_grp_key (str): String with key to store output group indices in storage dictionary.
+            out_pos_key (str): String with key to store output position indices in storage dictionary.
         """
 
         # Initialization of default nn.Module
@@ -782,9 +839,13 @@ class SpsUpsample(nn.Module):
         self.in_act_key = in_act_key
         self.in_pas_key = in_pas_key
         self.in_id_key = in_id_key
+        self.in_grp_key = in_grp_key
+        self.in_pos_key = in_pos_key
         self.out_act_key = out_act_key
         self.out_pas_key = out_pas_key
         self.out_id_key = out_id_key
+        self.out_grp_key = out_grp_key
+        self.out_pos_key = out_pos_key
 
     def forward(self, storage_dict, **kwargs):
         """
@@ -794,7 +855,9 @@ class SpsUpsample(nn.Module):
             storage_dict (Dict): Storage dictionary containing at least following keys:
                 - {self.in_act_key} (FloatTensor): input active features of shape [num_act, feat_size];
                 - {self.in_pas_key} (FloatTensor): input passive features of shape [num_pas, feat_size];
-                - {self.in_id_key} (LongTensor): input index map of shape [num_groups, mH, mW].
+                - {self.in_id_key} (LongTensor): input index map of shape [num_groups, mH, mW];
+                - {self.in_grp_key} (LongTensor): input group indices of shape [num_act];
+                - {self.in_pos_key} (LongTensor): input position indices of shape [num_act, 2].
 
             kwargs (Dict): Dictionary of unused keyword arguments.
 
@@ -802,13 +865,17 @@ class SpsUpsample(nn.Module):
             storage_dict (Dict): Storage dictionary containing following additional keys:
                 - {self.out_act_key} (FloatTensor): output active features of shape [4*num_act, feat_size];
                 - {self.out_pas_key} (FloatTensor): output passive features of shape [num_pas, feat_size];
-                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, 2*mH, 2*mW].
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, 2*mH, 2*mW];
+                - {self.out_grp_key} (LongTensor): output group indices of shape [4*num_act];
+                - {self.out_pos_key} (LongTensor): output position indices of shape [4*num_act, 2].
         """
 
         # Retrieve desired items from storage dictionary
         in_act_feats = storage_dict[self.in_act_key]
         in_pas_feats = storage_dict[self.in_pas_key]
         in_id_map = storage_dict[self.in_id_key]
+        in_grp_ids = storage_dict[self.in_grp_key]
+        in_pos_ids = storage_dict[self.in_pos_key]
 
         # Get output active features
         out_act_feats = in_act_feats.repeat_interleave(4, dim=0)
@@ -829,9 +896,20 @@ class SpsUpsample(nn.Module):
         id_map_23 = torch.stack([id_map_2, id_map_3], dim=3).flatten(2)
         out_id_map = torch.stack([id_map_01, id_map_23], dim=2).flatten(1, 2)
 
+        # Get output group indices
+        out_grp_ids = in_grp_ids.repeat_interleave(4, dim=0)
+
+        # Get output position indices
+        pos_offs = torch.tensor([[0, 0], [1, 0], [0, 1], [1, 1]], device=in_pos_ids.device)
+
+        out_pos_ids = 2*in_pos_ids[:, None, :] + pos_offs
+        out_pos_ids = out_pos_ids.flatten(0, 1)
+
         # Store outputs in storage dictionary
         storage_dict[self.out_act_key] = out_act_feats
         storage_dict[self.out_pas_key] = out_pas_feats
         storage_dict[self.out_id_key] = out_id_map
+        storage_dict[self.out_grp_key] = out_grp_ids
+        storage_dict[self.out_pos_key] = out_pos_ids
 
         return storage_dict
