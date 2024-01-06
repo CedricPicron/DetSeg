@@ -650,3 +650,99 @@ class Sparse3d(nn.Module):
         out_feat_maps = seq_to_maps(seq_feats, storage_dict['map_shapes'])
 
         return out_feat_maps
+
+
+@MODELS.register_module()
+class SpsMask(nn.Module):
+    """
+    Class implementing the SpsMask module.
+
+    Attributes:
+        in_act_key (str): String with key to retrieve input active features from storage dictionary.
+        in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
+        in_id_key (str): String with key to retrieve input index map from storage dictionary.
+        mask_key (str): String with key to retrieve active mask from storage dictionary.
+        out_act_key (str): String with key to store output active features in storage dictionary.
+        out_pas_key (str): String with key to store output passive features in storage dictionary.
+        out_id_key (str): String with key to store output index map in storage dictionary.
+    """
+
+    def __init__(self, in_act_key, in_pas_key, in_id_key, mask_key, out_act_key, out_pas_key, out_id_key):
+        """
+        Initializes the SpsMask module.
+
+        Args:
+            in_act_key (str): String with key to retrieve input active features from storage dictionary.
+            in_pas_key (str): String with key to retrieve input passive features from storage dictionary.
+            in_id_key (str): String with key to retrieve input index map from storage dictionary.
+            mask_key (str): String with key to retrieve active mask from storage dictionary.
+            out_act_key (str): String with key to store output active features in storage dictionary.
+            out_pas_key (str): String with key to store output passive features in storage dictionary.
+            out_id_key (str): String with key to store output index map in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_act_key = in_act_key
+        self.in_pas_key = in_pas_key
+        self.in_id_key = in_id_key
+        self.mask_key = mask_key
+        self.out_act_key = out_act_key
+        self.out_pas_key = out_pas_key
+        self.out_id_key = out_id_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the SpsMask module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_act_key} (FloatTensor): input active features of shape [num_in_act, feat_size];
+                - {self.in_pas_key} (FloatTensor): input passive features of shape [num_in_pas, feat_size];
+                - {self.in_id_key} (LongTensor): input index map of shape [num_groups, mH, mW];
+                - {self.mask_key} (BoolTensor): mask selecting the output active features of shape [num_in_act].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional keys:
+                - {self.out_act_key} (FloatTensor): output active features of shape [num_out_act, feat_size];
+                - {self.out_pas_key} (FloatTensor): output passive features of shape [num_out_pas, feat_size];
+                - {self.out_id_key} (LongTensor): output index map of shape [num_groups, mH, mW].
+        """
+
+        # Retrieve desired items from storage dictionary
+        in_act_feats = storage_dict[self.in_act_key]
+        in_pas_feats = storage_dict[self.in_pas_key]
+        in_id_map = storage_dict[self.in_id_key]
+        act_mask = storage_dict[self.mask_key]
+
+        # Get output active features
+        out_act_feats = in_act_feats[act_mask]
+
+        # Get output passive features
+        out_pas_feats = torch.cat([in_pas_feats, in_act_feats[~act_mask]], dim=0)
+
+        # Get output index map
+        device = in_id_map.device
+
+        num_in_act = in_act_feats.size(dim=0)
+        num_out_act = out_act_feats.size(dim=0)
+        num_in_pas = in_pas_feats.size(dim=0)
+
+        new_act_ids = torch.empty(num_in_act, dtype=torch.int64, device=device)
+        new_act_ids[act_mask] = torch.arange(num_out_act, device=device)
+        new_pas_ids = num_out_act + torch.arange(num_in_pas, device=device)
+        new_act_ids[~act_mask] = num_out_act + num_in_pas + torch.arange(num_in_act-num_out_act, device=device)
+
+        new_ids = torch.cat([new_act_ids, new_pas_ids], dim=0)
+        out_id_map = new_ids[in_id_map]
+
+        # Store outputs in storage dictionary
+        storage_dict[self.out_act_key] = out_act_feats
+        storage_dict[self.out_pas_key] = out_pas_feats
+        storage_dict[self.out_id_key] = out_id_map
+
+        return storage_dict
