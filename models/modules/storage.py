@@ -315,29 +315,33 @@ class StorageGetApply(nn.Module):
 
     Attributes:
         module_key (str): String with key to retrieve underlying module from storage dictionary.
+        id_key (str): String with key to retrieve module id from storage dictionary (or None).
     """
 
-    def __init__(self, module_key):
+    def __init__(self, module_key, id_key=None):
         """
         Initializes the StorageGetApply module.
 
         Args:
             module_key (str): String with key to retrieve underlying module from storage dictionary.
+            id_key (str): String with key to retrieve module id from storage dictionary (default=None).
         """
 
         # Initialization of default nn.Module
         super().__init__()
 
-        # Set additional attribute
+        # Set additional attributes
         self.module_key = module_key
+        self.id_key = id_key
 
     def forward(self, storage_dict, **kwargs):
         """
         Forward method of the StorageGetApply module.
 
         Args:
-            storage_dict (Dict): Storage dictionary containing at least following key:
-                - {self.module_key} (nn.Module): underlying module to be applied.
+            storage_dict (Dict): Storage dictionary possibly containing following keys:
+                - {module_key} (nn.Module): underlying module to be applied;
+                - {self.id_key} (int): integer containing the module id.
 
             kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
 
@@ -345,8 +349,15 @@ class StorageGetApply(nn.Module):
             storage_dict (Dict): Storage dictionary possibly containing new or updated keys.
         """
 
+        # Get module key
+        module_key = self.module_key
+
+        if self.id_key is not None:
+            module_id = storage_dict[self.id_key]
+            module_key = f'{module_key}_{module_id}'
+
         # Retrieve underlying module from storage dictionary
-        module = storage_dict[self.module_key]
+        module = storage_dict[module_key]
 
         # Apply underlying module
         storage_dict = module(storage_dict, **kwargs)
@@ -362,17 +373,19 @@ class StorageIterate(nn.Module):
     Attributes:
         num_iters (int): Integer containing the number of iterations over the underlying module.
         module (nn.Module): Underlying module to be iterated over.
-        last_iter_key (str): String with key to store the last iteration boolean (or None).
+        iter_key (str): String with key to store iteration index in storage dictionary (or None).
+        last_iter_key (str): String with key to store last iteration boolean in storage dictionary (or None).
     """
 
-    def __init__(self, num_iters, module_cfg, last_iter_key=None):
+    def __init__(self, num_iters, module_cfg, iter_key=None, last_iter_key=None):
         """
         Initializes the StorageIterate module.
 
         Args:
             num_iters (int): Integer containing the number of iterations over the underlying module.
             module_cfg (Dict): Configuration dictionary specifying the module to be iterated over.
-            last_iter_key (str): String with key to store the last iteration boolean (default=None).
+            iter_key (str): String with key to store iteration index in storage dictionary (default=None).
+            last_iter_key (str): String with key to store last iteration boolean in storage dictionary (default=None).
         """
 
         # Initialization of default nn.Module
@@ -383,6 +396,7 @@ class StorageIterate(nn.Module):
 
         # Set additional attributes
         self.num_iters = num_iters
+        self.iter_key = iter_key
         self.last_iter_key = last_iter_key
 
     def forward(self, storage_dict, **kwargs):
@@ -394,12 +408,16 @@ class StorageIterate(nn.Module):
             kwargs (Dict): Dictionary of keyword arguments passed to the underlying module.
 
         Returns:
-            storage_dict (Dict): Storage dictionary possibly containing following additional key:
+            storage_dict (Dict): Storage dictionary possibly containing following additional keys:
+                - {self.iter_key} (int): integer containing the iteration index;
                 - {self.last_iter_key} (bool): boolean indicating whether in last iteration.
         """
 
         # Iteratively apply underlying module
         for i in range(self.num_iters):
+            if self.iter_key is not None:
+                storage_dict[self.iter_key] = i
+
             if self.last_iter_key is not None:
                 storage_dict[self.last_iter_key] = i == (self.num_iters - 1)
 

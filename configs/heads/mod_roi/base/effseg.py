@@ -239,9 +239,67 @@ model = dict(
                         ),
                     ],
                 ),
-                dict(
+                *[dict(
                     type='StorageAdd',
-                    module_key='trans',
+                    module_key=f'fuse_td_{i}',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='act_feats',
+                        out_key='fuse_feats',
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(8-i),
+                                out_features=2**(10-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='View',
+                                out_shape=(-1, 2**(8-i)),
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(8-i),
+                                out_features=2**(8-i),
+                                bias=True,
+                            ),
+                        ],
+                    ),
+                ) for i in range(3)],
+                *[dict(
+                    type='StorageAdd',
+                    module_key=f'fuse_key_{i}',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='fuse_feats',
+                        out_key='fuse_feats',
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=256 + 2**(8-i),
+                                out_features=2**(8-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(8-i),
+                                out_features=2**(8-i),
+                                bias=True,
+                            ),
+                        ],
+                    ),
+                ) for i in range(3)],
+                *[dict(
+                    type='StorageAdd',
+                    module_key=f'trans_{i}',
                     module_cfg=dict(
                         type='StorageApply',
                         in_key='trans_feats',
@@ -249,8 +307,8 @@ model = dict(
                         module_cfg=[
                             dict(
                                 type='nn.Linear',
-                                in_features=2**8,
-                                out_features=2**7,
+                                in_features=2**(8-i),
+                                out_features=2**(7-i),
                                 bias=True,
                             ),
                             dict(
@@ -259,7 +317,128 @@ model = dict(
                             ),
                         ],
                     ),
-                ),
+                ) for i in range(3)],
+                *[dict(
+                    type='StorageAdd',
+                    module_key=f'proc_{i}',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='act_feats',
+                        out_key='act_feats',
+                        storage_kwargs={
+                            'pas_feats': 'aux_feats',
+                            'sps_id_map': 'id_map',
+                            'act_roi_ids': 'roi_ids',
+                            'act_pos_ids': 'pos_ids',
+                        },
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=2**(7-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='ModuleSum',
+                                sub_module_cfgs=[[
+                                    dict(
+                                        type='IdConv2d',
+                                        in_channels=2**(7-i),
+                                        out_channels=2**(7-i),
+                                        kernel_size=3,
+                                        dilation=dilation,
+                                    ),
+                                    dict(
+                                        type='nn.ReLU',
+                                        inplace=True,
+                                    ),
+                                ] for dilation in (1, 3, 5)],
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=2**(7-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=2**(7-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                        ],
+                    ),
+                ) for i in range(3)],
+                *[dict(
+                    type='StorageAdd',
+                    module_key=f'mask_module_{i}',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='act_feats',
+                        out_key='act_mask_logits',
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=2**(7-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=1,
+                                bias=True,
+                            ),
+                        ],
+                    ),
+                ) for i in range(3)],
+                *[dict(
+                    type='StorageAdd',
+                    module_key=f'ref_module_{i}',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='act_feats',
+                        out_key='ref_logits',
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=2**(7-i),
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**(7-i),
+                                out_features=1,
+                                bias=True,
+                            ),
+                            dict(
+                                type='Squeeze',
+                                dim=1,
+                            ),
+                        ],
+                    ),
+                ) for i in range(3)],
                 dict(
                     type='MapToSps',
                     in_key='roi_feats',
@@ -326,38 +505,75 @@ model = dict(
                     ],
                 ),
                 dict(
-                    type='RefineBool',
-                    in_key='act_feats',
-                    out_key='ref_bool',
-                    num_refines=10000,
-                ),
-                dict(
-                    type='StorageCondition',
-                    cond_key='ref_bool',
+                    type='StorageIterate',
+                    num_iters=3,
+                    iter_key='iter_id',
                     module_cfg=[
                         dict(
-                            type='Topk',
-                            in_key='ref_logits',
-                            out_ids_key='ref_ids',
-                            topk_kwargs=dict(
-                                k=10000,
-                                sorted=False,
-                            ),
+                            type='RefineBool',
+                            in_key='act_feats',
+                            out_key='ref_bool',
+                            num_refines=10000,
                         ),
                         dict(
-                            type='IdsToMask',
-                            in_key='ref_ids',
-                            size_key='ref_logits',
-                            out_key='ref_mask',
+                            type='StorageCondition',
+                            cond_key='ref_bool',
+                            module_cfg=[
+                                dict(
+                                    type='Topk',
+                                    in_key='ref_logits',
+                                    out_ids_key='ref_ids',
+                                    topk_kwargs=dict(
+                                        k=10000,
+                                        sorted=False,
+                                    ),
+                                ),
+                                dict(
+                                    type='IdsToMask',
+                                    in_key='ref_ids',
+                                    size_key='ref_logits',
+                                    out_key='ref_mask',
+                                ),
+                                dict(
+                                    type='SpsMask',
+                                    in_act_key='act_feats',
+                                    in_pas_key='pas_feats',
+                                    in_id_key='sps_id_map',
+                                    in_grp_key='act_roi_ids',
+                                    in_pos_key='act_pos_ids',
+                                    mask_key='ref_mask',
+                                    out_act_key='act_feats',
+                                    out_pas_key='pas_feats',
+                                    out_id_key='sps_id_map',
+                                    out_grp_key='act_roi_ids',
+                                    out_pos_key='act_pos_ids',
+                                ),
+                                dict(
+                                    type='GetItemStorage',
+                                    in_key='act_batch_ids',
+                                    index_key='ref_mask',
+                                    out_key='act_batch_ids'
+                                ),
+                                dict(
+                                    type='GetItemStorage',
+                                    in_key='act_map_ids',
+                                    index_key='ref_mask',
+                                    out_key='act_map_ids'
+                                ),
+                            ],
                         ),
                         dict(
-                            type='SpsMask',
+                            type='StorageGetApply',
+                            module_key='fuse_td',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='SpsUpsample',
                             in_act_key='act_feats',
                             in_pas_key='pas_feats',
                             in_id_key='sps_id_map',
                             in_grp_key='act_roi_ids',
                             in_pos_key='act_pos_ids',
-                            mask_key='ref_mask',
                             out_act_key='act_feats',
                             out_pas_key='pas_feats',
                             out_id_key='sps_id_map',
@@ -365,264 +581,152 @@ model = dict(
                             out_pos_key='act_pos_ids',
                         ),
                         dict(
+                            type='Add',
+                            in_keys=['act_feats', 'fuse_feats'],
+                            out_key='act_feats',
+                        ),
+                        dict(
+                            type='IdsToPts2d',
+                            in_key='act_pos_ids',
+                            size_key='sps_id_map',
+                            out_key='act_pos_xy',
+                        ),
+                        dict(
+                            type='StorageApply',
+                            in_key='act_pos_xy',
+                            out_key='act_pos_xy',
+                            module_cfg=dict(
+                                type='Unsqueeze',
+                                dim=1,
+                            ),
+                        ),
+                        dict(
                             type='GetItemStorage',
+                            in_key='roi_boxes',
+                            index_key='act_roi_ids',
+                            out_key='act_boxes',
+                        ),
+                        dict(
+                            type='BoxToImgPts',
+                            in_key='act_pos_xy',
+                            boxes_key='act_boxes',
+                            out_key='act_pos_xy',
+                        ),
+                        dict(
+                            type='StorageApply',
                             in_key='act_batch_ids',
-                            index_key='ref_mask',
-                            out_key='act_batch_ids'
+                            out_key='act_batch_ids',
+                            module_cfg=dict(
+                                type='RepeatInterleave',
+                                repeats=4,
+                                dim=0,
+                            ),
                         ),
                         dict(
-                            type='GetItemStorage',
+                            type='StorageApply',
                             in_key='act_map_ids',
-                            index_key='ref_mask',
-                            out_key='act_map_ids'
-                        ),
-                    ],
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='act_feats',
-                    out_key='fuse_feats',
-                    module_cfg=[
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**8,
-                            out_features=2**10,
-                            bias=True,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                        dict(
-                            type='View',
-                            out_shape=(-1, 2**8),
-                        ),
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**8,
-                            out_features=2**8,
-                            bias=True,
-                        ),
-                    ]
-                ),
-                dict(
-                    type='SpsUpsample',
-                    in_act_key='act_feats',
-                    in_pas_key='pas_feats',
-                    in_id_key='sps_id_map',
-                    in_grp_key='act_roi_ids',
-                    in_pos_key='act_pos_ids',
-                    out_act_key='act_feats',
-                    out_pas_key='pas_feats',
-                    out_id_key='sps_id_map',
-                    out_grp_key='act_roi_ids',
-                    out_pos_key='act_pos_ids',
-                ),
-                dict(
-                    type='Add',
-                    in_keys=['act_feats', 'fuse_feats'],
-                    out_key='act_feats',
-                ),
-                dict(
-                    type='IdsToPts2d',
-                    in_key='act_pos_ids',
-                    size_key='sps_id_map',
-                    out_key='act_pos_xy',
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='act_pos_xy',
-                    out_key='act_pos_xy',
-                    module_cfg=dict(
-                        type='Unsqueeze',
-                        dim=1,
-                    ),
-                ),
-                dict(
-                    type='GetItemStorage',
-                    in_key='roi_boxes',
-                    index_key='act_roi_ids',
-                    out_key='act_boxes',
-                ),
-                dict(
-                    type='BoxToImgPts',
-                    in_key='act_pos_xy',
-                    boxes_key='act_boxes',
-                    out_key='act_pos_xy',
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='act_batch_ids',
-                    out_key='act_batch_ids',
-                    module_cfg=dict(
-                        type='RepeatInterleave',
-                        repeats=4,
-                        dim=0,
-                    ),
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='act_map_ids',
-                    out_key='act_map_ids',
-                    module_cfg=[
-                        dict(
-                            type='AddValue',
-                            value=-1,
-                        ),
-                        dict(
-                            type='Clamp',
-                            min=0,
-                        ),
-                        dict(
-                            type='RepeatInterleave',
-                            repeats=4,
-                            dim=0,
-                        ),
-                    ]
-                ),
-                dict(
-                    type='MapsSampler2d',
-                    in_maps_key='feat_maps',
-                    in_pts_key='act_pos_xy',
-                    batch_ids_key='act_batch_ids',
-                    map_ids_key='act_map_ids',
-                    out_key='fuse_feats',
-                    grid_sample_kwargs=dict(
-                        mode='bilinear',
-                        align_corners=False,
-                    ),
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='fuse_feats',
-                    out_key='fuse_feats',
-                    module_cfg=dict(
-                        type='Squeeze',
-                        dim=1,
-                    ),
-                ),
-                dict(
-                    type='Cat',
-                    in_keys=['act_feats', 'fuse_feats'],
-                    out_key='fuse_feats',
-                    dim=1,
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='fuse_feats',
-                    out_key='fuse_feats',
-                    module_cfg=[
-                        dict(
-                            type='nn.Linear',
-                            in_features=256 + 2**8,
-                            out_features=2**8,
-                            bias=True,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**8,
-                            out_features=2**8,
-                            bias=True,
-                        ),
-                    ],
-                ),
-                dict(
-                    type='Add',
-                    in_keys=['act_feats', 'fuse_feats'],
-                    out_key='act_feats',
-                ),
-                dict(
-                    type='StorageCopy',
-                    in_key='act_feats',
-                    out_key='trans_feats',
-                    copy_type='assign',
-                ),
-                dict(
-                    type='StorageGetApply',
-                    module_key='trans',
-                ),
-                dict(
-                    type='StorageCopy',
-                    in_key='trans_feats',
-                    out_key='act_feats',
-                    copy_type='assign',
-                ),
-                dict(
-                    type='StorageCopy',
-                    in_key='pas_feats',
-                    out_key='trans_feats',
-                    copy_type='assign',
-                ),
-                dict(
-                    type='StorageGetApply',
-                    module_key='trans',
-                ),
-                dict(
-                    type='StorageCopy',
-                    in_key='trans_feats',
-                    out_key='pas_feats',
-                    copy_type='assign',
-                ),
-                dict(
-                    type='StorageApply',
-                    in_key='act_feats',
-                    out_key='act_feats',
-                    storage_kwargs={
-                        'pas_feats': 'aux_feats',
-                        'sps_id_map': 'id_map',
-                        'act_roi_ids': 'roi_ids',
-                        'act_pos_ids': 'pos_ids',
-                    },
-                    module_cfg=[
-                        dict(
-                            type='nn.Linear',
-                            in_features=2**7,
-                            out_features=2**7,
-                            bias=True,
-                        ),
-                        dict(
-                            type='nn.ReLU',
-                            inplace=True,
-                        ),
-                        dict(
-                            type='ModuleSum',
-                            sub_module_cfgs=[[
+                            out_key='act_map_ids',
+                            module_cfg=[
                                 dict(
-                                    type='IdConv2d',
-                                    in_channels=2**7,
-                                    out_channels=2**7,
-                                    kernel_size=3,
-                                    dilation=dilation,
+                                    type='AddValue',
+                                    value=-1,
                                 ),
                                 dict(
-                                    type='nn.ReLU',
-                                    inplace=True,
+                                    type='Clamp',
+                                    min=0,
                                 ),
-                            ] for dilation in (1, 3, 5)],
+                                dict(
+                                    type='RepeatInterleave',
+                                    repeats=4,
+                                    dim=0,
+                                ),
+                            ]
                         ),
                         dict(
-                            type='nn.Linear',
-                            in_features=2**7,
-                            out_features=2**7,
-                            bias=True,
+                            type='MapsSampler2d',
+                            in_maps_key='feat_maps',
+                            in_pts_key='act_pos_xy',
+                            batch_ids_key='act_batch_ids',
+                            map_ids_key='act_map_ids',
+                            out_key='fuse_feats',
+                            grid_sample_kwargs=dict(
+                                mode='bilinear',
+                                align_corners=False,
+                            ),
                         ),
                         dict(
-                            type='nn.ReLU',
-                            inplace=True,
+                            type='StorageApply',
+                            in_key='fuse_feats',
+                            out_key='fuse_feats',
+                            module_cfg=dict(
+                                type='Squeeze',
+                                dim=1,
+                            ),
                         ),
                         dict(
-                            type='nn.Linear',
-                            in_features=2**7,
-                            out_features=2**7,
-                            bias=True,
+                            type='Cat',
+                            in_keys=['act_feats', 'fuse_feats'],
+                            out_key='fuse_feats',
+                            dim=1,
                         ),
                         dict(
-                            type='nn.ReLU',
-                            inplace=True,
+                            type='StorageGetApply',
+                            module_key='fuse_key',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='Add',
+                            in_keys=['act_feats', 'fuse_feats'],
+                            out_key='act_feats',
+                        ),
+                        dict(
+                            type='StorageCopy',
+                            in_key='act_feats',
+                            out_key='trans_feats',
+                            copy_type='assign',
+                        ),
+                        dict(
+                            type='StorageGetApply',
+                            module_key='trans',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='StorageCopy',
+                            in_key='trans_feats',
+                            out_key='act_feats',
+                            copy_type='assign',
+                        ),
+                        dict(
+                            type='StorageCopy',
+                            in_key='pas_feats',
+                            out_key='trans_feats',
+                            copy_type='assign',
+                        ),
+                        dict(
+                            type='StorageGetApply',
+                            module_key='trans',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='StorageCopy',
+                            in_key='trans_feats',
+                            out_key='pas_feats',
+                            copy_type='assign',
+                        ),
+                        dict(
+                            type='StorageGetApply',
+                            module_key='proc',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='StorageGetApply',
+                            module_key='mask_module',
+                            id_key='iter_id',
+                        ),
+                        dict(
+                            type='StorageGetApply',
+                            module_key='ref_module',
+                            id_key='iter_id',
                         ),
                     ],
                 ),
