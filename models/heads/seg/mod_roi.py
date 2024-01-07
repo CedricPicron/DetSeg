@@ -16,9 +16,10 @@ class ModRoIHead(BaseSegHead):
         roi_ext (nn.Module): Module extracting the initial RoI features.
         mask_logits (nn.Module): Module computing the mask logits at RoI resolution.
         roi_paster (nn.Module): Module pasting the mask scores inside the RoI boxes.
+        add_zero_loss (bool): Boolean indicating whether to add zero loss to loss dictionary.
     """
 
-    def __init__(self, cls_agn_masks, roi_ext_cfg, mask_logits_cfg, roi_paster_cfg, **kwargs):
+    def __init__(self, cls_agn_masks, roi_ext_cfg, mask_logits_cfg, roi_paster_cfg, add_zero_loss=False, **kwargs):
         """
         Initializes the ModRoIHead module.
 
@@ -27,6 +28,7 @@ class ModRoIHead(BaseSegHead):
             roi_ext_cfg (Dict): Configuration dictionary specifying the RoI extractor module.
             mask_logits_cfg (Dict): Configuration dictionary specifying the mask logits module.
             roi_paster_cfg (Dict): Configuration dictionary specifying the RoI paster module.
+            add_zero_loss (bool): Boolean indicating whether to add zero loss to loss dictionary (default=False).
             kwargs (Dict): Dictionary of keyword arguments passed to the BaseSegHead __init__ method.
         """
 
@@ -38,8 +40,9 @@ class ModRoIHead(BaseSegHead):
         self.mask_logits = build_model(mask_logits_cfg)
         self.roi_paster = build_model(roi_paster_cfg)
 
-        # Set additional attribute
+        # Set additional attributes
         self.cls_agn_masks = cls_agn_masks
+        self.add_zero_loss = add_zero_loss
 
     def get_mask_scores(self, pred_qry_ids, pred_labels, storage_dict, **kwargs):
         """
@@ -154,6 +157,12 @@ class ModRoIHead(BaseSegHead):
         if id is not None:
             local_loss_dict = {f'{k}_{id}': v for k, v in local_loss_dict.items()}
             local_analysis_dict = {f'{k}_{id}': v for k, v in local_analysis_dict.items()}
+
+        # Add zero loss tensor if needed
+        if self.add_zero_loss:
+            loss_key = next(iter(local_loss_dict.keys()))
+            zero_loss = sum(0.0 * p.flatten()[0] for p in self.parameters())
+            local_loss_dict[loss_key] += zero_loss
 
         # Merge local dictionaries with global ones
         loss_dict.update(local_loss_dict)

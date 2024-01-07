@@ -68,7 +68,7 @@ class AddValue(nn.Module):
     """
     Class implementing the AddValue module.
 
-    Args:
+    Attributes:
         value (float): Value to be added to input tensor.
     """
 
@@ -165,7 +165,7 @@ class Clamp(nn.Module):
     """
     Class implementing the Clamp module.
 
-    Args:
+    Attributes:
         min (float): Lower bound of range to be clamped to (or None).
         max (float): Upper bound of range to be clamped to (or None).
     """
@@ -240,7 +240,7 @@ class Expand(nn.Module):
     """
     Class implementing the Expand module.
 
-    Args:
+    Attributes:
         size (List): List of size [num_dims] containing the size of the expanded tensor.
     """
 
@@ -354,6 +354,41 @@ class Interpolate(nn.Module):
 
         # Get output tensor by interpolating input tensor
         out_tensor = F.interpolate(in_tensor, self.size, self.scale_factor, self.mode, self.align_corners)
+
+        return out_tensor
+
+
+@MODELS.register_module()
+class Mean(nn.Module):
+    """
+    Class implementing the Mean module.
+    """
+
+    def __init__(self):
+        """
+        Initializes the Mean module.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Mean module.
+
+        Args:
+            in_tensor (FloatTensor): Input tensor to be averaged of shape [*].
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (FloatTensor): Averaged output tensor of shape [].
+        """
+
+        # Get output tensor
+        if in_tensor.numel() > 0:
+            out_tensor = torch.mean(in_tensor)
+        else:
+            out_tensor = torch.tensor(0.0, device=in_tensor.device)
 
         return out_tensor
 

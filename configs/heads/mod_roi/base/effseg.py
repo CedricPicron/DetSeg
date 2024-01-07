@@ -7,6 +7,7 @@ model = dict(
         dict(
             type='ModRoIHead',
             cls_agn_masks=True,
+            add_zero_loss=True,
             roi_ext_cfg=dict(
                 type='MMDetRoIExtractor',
                 in_key='feat_maps',
@@ -468,7 +469,7 @@ model = dict(
                                 module_cfg=dict(
                                     type='mmdet.CrossEntropyLoss',
                                     use_sigmoid=True,
-                                    reduction='sum',
+                                    reduction='none',
                                     loss_weight=loss_weight,
                                 ),
                             ),
@@ -485,7 +486,7 @@ model = dict(
                                 module_cfg=dict(
                                     type='mmdet.CrossEntropyLoss',
                                     use_sigmoid=True,
-                                    reduction='sum',
+                                    reduction='none',
                                     loss_weight=loss_weight,
                                 ),
                             ),
@@ -881,6 +882,22 @@ model = dict(
                                     type='StorageGetApply',
                                     module_key='ref_loss_module',
                                     id_key='iter_id',
+                                ),
+                                dict(
+                                    type='StorageApply',
+                                    in_key='mask_loss',
+                                    out_key='mask_loss',
+                                    module_cfg=dict(
+                                        type='Mean',
+                                    ),
+                                ),
+                                dict(
+                                    type='StorageApply',
+                                    in_key='ref_loss',
+                                    out_key='ref_loss',
+                                    module_cfg=dict(
+                                        type='Mean',
+                                    ),
                                 ),
                                 dict(
                                     type='BinaryAccuracy',
