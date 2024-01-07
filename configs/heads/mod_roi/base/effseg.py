@@ -413,6 +413,12 @@ model = dict(
                     ),
                 ),
                 dict(
+                    type='IdsToPts2d',
+                    in_key='act_pos_ids',
+                    size_key='sps_id_map',
+                    out_key='act_pos_xy',
+                ),
+                dict(
                     type='StorageApply',
                     in_key='act_map_ids',
                     out_key='act_map_ids',
