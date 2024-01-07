@@ -240,6 +240,27 @@ model = dict(
                     ],
                 ),
                 dict(
+                    type='StorageAdd',
+                    module_key='trans',
+                    module_cfg=dict(
+                        type='StorageApply',
+                        in_key='trans_feats',
+                        out_key='trans_feats',
+                        module_cfg=[
+                            dict(
+                                type='nn.Linear',
+                                in_features=2**8,
+                                out_features=2**7,
+                                bias=True,
+                            ),
+                            dict(
+                                type='nn.ReLU',
+                                inplace=True,
+                            ),
+                        ],
+                    ),
+                ),
+                dict(
                     type='MapToSps',
                     in_key='roi_feats',
                     out_act_key='act_feats',
@@ -479,6 +500,131 @@ model = dict(
                         type='Squeeze',
                         dim=1,
                     ),
+                ),
+                dict(
+                    type='Cat',
+                    in_keys=['act_feats', 'fuse_feats'],
+                    out_key='fuse_feats',
+                    dim=1,
+                ),
+                dict(
+                    type='StorageApply',
+                    in_key='fuse_feats',
+                    out_key='fuse_feats',
+                    module_cfg=[
+                        dict(
+                            type='nn.Linear',
+                            in_features=256 + 2**8,
+                            out_features=2**8,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**8,
+                            out_features=2**8,
+                            bias=True,
+                        ),
+                    ],
+                ),
+                dict(
+                    type='Add',
+                    in_keys=['act_feats', 'fuse_feats'],
+                    out_key='act_feats',
+                ),
+                dict(
+                    type='StorageCopy',
+                    in_key='act_feats',
+                    out_key='trans_feats',
+                    copy_type='assign',
+                ),
+                dict(
+                    type='StorageGetApply',
+                    module_key='trans',
+                ),
+                dict(
+                    type='StorageCopy',
+                    in_key='trans_feats',
+                    out_key='act_feats',
+                    copy_type='assign',
+                ),
+                dict(
+                    type='StorageCopy',
+                    in_key='pas_feats',
+                    out_key='trans_feats',
+                    copy_type='assign',
+                ),
+                dict(
+                    type='StorageGetApply',
+                    module_key='trans',
+                ),
+                dict(
+                    type='StorageCopy',
+                    in_key='trans_feats',
+                    out_key='pas_feats',
+                    copy_type='assign',
+                ),
+                dict(
+                    type='StorageApply',
+                    in_key='act_feats',
+                    out_key='act_feats',
+                    storage_kwargs={
+                        'pas_feats': 'aux_feats',
+                        'sps_id_map': 'id_map',
+                        'act_roi_ids': 'roi_ids',
+                        'act_pos_ids': 'pos_ids',
+                    },
+                    module_cfg=[
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**7,
+                            out_features=2**7,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='ModuleSum',
+                            sub_module_cfgs=[[
+                                dict(
+                                    type='IdConv2d',
+                                    in_channels=2**7,
+                                    out_channels=2**7,
+                                    kernel_size=3,
+                                    dilation=dilation,
+                                ),
+                                dict(
+                                    type='nn.ReLU',
+                                    inplace=True,
+                                ),
+                            ] for dilation in (1, 3, 5)],
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**7,
+                            out_features=2**7,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                        dict(
+                            type='nn.Linear',
+                            in_features=2**7,
+                            out_features=2**7,
+                            bias=True,
+                        ),
+                        dict(
+                            type='nn.ReLU',
+                            inplace=True,
+                        ),
+                    ],
                 ),
             ],
             roi_paster_cfg=dict(
