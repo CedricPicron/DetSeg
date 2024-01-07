@@ -24,6 +24,7 @@ from .refine_mask import *  # noqa: F401, F403
 from .roi_extractor import *  # noqa: F401, F403
 from .roi_paster import *  # noqa: F401, F403
 from .sample import *  # noqa: F401, F403
+from .select import *  # noqa: F401, F403
 from .selector import *  # noqa: F401, F403
 from .sps import *  # noqa: F401, F403
 from .storage import *  # noqa: F401, F403

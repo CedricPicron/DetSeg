@@ -432,13 +432,88 @@ model = dict(
                                 out_features=1,
                                 bias=True,
                             ),
-                            dict(
-                                type='Squeeze',
-                                dim=1,
-                            ),
                         ],
                     ),
                 ) for i in range(3)],
+                dict(
+                    type='StorageCondition',
+                    cond_key='is_training',
+                    module_cfg=[
+                        *[dict(
+                            type='StorageAdd',
+                            module_key=f'tgt_roi_ext_{i}',
+                            module_cfg=dict(
+                                type='MMDetRoIExtractor',
+                                in_key='tgt_map',
+                                boxes_key='roi_boxes',
+                                ids_key='matched_tgt_ids',
+                                out_key='roi_tgt_map',
+                                mmdet_roi_ext_cfg=dict(
+                                    type='mmdet.SingleRoIExtractor',
+                                    roi_layer=dict(type='RoIAlign', output_size=(2**i)*28, sampling_ratio=0),
+                                    out_channels=1,
+                                    featmap_strides=[1],
+                                ),
+                            ),
+                        ) for i in range(3)],
+                        *[dict(
+                            type='StorageAdd',
+                            module_key=f'mask_loss_module_{i}',
+                            module_cfg=dict(
+                                type='StorageApply',
+                                in_key='act_mask_logits',
+                                out_key='mask_loss',
+                                storage_kwargs={'mask_targets': 'label'},
+                                filter_kwargs=[],
+                                module_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    reduction='sum',
+                                    loss_weight=loss_weight,
+                                ),
+                            ),
+                        ) for i, loss_weight in enumerate([0.375, 0.375, 0.5])],
+                        *[dict(
+                            type='StorageAdd',
+                            module_key=f'ref_loss_module_{i}',
+                            module_cfg=dict(
+                                type='StorageApply',
+                                in_key='ref_logits',
+                                out_key='ref_loss',
+                                storage_kwargs={'ref_targets': 'label'},
+                                filter_kwargs=[],
+                                module_cfg=dict(
+                                    type='mmdet.CrossEntropyLoss',
+                                    use_sigmoid=True,
+                                    reduction='sum',
+                                    loss_weight=loss_weight,
+                                ),
+                            ),
+                        ) for i, loss_weight in enumerate([0.25, 0.25, 0.25])],
+                        *[dict(
+                            type='StorageAdd',
+                            module_key=f'loss_transfer_{i}',
+                            module_cfg=dict(
+                                type='StorageTransfer',
+                                in_keys=['mask_loss', 'ref_loss'],
+                                out_keys=[f'mask_loss_{i+1}', f'ref_loss_{i+1}'],
+                                dict_key='loss_dict',
+                                transfer_mode='out',
+                            ),
+                        ) for i in range(3)],
+                        *[dict(
+                            type='StorageAdd',
+                            module_key=f'acc_transfer_{i}',
+                            module_cfg=dict(
+                                type='StorageTransfer',
+                                in_keys=['mask_acc', 'ref_acc'],
+                                out_keys=[f'mask_acc_{i+1}', f'ref_acc_{i+1}'],
+                                dict_key='analysis_dict',
+                                transfer_mode='out',
+                            ),
+                        ) for i in range(3)],
+                    ],
+                ),
                 dict(
                     type='MapToSps',
                     in_key='roi_feats',
@@ -500,7 +575,7 @@ model = dict(
                         dict(
                             type='nn.Flatten',
                             start_dim=0,
-                            end_dim=3,
+                            end_dim=2,
                         ),
                     ],
                 ),
@@ -519,6 +594,15 @@ model = dict(
                             type='StorageCondition',
                             cond_key='ref_bool',
                             module_cfg=[
+                                dict(
+                                    type='StorageApply',
+                                    in_key='ref_logits',
+                                    out_key='ref_logits',
+                                    module_cfg=dict(
+                                        type='Squeeze',
+                                        dim=1,
+                                    ),
+                                ),
                                 dict(
                                     type='Topk',
                                     in_key='ref_logits',
@@ -749,6 +833,76 @@ model = dict(
                                     grp_key='act_roi_ids',
                                     grid_key='act_pos_ids',
                                     feats_key='act_mask_logits',
+                                ),
+                            ],
+                        ),
+                        dict(
+                            type='StorageCondition',
+                            cond_key='is_training',
+                            module_cfg=[
+                                dict(
+                                    type='StorageGetApply',
+                                    module_key='tgt_roi_ext',
+                                    id_key='iter_id',
+                                ),
+                                dict(
+                                    type='BinaryTargets',
+                                    in_key='roi_tgt_map',
+                                    out_key='mask_targets',
+                                    threshold=0.5,
+                                ),
+                                dict(
+                                    type='AmbiguityTargets',
+                                    in_key='roi_tgt_map',
+                                    out_key='ref_targets',
+                                    low_bnd=0.0,
+                                    up_bnd=1.0,
+                                ),
+                                dict(
+                                    type='GridSelect2d',
+                                    in_key='mask_targets',
+                                    grp_key='act_roi_ids',
+                                    grid_key='act_pos_ids',
+                                    out_key='mask_targets',
+                                ),
+                                dict(
+                                    type='GridSelect2d',
+                                    in_key='ref_targets',
+                                    grp_key='act_roi_ids',
+                                    grid_key='act_pos_ids',
+                                    out_key='ref_targets',
+                                ),
+                                dict(
+                                    type='StorageGetApply',
+                                    module_key='mask_loss_module',
+                                    id_key='iter_id',
+                                ),
+                                dict(
+                                    type='StorageGetApply',
+                                    module_key='ref_loss_module',
+                                    id_key='iter_id',
+                                ),
+                                dict(
+                                    type='BinaryAccuracy',
+                                    pred_key='act_mask_logits',
+                                    tgt_key='mask_targets',
+                                    out_key='mask_acc',
+                                ),
+                                dict(
+                                    type='BinaryAccuracy',
+                                    pred_key='ref_logits',
+                                    tgt_key='ref_targets',
+                                    out_key='ref_acc',
+                                ),
+                                dict(
+                                    type='StorageGetApply',
+                                    module_key='loss_transfer',
+                                    id_key='iter_id',
+                                ),
+                                dict(
+                                    type='StorageGetApply',
+                                    module_key='acc_transfer',
+                                    id_key='iter_id',
                                 ),
                             ],
                         ),
