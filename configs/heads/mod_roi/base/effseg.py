@@ -403,6 +403,33 @@ model = dict(
                     out_key='act_feats',
                 ),
                 dict(
+                    type='IdsToPts2d',
+                    in_key='act_pos_ids',
+                    size_key='sps_id_map',
+                    out_key='act_pos_xy',
+                ),
+                dict(
+                    type='StorageApply',
+                    in_key='act_pos_xy',
+                    out_key='act_pos_xy',
+                    module_cfg=dict(
+                        type='Unsqueeze',
+                        dim=1,
+                    ),
+                ),
+                dict(
+                    type='GetItemStorage',
+                    in_key='roi_boxes',
+                    index_key='act_roi_ids',
+                    out_key='act_boxes',
+                ),
+                dict(
+                    type='BoxToImgPts',
+                    in_key='act_pos_xy',
+                    boxes_key='act_boxes',
+                    out_key='act_pos_xy',
+                ),
+                dict(
                     type='StorageApply',
                     in_key='act_batch_ids',
                     out_key='act_batch_ids',
@@ -413,12 +440,6 @@ model = dict(
                     ),
                 ),
                 dict(
-                    type='IdsToPts2d',
-                    in_key='act_pos_ids',
-                    size_key='sps_id_map',
-                    out_key='act_pos_xy',
-                ),
-                dict(
                     type='StorageApply',
                     in_key='act_map_ids',
                     out_key='act_map_ids',
@@ -426,6 +447,18 @@ model = dict(
                         type='RepeatInterleave',
                         repeats=4,
                         dim=0,
+                    ),
+                ),
+                dict(
+                    type='MapsSampler2d',
+                    in_maps_key='feat_maps',
+                    in_pts_key='act_pos_xy',
+                    batch_ids_key='act_batch_ids',
+                    map_ids_key='act_map_ids',
+                    out_key='fuse_feats',
+                    grid_sample_kwargs=dict(
+                        mode='bilinear',
+                        align_corners=False,
                     ),
                 ),
             ],

@@ -170,7 +170,7 @@ class MapsSampler2d(nn.Module):
     Class implementing the MapsSampler2d module.
 
     Attributes:
-        in_maps_key (str): String with key to retrieve inputs map from storage dictionary.
+        in_maps_key (str): String with key to retrieve input maps from storage dictionary.
         in_pts_key (str): String with key to retrieve input sample points from storage dictionary.
         batch_ids_key (str): String with key to retrieve group batch indices from storage dictionary.
         map_ids_key (str): String with key to retrieve group map indices from storage dictionary.
@@ -178,12 +178,12 @@ class MapsSampler2d(nn.Module):
         sampler (MapSampler2d): Module sampling the features at the desired locations.
     """
 
-    def __init__(self, in_map_key, in_pts_key, batch_ids_key, map_ids_key, out_key, **kwargs):
+    def __init__(self, in_maps_key, in_pts_key, batch_ids_key, map_ids_key, out_key, **kwargs):
         """
         Initializes the MapsSampler2d module.
 
         Args:
-            in_map_key (str): String with key to retrieve input map from storage dictionary.
+            in_maps_key (str): String with key to retrieve input maps from storage dictionary.
             in_pts_key (str): String with key to retrieve input sample points from storage dictionary.
             batch_ids_key (str): String with key to retrieve group batch indices from storage dictionary.
             map_ids_key (str): String with key to retrieve group map indices from storage dictionary.
@@ -198,7 +198,7 @@ class MapsSampler2d(nn.Module):
         self.sampler = MapSampler2d('in_map', 'in_pts', 'in_batch_ids', 'out_feats', **kwargs)
 
         # Set additional attributes
-        self.in_map_key = in_map_key
+        self.in_maps_key = in_maps_key
         self.in_pts_key = in_pts_key
         self.batch_ids_key = batch_ids_key
         self.map_ids_key = map_ids_key
