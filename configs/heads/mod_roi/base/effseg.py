@@ -443,11 +443,21 @@ model = dict(
                     type='StorageApply',
                     in_key='act_map_ids',
                     out_key='act_map_ids',
-                    module_cfg=dict(
-                        type='RepeatInterleave',
-                        repeats=4,
-                        dim=0,
-                    ),
+                    module_cfg=[
+                        dict(
+                            type='AddValue',
+                            value=-1,
+                        ),
+                        dict(
+                            type='Clamp',
+                            min=0,
+                        ),
+                        dict(
+                            type='RepeatInterleave',
+                            repeats=4,
+                            dim=0,
+                        ),
+                    ]
                 ),
                 dict(
                     type='MapsSampler2d',

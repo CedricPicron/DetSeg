@@ -64,6 +64,47 @@ class Add(nn.Module):
 
 
 @MODELS.register_module()
+class AddValue(nn.Module):
+    """
+    Class implementing the AddValue module.
+
+    Args:
+        value (float): Value to be added to input tensor.
+    """
+
+    def __init__(self, value):
+        """
+        Initializes the AddValue module.
+
+        Args:
+            value (float): Value to be added to input tensor.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set value attribute
+        self.value = value
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the AddValue module.
+
+        Args:
+            in_tensor (Tensor): Input tensor for which to add value attribute.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Output tensor with value attribute added.
+        """
+
+        # Get output tensor
+        out_tensor = in_tensor + self.value
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Cat(nn.Module):
     """
     Class implementing the Cat module.
@@ -117,6 +158,50 @@ class Cat(nn.Module):
         storage_dict[self.out_key] = out_tensor
 
         return storage_dict
+
+
+@MODELS.register_module()
+class Clamp(nn.Module):
+    """
+    Class implementing the Clamp module.
+
+    Args:
+        min (float): Lower bound of range to be clamped to (or None).
+        max (float): Upper bound of range to be clamped to (or None).
+    """
+
+    def __init__(self, min=0, max=0):
+        """
+        Initializes the Clamp module.
+
+        Args:
+            min (float): Lower bound of range to be clamped to (or None).
+            max (float): Upper bound of range to be clamped to (or None).
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.min = min
+        self.max = max
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Clamp module.
+
+        Args:
+            in_tensor (Tensor): Input tensor to be clamped.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Clamped output tensor.
+        """
+
+        # Get output tensor
+        out_tensor = torch.clamp(in_tensor, min=self.min, max=self.max)
+
+        return out_tensor
 
 
 @MODELS.register_module()
@@ -182,7 +267,7 @@ class Expand(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            out_tensor (FloatTensor): Expanded output tensor.
+            out_tensor (Tensor): Expanded output tensor.
         """
 
         # Get output tensor
