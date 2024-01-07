@@ -222,7 +222,7 @@ model = dict(
                                         module_key='point_head',
                                     ),
                                     dict(
-                                        type='GridInsert2d',
+                                        type='PointRendGridInsert2d',
                                         in_key='mask_logits',
                                         ins_ids_key='roi_sample_ids',
                                         ins_feats_key='point_logits',

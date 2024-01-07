@@ -728,6 +728,30 @@ model = dict(
                             module_key='ref_module',
                             id_key='iter_id',
                         ),
+                        dict(
+                            type='StorageCondition',
+                            cond_key='is_inference',
+                            module_cfg=[
+                                dict(
+                                    type='StorageApply',
+                                    in_key='mask_logits',
+                                    out_key='mask_logits',
+                                    module_cfg=dict(
+                                        type='Interpolate',
+                                        scale_factor=2.0,
+                                        mode='bilinear',
+                                        align_corners=False,
+                                    ),
+                                ),
+                                dict(
+                                    type='GridInsert2d',
+                                    in_key='mask_logits',
+                                    grp_key='act_roi_ids',
+                                    grid_key='act_pos_ids',
+                                    feats_key='act_mask_logits',
+                                ),
+                            ],
+                        ),
                     ],
                 ),
             ],
