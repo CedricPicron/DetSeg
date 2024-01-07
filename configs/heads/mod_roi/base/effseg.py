@@ -471,6 +471,15 @@ model = dict(
                         align_corners=False,
                     ),
                 ),
+                dict(
+                    type='StorageApply',
+                    in_key='fuse_feats',
+                    out_key='fuse_feats',
+                    module_cfg=dict(
+                        type='Squeeze',
+                        dim=1,
+                    ),
+                ),
             ],
             roi_paster_cfg=dict(
                 type='MMDetRoIPaster',

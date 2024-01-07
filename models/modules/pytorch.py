@@ -508,6 +508,47 @@ class RepeatInterleave(nn.Module):
 
 
 @MODELS.register_module()
+class Squeeze(nn.Module):
+    """
+    Class implementing the Squeeze module.
+
+    Attributes:
+        dim (int): Integer containing the dimension for which to remove singleton dimension.
+    """
+
+    def __init__(self, dim):
+        """
+        Initializes the Squeeze module.
+
+        Args:
+            dim (int): Integer containing the dimension for which to remove singleton dimension.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set dim attribute
+        self.dim = dim
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Squeeze module.
+
+        Args:
+            in_tensor (Tensor): Input tensor for which to remove a singleton dimension.
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Output tensor with a singleton dimension removed.
+        """
+
+        # Get output tensor
+        out_tensor = torch.squeeze(in_tensor, dim=self.dim)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Topk(nn.Module):
     """
     Class implementing the Topk module.
@@ -647,7 +688,7 @@ class Unsqueeze(nn.Module):
             kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
-            out_tensor (FloatTensor): Output tensor containing an additional singleton dimension.
+            out_tensor (Tensor): Output tensor containing an additional singleton dimension.
         """
 
         # Get output tensor
