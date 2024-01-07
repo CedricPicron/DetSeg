@@ -64,9 +64,9 @@ class Add(nn.Module):
 
 
 @MODELS.register_module()
-class AddValue(nn.Module):
+class AddValueTensor(nn.Module):
     """
-    Class implementing the AddValue module.
+    Class implementing the AddValueTensor module.
 
     Attributes:
         value (float): Value to be added to input tensor.
@@ -74,7 +74,7 @@ class AddValue(nn.Module):
 
     def __init__(self, value):
         """
-        Initializes the AddValue module.
+        Initializes the AddValueTensor module.
 
         Args:
             value (float): Value to be added to input tensor.
@@ -88,7 +88,7 @@ class AddValue(nn.Module):
 
     def forward(self, in_tensor, **kwargs):
         """
-        Forward method of the AddValue module.
+        Forward method of the AddValueTensor module.
 
         Args:
             in_tensor (Tensor): Input tensor for which to add value attribute.
@@ -359,6 +359,59 @@ class Interpolate(nn.Module):
 
 
 @MODELS.register_module()
+class Len(nn.Module):
+    """
+    Class implementing the Len module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input tensor from storage dictionary.
+        out_key (str): String with key to store output length in storage dictionary.
+    """
+
+    def __init__(self, in_key, out_key):
+        """
+        Initializes the Len module.
+
+        Args:
+            in_key (str): String with key to retrieve input tensor from storage dictionary.
+            out_key (str): String with key to store output length in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the Len module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following key:
+                - {self.in_key} (Tensor): input tensor from which to get length of shape [*].
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (int): integer containing the length of the input tensor.
+        """
+
+        # Retrieve input tensor from storage dictionary
+        in_tensor = storage_dict[self.in_key]
+
+        # Get output length
+        out_length = len(in_tensor)
+
+        # Store output length in storage dictionary
+        storage_dict[self.out_key] = out_length
+
+        return storage_dict
+
+
+@MODELS.register_module()
 class Mean(nn.Module):
     """
     Class implementing the Mean module.
@@ -455,6 +508,64 @@ class Mul(nn.Module):
             out_tensor = torch.addcmul(self.bias, in_tensor, self.factor)
 
         return out_tensor
+
+
+@MODELS.register_module()
+class MulValueStorage(nn.Module):
+    """
+    Class implementing the MulValueStorage module.
+
+    Attributes:
+        in_key (str): String with key to retrieve input tensor from storage dictionary.
+        val_key (str): String with key to retrieve value from storage dictionary.
+        out_key (str): String with key to store output tensor in storage dictionary.
+    """
+
+    def __init__(self, in_key, val_key, out_key):
+        """
+        Initializes the MulValueStorage module.
+
+        Args:
+            in_key (str): String with key to retrieve input tensor from storage dictionary.
+            val_key (str): String with key to retrieve value from storage dictionary.
+            out_key (str): String with key to store output tensor in storage dictionary.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set additional attributes
+        self.in_key = in_key
+        self.val_key = val_key
+        self.out_key = out_key
+
+    def forward(self, storage_dict, **kwargs):
+        """
+        Forward method of the MulValueStorage module.
+
+        Args:
+            storage_dict (Dict): Storage dictionary containing at least following keys:
+                - {self.in_key} (Tensor): input tensor to be multiplied with value of shape [*];
+                - {self.val_key} (float): value to be multiplied with input tensor.
+
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            storage_dict (Dict): Storage dictionary containing following additional key:
+                - {self.out_key} (int): multiplied output tensor of shape [*].
+        """
+
+        # Retrieve desired items from storage dictionary
+        in_tensor = storage_dict[self.in_key]
+        value = storage_dict[self.val_key]
+
+        # Get output tensor
+        out_tensor = value * in_tensor
+
+        # Store output tensor in storage dictionary
+        storage_dict[self.out_key] = out_tensor
+
+        return storage_dict
 
 
 @MODELS.register_module()

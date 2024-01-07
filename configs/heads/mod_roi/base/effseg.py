@@ -513,6 +513,11 @@ model = dict(
                                 transfer_mode='out',
                             ),
                         ) for i in range(3)],
+                        dict(
+                            type='Len',
+                            in_key='matched_tgt_ids',
+                            out_key='num_matches',
+                        ),
                     ],
                 ),
                 dict(
@@ -713,7 +718,7 @@ model = dict(
                             out_key='act_map_ids',
                             module_cfg=[
                                 dict(
-                                    type='AddValue',
+                                    type='AddValueTensor',
                                     value=-1,
                                 ),
                                 dict(
@@ -898,6 +903,18 @@ model = dict(
                                     module_cfg=dict(
                                         type='Mean',
                                     ),
+                                ),
+                                dict(
+                                    type='MulValueStorage',
+                                    in_key='mask_loss',
+                                    val_key='num_matches',
+                                    out_key='mask_loss',
+                                ),
+                                dict(
+                                    type='MulValueStorage',
+                                    in_key='ref_loss',
+                                    val_key='num_matches',
+                                    out_key='ref_loss',
                                 ),
                                 dict(
                                     type='BinaryAccuracy',
