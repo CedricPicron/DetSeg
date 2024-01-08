@@ -992,7 +992,7 @@ class SpsUpsample(nn.Module):
         num_act = in_act_feats.size(dim=0)
         act_id_mask = in_id_map < num_act
 
-        id_map_0 = in_id_map
+        id_map_0 = torch.where(act_id_mask, 4*in_id_map, 3*num_act + in_id_map)
         id_map_1 = torch.where(act_id_mask, id_map_0 + 1, id_map_0)
         id_map_2 = torch.where(act_id_mask, id_map_0 + 2, id_map_0)
         id_map_3 = torch.where(act_id_mask, id_map_0 + 3, id_map_0)
