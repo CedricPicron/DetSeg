@@ -19,6 +19,7 @@ from utils.comparison import compare_models
 from utils.data import collate_fn, SubsetSampler
 import utils.distributed as distributed
 from utils.profiling import profile_model
+from utils.tide import tide_analysis
 
 
 def get_parser():
@@ -76,6 +77,9 @@ def get_parser():
     parser.add_argument('--profile_samples', default=10, type=int, help='number of samples used for model profiling')
     parser.add_argument('--profile_train_only', action='store_true', help='only profile model in training mode')
     parser.add_argument('--profile_inf_only', action='store_true', help='only profile model in inference mode')
+
+    # * TIDE
+    parser.add_argument('--tide_file_name', default='', type=str, help='name of result file used for TIDE analysis')
 
     # * Visualization
     parser.add_argument('--num_images', default=10, type=int, help='number of images to be visualized')
@@ -308,7 +312,7 @@ def main(args):
             return
 
         # Perform model profiling and return
-        if args.eval_task == 'profile':
+        elif args.eval_task == 'profile':
 
             if args.distributed:
                 error_msg = "Distributed mode is not supported for the 'profile' evaluation task."
@@ -320,6 +324,11 @@ def main(args):
             profile_kwargs = {'num_samples': args.profile_samples, 'profile_train': profile_train}
             profile_kwargs = {**profile_kwargs, 'profile_inf': profile_inf, 'output_dir': output_dir}
             profile_model(model, eval_dataloader, optimizer, max_grad_norm=args.max_grad_norm, **profile_kwargs)
+            return
+
+        # Perform TIDE analysis and return
+        elif args.eval_task == 'tide':
+            tide_analysis(args.dataset, args.tide_file_name, output_dir)
             return
 
         # Visualize model predictions and return

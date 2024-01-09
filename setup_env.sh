@@ -23,7 +23,8 @@ mim install mmengine
 mim install mmcv
 python -m pip install git+https://github.com/open-mmlab/mmdetection.git
 
-# Install timm
+# Install tidecv and timm
+python -m pip install tidecv
 python -m pip install timm
 
 # Install from git repositories using pip
