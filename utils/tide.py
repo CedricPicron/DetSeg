@@ -1,6 +1,7 @@
 """
 Collection of functions related to TIDE analysis.
 """
+import contextlib
 import json
 import os
 import warnings
@@ -61,15 +62,18 @@ def tide_analysis(dataset, result_file_name, output_dir):
         raise ValueError(error_msg)
 
     # Perform TIDE analysis
+    tide_dir = output_dir / 'tide'
+
     tide = TIDE()
     tide.evaluate_range(ground_truth, predictions, mode=mode)
-    tide.summarize()
+
+    with open(tide_dir / f'{result_file_name}.txt', 'w') as txt_file:
+        with contextlib.redirect_stdout(txt_file):
+            tide.summarize()
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-
-        plot_dir = output_dir / 'tide'
-        tide.plot(out_dir=plot_dir)
+        tide.plot(out_dir=tide_dir)
 
     # Remove JSON file if extracted from ZIP file
     if from_zip_file:

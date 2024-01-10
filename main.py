@@ -164,25 +164,6 @@ def main(args):
         ValueError: Error when an unknown evaluation task is provided.
     """
 
-    # Compare two models if requested and return
-    if args.eval_task == 'comparison':
-        output_dir = Path(('/').join(args.comp_res_file1.split('/')[:-1]))
-        save_name = args.comp_save_name
-        compare_models(args.dataset, args.eval_split, args.comp_res_file1, args.comp_res_file2, output_dir, save_name)
-        return
-
-    # Initialize distributed mode if needed
-    distributed.init_distributed_mode(args)
-    print(args)
-
-    # Get datasets and evaluator
-    datasets, evaluator = build_dataset(args)
-
-    # Build model and place it on correct device
-    device = torch.device(args.device)
-    model = build_arch(args)
-    model = model.to(device)
-
     # Try loading checkpoint
     checkpoint_path = ''
 
@@ -198,6 +179,38 @@ def main(args):
         checkpoint = torch.load(args.checkpoint_part, map_location='cpu')
         checkpoint_path = args.checkpoint_part
         change_scheduler = True
+
+    # Get output directory
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    elif checkpoint_path:
+        output_dir = Path(checkpoint_path).parent
+    else:
+        output_dir = None
+
+    # Compare two models if requested and return
+    if args.eval_task == 'comparison':
+        output_dir = Path(('/').join(args.comp_res_file1.split('/')[:-1]))
+        save_name = args.comp_save_name
+        compare_models(args.dataset, args.eval_split, args.comp_res_file1, args.comp_res_file2, output_dir, save_name)
+        return
+
+    # Perform TIDE analysis if requested and return
+    elif args.eval_task == 'tide':
+        tide_analysis(args.dataset, args.tide_file_name, output_dir)
+        return
+
+    # Initialize distributed mode if needed
+    distributed.init_distributed_mode(args)
+    print(args)
+
+    # Get datasets and evaluator
+    datasets, evaluator = build_dataset(args)
+
+    # Build model and place it on correct device
+    device = torch.device(args.device)
+    model = build_arch(args)
+    model = model.to(device)
 
     # Load model from checkpoint if present
     if checkpoint_path:
@@ -276,14 +289,6 @@ def main(args):
             optimizer.load_state_dict(checkpoint['optimizer'])
             scheduler.load_state_dict(checkpoint['scheduler'])
 
-    # Get output directory
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-    elif checkpoint_path:
-        output_dir = Path(checkpoint_path).parent
-    else:
-        output_dir = None
-
     # Perform evaluation task if requested
     if args.eval:
 
@@ -324,11 +329,6 @@ def main(args):
             profile_kwargs = {'num_samples': args.profile_samples, 'profile_train': profile_train}
             profile_kwargs = {**profile_kwargs, 'profile_inf': profile_inf, 'output_dir': output_dir}
             profile_model(model, eval_dataloader, optimizer, max_grad_norm=args.max_grad_norm, **profile_kwargs)
-            return
-
-        # Perform TIDE analysis and return
-        elif args.eval_task == 'tide':
-            tide_analysis(args.dataset, args.tide_file_name, output_dir)
             return
 
         # Visualize model predictions and return
