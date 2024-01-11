@@ -555,6 +555,14 @@ model = dict(
                     out_key='act_map_ids',
                     module_cfg=[
                         dict(
+                            type='AddValueTensor',
+                            value=-1,
+                        ),
+                        dict(
+                            type='Clamp',
+                            min=0,
+                        ),
+                        dict(
                             type='Unsqueeze',
                             dim=1,
                         ),

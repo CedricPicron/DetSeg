@@ -20,7 +20,6 @@ model = dict(
                     out_channels=256,
                     featmap_strides=[4, 8, 16, 32],
                 ),
-                map_ids_key='roi_map_ids',
             ),
             mask_logits_cfg=[
                 dict(
@@ -551,23 +550,12 @@ model = dict(
                 ),
                 dict(
                     type='StorageApply',
-                    in_key='roi_map_ids',
-                    out_key='act_map_ids',
-                    module_cfg=[
-                        dict(
-                            type='Unsqueeze',
-                            dim=1,
-                        ),
-                        dict(
-                            type='Expand',
-                            size=[-1, 196],
-                        ),
-                        dict(
-                            type='nn.Flatten',
-                            start_dim=0,
-                            end_dim=1,
-                        ),
-                    ],
+                    in_key='feat_maps',
+                    out_key='feat_map_0',
+                    module_cfg=dict(
+                        type='GetItemTensor',
+                        index=0,
+                    ),
                 ),
                 dict(
                     type='StorageApply',
@@ -644,12 +632,6 @@ model = dict(
                                     index_key='ref_mask',
                                     out_key='act_batch_ids'
                                 ),
-                                dict(
-                                    type='GetItemStorage',
-                                    in_key='act_map_ids',
-                                    index_key='ref_mask',
-                                    out_key='act_map_ids'
-                                ),
                             ],
                         ),
                         dict(
@@ -713,31 +695,10 @@ model = dict(
                             ),
                         ),
                         dict(
-                            type='StorageApply',
-                            in_key='act_map_ids',
-                            out_key='act_map_ids',
-                            module_cfg=[
-                                dict(
-                                    type='AddValueTensor',
-                                    value=-1,
-                                ),
-                                dict(
-                                    type='Clamp',
-                                    min=0,
-                                ),
-                                dict(
-                                    type='RepeatInterleave',
-                                    repeats=4,
-                                    dim=0,
-                                ),
-                            ],
-                        ),
-                        dict(
-                            type='MapsSampler2d',
-                            in_maps_key='feat_maps',
+                            type='MapSampler2d',
+                            in_map_key='feat_map_0',
                             in_pts_key='act_pos_xy',
                             batch_ids_key='act_batch_ids',
-                            map_ids_key='act_map_ids',
                             out_key='fuse_feats',
                             grid_sample_kwargs=dict(
                                 mode='bilinear',
