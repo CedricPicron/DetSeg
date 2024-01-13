@@ -654,6 +654,47 @@ class RepeatInterleave(nn.Module):
 
 
 @MODELS.register_module()
+class Reshape(nn.Module):
+    """
+    Class implementing the Reshape module.
+
+    Attributes:
+        out_shape (Tuple): Tuple containing the output shape.
+    """
+
+    def __init__(self, out_shape):
+        """
+        Initializes the Reshape module.
+
+        Args:
+            out_shape (Tuple): Tuple containing the output shape.
+        """
+
+        # Initialization of default nn.Module
+        super().__init__()
+
+        # Set output shape attribute
+        self.out_shape = out_shape
+
+    def forward(self, in_tensor, **kwargs):
+        """
+        Forward method of the Reshape module.
+
+        Args:
+            in_tensor (Tensor): Input tensor of shape [*in_shape].
+            kwargs (Dict): Dictionary of unused keyword arguments.
+
+        Returns:
+            out_tensor (Tensor): Output tensor of shape [*out_shape].
+        """
+
+        # Get output tensor
+        out_tensor = in_tensor.reshape(*self.out_shape)
+
+        return out_tensor
+
+
+@MODELS.register_module()
 class Squeeze(nn.Module):
     """
     Class implementing the Squeeze module.
@@ -872,7 +913,7 @@ class View(nn.Module):
 
         Args:
             in_tensor (Tensor): Input tensor of shape [*in_shape].
-            kwargs (Dict): Dictionary of keyword arguments not used by this module.
+            kwargs (Dict): Dictionary of unused keyword arguments.
 
         Returns:
             out_tensor (Tensor): Output tensor of shape [*out_shape].
