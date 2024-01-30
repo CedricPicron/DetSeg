@@ -1,3 +1,3 @@
-# DevGroupDETR
+# DetSeg
 
-This is my private development repository for my research related to object detection.
+Research done on object detection and segmentation during my PhD.
