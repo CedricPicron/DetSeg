@@ -327,8 +327,8 @@ class Images(object):
 
         # Resize the images and masks
         size = tuple(int(x) for x in size)
-        self.images = F.resize(self.images, (size[1], size[0]))
-        self.masks = F.resize(self.masks, (size[1], size[0]))
+        self.images = F.resize(self.images, (size[1], size[0]), antialias=False)
+        self.masks = F.resize(self.masks, (size[1], size[0]), antialias=False)
 
         # Get the resize ratio
         resize_ratio = tuple(x/y for x, y in zip(size, image_size))

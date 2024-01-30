@@ -30,7 +30,7 @@ def mask_inv_transform(in_masks, images, cum_masks_batch, interpolation=Interpol
     iW, iH = images.size()
 
     if (mH != iH) or (mW != iW):
-        in_masks = F.resize(in_masks, size=(iH, iW))
+        in_masks = F.resize(in_masks, size=(iH, iW), antialias=False)
 
     # Get list with output masks
     out_masks_list = []
@@ -59,7 +59,7 @@ def mask_inv_transform(in_masks, images, cum_masks_batch, interpolation=Interpol
                 new_width, new_height = transform[2]
 
                 if len(masks_i) > 0:
-                    masks_i = F.resize(masks_i, (new_height, new_width), interpolation=interpolation)
+                    masks_i = F.resize(masks_i, (new_height, new_width), interpolation=interpolation, antialias=False)
                 else:
                     masks_i = masks_i.new_zeros([0, new_height, new_width])
 

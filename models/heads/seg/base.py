@@ -528,7 +528,7 @@ class BaseSegHead(nn.Module, metaclass=ABCMeta):
                         scores_i = draw_dict['scores'][i0:i1].cpu().numpy()
 
                         masks_i = draw_dict['masks'][i0:i1]
-                        masks_i = T.resize(masks_i, img_sizes_pad)
+                        masks_i = T.resize(masks_i, img_sizes_pad, antialias=False)
                         masks_i = T.crop(masks_i, 0, 0, *img_size)
                         masks_i = masks_i.cpu().numpy()
 
