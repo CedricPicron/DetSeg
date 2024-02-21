@@ -44,7 +44,7 @@ Results on the 2017 COCO validation set. The inference FLOPs and FPS are measure
 - [Trident Pyramid Networks for Object Detection](https://arxiv.org/abs/2110.04004) by [Cédric Picron](https://github.com/CedricPicron) and [Tinne Tuytelaars](https://scholar.google.be/citations?user=EuFF9kUAAAAJ).
 - [FQDet: Fast-converging Query-based Detector](https://arxiv.org/abs/2210.02318) by [Cédric Picron](https://github.com/CedricPicron), [Punarjay Chakravarty](https://scholar.google.be/citations?user=AyXW9gYAAAAJ&hl), and [Tinne Tuytelaars](https://scholar.google.be/citations?user=EuFF9kUAAAAJ).
 - [EffSeg: Efficient Fine-Grained Instance Segmentation using Structure-Preserving Sparsity](https://arxiv.org/abs/2307.01545) by [Cédric Picron](https://github.com/CedricPicron), and [Tinne Tuytelaars](https://scholar.google.be/citations?user=EuFF9kUAAAAJ).
-- Designing High-Performing Networks for Multi-Scale Computer Vision by [Cédric Picron](https://github.com/CedricPicron) (PhD thesis).
+- [Designing High-Performing Networks for Multi-Scale Computer Vision](https://arxiv.org/abs/2402.12536) by [Cédric Picron](https://github.com/CedricPicron) (PhD thesis).
 
 ## :hammer_and_wrench: Installation
 - **Environment**: 
